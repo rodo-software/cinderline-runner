@@ -1,0 +1,37 @@
+# macOS/Windows checks and the GoReleaser snapshot; Linux checks run on Forgejo; see decision 2026-11-05-ci.
+name: ci
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      # No gofmt here: Windows checkouts get CRLF, and Linux on Forgejo already checks formatting.
+      - run: go vet ./...
+      - run: staticcheck ./...
+      - run: go test -race ./...
+      - run: govulncheck ./...
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.20.0
+          args: release --snapshot --clean
