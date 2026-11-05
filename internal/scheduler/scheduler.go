@@ -41,6 +41,41 @@ type Scheduler struct {
 	ReviewInterval time.Duration // default 5 minutes; a placeholder M3 settles
 	MergeInterval  time.Duration // default 60 seconds (MERGE_POLL_SECONDS); a placeholder M3 settles
 	MaxBackoff     time.Duration // default 60 seconds; the first wait after a failure is 1s or this, if less
+
+	status map[string]*ProjectStatus // by project key; shared with Run's copy, guarded by statusMu
+}
+
+// statusMu guards every Scheduler's status. One lock for the package because a
+// mutex field would be copied by Run, and a scheduler is one per process.
+var statusMu sync.Mutex
+
+// ProjectStatus is what Status reports about one slot.
+type ProjectStatus struct {
+	Project     string    `json:"project"`
+	Connected   bool      `json:"connected"`            // the last Work succeeded and no failure since
+	LastPoll    time.Time `json:"last_poll,omitzero"`   // the last successful Work
+	Issue       string    `json:"issue,omitempty"`      // the issue between claim and the end of Run and Publish
+	LastError   string    `json:"last_error,omitempty"` // the last slot failure; cleared by the next successful Work
+	LastErrorAt time.Time `json:"last_error_at,omitzero"`
+}
+
+// Status returns the status of every slot Run has started, by project key.
+// Safe to call while Run runs.
+func (s *Scheduler) Status() map[string]ProjectStatus {
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	out := make(map[string]ProjectStatus, len(s.status))
+	for k, v := range s.status {
+		out[k] = *v
+	}
+	return out
+}
+
+// setStatus changes project's status under the lock.
+func (s *Scheduler) setStatus(project string, change func(*ProjectStatus)) {
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	change(s.status[project])
 }
 
 // Run starts one goroutine per slot and blocks until ctx is done and every slot has returned.
@@ -58,6 +93,17 @@ func (s *Scheduler) Run(ctx context.Context, slots []Slot) {
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 60 * time.Second
 	}
+	statusMu.Lock()
+	if s.status == nil {
+		s.status = map[string]*ProjectStatus{}
+	}
+	for _, slot := range slots {
+		if s.status[slot.Project] == nil {
+			s.status[slot.Project] = &ProjectStatus{Project: slot.Project}
+		}
+	}
+	cfg.status = s.status
+	statusMu.Unlock()
 	var wg sync.WaitGroup
 	for _, slot := range slots {
 		wg.Go(func() { cfg.timers(ctx, slot) })
@@ -72,8 +118,12 @@ func (s *Scheduler) slot(ctx context.Context, slot Slot) {
 	for {
 		ref, polled, err := s.cycle(ctx, slot)
 		if ctx.Err() != nil {
+			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 			return
 		}
+		s.setStatus(slot.Project, func(st *ProjectStatus) {
+			st.Connected, st.Issue, st.LastError, st.LastErrorAt = false, "", err.Error(), time.Now()
+		})
 		if polled {
 			backoff = min(time.Second, s.MaxBackoff)
 		}
@@ -108,7 +158,13 @@ func (s *Scheduler) cycle(ctx context.Context, slot Slot) (ref string, polled bo
 	}
 	for ctx.Err() == nil {
 		ref = ""
+		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 		issue, err := c.Work(ctx)
+		if err == nil || errors.Is(err, cinderstack.ErrNoChange) {
+			s.setStatus(slot.Project, func(st *ProjectStatus) {
+				st.Connected, st.LastPoll, st.LastError, st.LastErrorAt = true, time.Now(), "", time.Time{}
+			})
+		}
 		if errors.Is(err, cinderstack.ErrNoChange) || (err == nil && issue == nil) {
 			polled = true
 			continue // the long-poll already waited
@@ -128,6 +184,7 @@ func (s *Scheduler) cycle(ctx context.Context, slot Slot) (ref string, polled bo
 		} else if err != nil {
 			return ref, polled, err
 		}
+		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = ref })
 		// From the claim on, the hooks own turning a failure into a comment and
 		// Review (M3); here an error from Run or Publish is a slot failure.
 		if err := h.Run(ctx, c, *issue); err != nil {

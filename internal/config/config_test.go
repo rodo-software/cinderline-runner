@@ -222,7 +222,7 @@ func TestDefaultPaths(t *testing.T) {
 			t.Errorf("%s: not under %s with a %s element", tt.path, tt.root, name.Name)
 		}
 	}
-	if p.File != filepath.Join(p.Dir, "config.json") || p.Log != filepath.Join(p.Dir, name.Name+".log") || p.State != filepath.Join(p.Dir, "state") {
+	if p.File != filepath.Join(p.Dir, "config.json") || p.Log != filepath.Join(p.State, name.Name+".log") || p.State != filepath.Join(p.Dir, "state") {
 		t.Errorf("unexpected paths %+v", p)
 	}
 	if len(p.Socket) > maxSocketPath {

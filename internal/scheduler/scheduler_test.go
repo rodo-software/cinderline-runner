@@ -333,3 +333,29 @@ func TestStopAtOnce(t *testing.T) {
 		}
 	})
 }
+
+func TestStatus(t *testing.T) {
+	s, _ := sched()
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
+	running, release := make(chan struct{}), make(chan struct{})
+	fail := errors.New("boom")
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
+		Run: func(context.Context, *cinderstack.Client, cinderstack.Issue) error {
+			running <- struct{}{}
+			<-release
+			return fail
+		},
+	}}})
+	<-running
+	st := s.Status()["CSR"]
+	if !st.Connected || st.LastPoll.IsZero() || st.Issue != "CSR-9" || st.LastError != "" {
+		t.Fatalf("during the run: %+v, want connected, a last poll, issue CSR-9 and no error", st)
+	}
+	close(release)
+	waitFor(t, "the failure in the status", func() bool { return s.Status()["CSR"].LastError != "" })
+	st = s.Status()["CSR"]
+	if st.Connected || st.Issue != "" || st.LastError != "run: boom" || st.LastErrorAt.IsZero() {
+		t.Fatalf("after the failure: %+v, want not connected, no issue, error run: boom with its time", st)
+	}
+}

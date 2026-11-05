@@ -72,7 +72,7 @@ func DefaultPaths() (Paths, error) {
 	p := Paths{
 		Dir:    dir,
 		File:   filepath.Join(dir, "config.json"),
-		Log:    filepath.Join(dir, name.Name+".log"),
+		Log:    filepath.Join(dir, "state", name.Name+".log"), // in the state folder (decision 2026-11-05-runner-state-location)
 		State:  filepath.Join(dir, "state"),
 		Socket: filepath.Join(run, name.Name, "sock"),
 	}
