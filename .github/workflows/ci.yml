@@ -1,6 +1,10 @@
 # macOS/Windows checks and the GoReleaser snapshot; Linux checks run on Forgejo; see decision 2026-11-05-ci.
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 permissions:
   contents: read
 jobs:

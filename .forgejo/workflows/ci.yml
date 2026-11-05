@@ -1,6 +1,10 @@
 # Linux CI for Forgejo; macOS and Windows run in .github/workflows/ci.yml; see decision 2026-11-05-ci.
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 jobs:
   linux:
     runs-on: docker
