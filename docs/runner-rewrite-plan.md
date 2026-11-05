@@ -92,7 +92,7 @@ The runner API is a third thin adapter over the same Actions, Policies, Rules an
 
 - **Packages** (all `internal/`):
   - `name`: one constant for the command, config folder, service, keychain, branch prefix, MCP server name and version header.
-  - `config`: the projects on this machine, each with a CinderStack URL (several instances are allowed: an agency may use a customer's instance), its project key, repository, environment allowance (`existing` must be allowed locally, 0098) and local paths. A versioned JSON file in the user's config folder (`os.UserConfigDir()/cinderstack/config.json`); logs and state beside it, the socket in the runtime folder.
+  - `config`: the projects on this machine, each with a CinderStack URL (several instances are allowed: an agency may use a customer's instance), its project key, repository, environment allowance (`existing` must be allowed locally, 0098) and local paths. A versioned JSON file in the user's config folder (`os.UserConfigDir()/cinderstack/config.json`); a state folder beside it for logs and paused notes (client sessions go on a per-project state volume, decision 2026-11-05-runner-state-location), the socket in the runtime folder.
   - `secrets`: the keychain with a 0600-file fallback. One entry per project per secret: the runner token, the git token, and the model credentials (an Anthropic API key or a `claude setup-token` token, an OpenRouter key). `cinderstack add` offers to copy the model credentials from a project already configured.
   - `cinderstack`: the REST client from M1, including the long-poll, the version handshake, the heartbeat (every 60 seconds) and the scoped tokens.
   - `scheduler`: one slot per project. Per slot: recovery at start, then claim, run, publish, and the timers for review branches and merge checks. A slot that fails never stops the others.
@@ -120,7 +120,7 @@ A port of today's behaviour in `legacy/runner.mjs` and `legacy/lib.mjs`. Every b
 - **Progress lines** at every step (2026-11-04-run-progress-updates).
 - **Base branch:** the project's base branch, else the remote's default branch (2026-11-04-base-branch).
 - **Prompts:** the same texts, with the issue text last and marked as data, and the CI-file rule for `.forgejo/`, `.github/`, `.gitlab/`, `.gitlab-ci.yml` and `bitbucket-pipelines.yml`. The only changes: "Ember" becomes "CinderStack", the MCP server is named `cinderstack`, and the branch is `cinderstack/<REF>`.
-- **What changes on purpose:** the runner's own state (paused notes, client sessions) lives on a per-project state volume. Workflow state still lives only in issues (0091). Agent labels travel in the scoped token instead of the `X-Ember-Agent` header. The branch prefix is `cinderstack/` instead of `ember/`; branches of issues in Review at the switch are merged by hand once.
+- **What changes on purpose:** the runner's own state moves out of the shared container: paused notes into the host state folder, client sessions and config dirs onto a per-project state volume (decision 2026-11-05-runner-state-location). Workflow state still lives only in issues (0091). Agent labels travel in the scoped token instead of the `X-Ember-Agent` header. The branch prefix is `cinderstack/` instead of `ember/`; branches of issues in Review at the switch are merged by hand once.
 - **Done when:** every ported test passes against the fakes, and the old suite's cases are ticked off in a table in the pull request.
 
 ### M4. Real implementations; switch over
