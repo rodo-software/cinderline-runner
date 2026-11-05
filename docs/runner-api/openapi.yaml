@@ -1,0 +1,881 @@
+openapi: 3.1.0
+info:
+  title: CinderStack runner API
+  version: 1.0.0
+  license:
+    name: MIT
+    identifier: MIT
+  description: |
+    The REST API a runner uses to take issues from a CinderStack instance, run
+    agent teams on them and report back (plan M1, decision 2026-11-05-runner-rewrite-details).
+    This file is authored in the runner repository and mirrored into the app
+    repository, where a test checks it against the routes.
+
+    **Authentication.** Every route needs a Sanctum personal access token as a
+    bearer token that carries the `runner` ability. The token belongs to the
+    runner user of exactly one project (0099), and every route is limited to
+    that project by the app's policies:
+
+    - no or an invalid token: `401`;
+    - a valid token without the `runner` ability (a person's token, a scoped
+      agent token): `403`;
+    - an issue, team or run of another project, or one that does not exist:
+      `404`, so a token never learns what exists outside its project.
+
+    **Versions (EMBER-44).** Every request carries `CinderStack-Runner-Version`.
+    Any route may answer `426` with the minimum runner version. Every response,
+    including errors, `304` and `426`, carries `CinderStack-Api-Version`.
+
+    **Issue references** such as `CSR-9` identify issues in paths.
+servers:
+  - url: '{instance}/api/runner/v1'
+    variables:
+      instance:
+        default: https://cinderstack.example.com
+        description: Base URL of the CinderStack instance.
+security:
+  - runnerToken: []
+paths:
+  /project:
+    get:
+      operationId: getProject
+      summary: The project this token belongs to.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          description: The project.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /work:
+    get:
+      operationId: getWork
+      summary: Long-poll for the next To do issue with a team.
+      description: |
+        Answers as soon as the project has a To do issue with a team, or after
+        `wait` seconds. The answer is the first such issue in board order, or
+        `issue: null` when there is none; both are `200` with an `ETag`. When
+        the request's `If-None-Match` matches the current answer, the app keeps
+        waiting until the answer changes or `wait` runs out, and then answers
+        `304` without a body.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+        - name: wait
+          in: query
+          description: Seconds to wait for work before answering.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 25
+            default: 25
+        - name: If-None-Match
+          in: header
+          description: The `ETag` of the previous answer.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The first To do issue with a team, or none.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [issue]
+                properties:
+                  issue:
+                    oneOf:
+                      - $ref: '#/components/schemas/Issue'
+                      - type: 'null'
+        '304':
+          description: The answer is unchanged since `If-None-Match`.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+            ETag:
+              $ref: '#/components/headers/ETag'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues:
+    get:
+      operationId: listIssues
+      summary: The project's issues with a team in the given statuses.
+      description: |
+        Used for recovery (In progress at start), keeping Review branches
+        current and checking merges (Review). Archived issues are left out.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+        - name: status
+          in: query
+          required: true
+          description: One or more statuses, comma-separated, e.g. `in_progress,review`.
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            items:
+              $ref: '#/components/schemas/StatusValue'
+      responses:
+        '200':
+          description: The issues, in board order, without their comments.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [issues]
+                properties:
+                  issues:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Issue'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    get:
+      operationId: getIssue
+      summary: One issue with its comments.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          $ref: '#/components/responses/IssueWithComments'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+    patch:
+      operationId: updateIssue
+      summary: Change an issue's status or merge status.
+      description: |
+        A `status` change needs `expected_status`; when the issue's current
+        status differs the app answers `409` and changes nothing. At least one
+        of `status` and `merge_status` is required.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                status:
+                  $ref: '#/components/schemas/StatusValue'
+                expected_status:
+                  $ref: '#/components/schemas/StatusValue'
+                merge_status:
+                  $ref: '#/components/schemas/MergeStatus'
+              dependentRequired:
+                status: [expected_status]
+      responses:
+        '200':
+          $ref: '#/components/responses/IssueWithComments'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}/claim:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    post:
+      operationId: claimIssue
+      summary: Move an issue to In progress to run it.
+      description: |
+        Moves the issue from `expected_status` to `in_progress`. `409` when its
+        status is no longer `expected_status`, for example because someone
+        else took it.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_status]
+              properties:
+                expected_status:
+                  $ref: '#/components/schemas/StatusValue'
+      responses:
+        '200':
+          $ref: '#/components/responses/IssueWithComments'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}/comments:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    get:
+      operationId: listComments
+      summary: An issue's comments, oldest first.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          description: The comments.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [comments]
+                properties:
+                  comments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Comment'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+    post:
+      operationId: addComment
+      summary: Add a comment as the runner user.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageBody'
+      responses:
+        '201':
+          description: The new comment.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}/progress:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    post:
+      operationId: addProgress
+      summary: Report what a run is doing now.
+      description: A short progress message shown on the issue while it runs.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageBody'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /teams/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      operationId: getTeam
+      summary: A team of the project, with its agents.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          description: The team.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Team'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /report:
+    put:
+      operationId: putReport
+      summary: Replace the runner's report.
+      description: |
+        Stored per token, as columns on `personal_access_tokens` (D5, EMBER-41),
+        and shown in the app (EMBER-42). Each call replaces the previous report.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Report'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /heartbeat:
+    post:
+      operationId: heartbeat
+      summary: Tell the app the runner is alive (EMBER-43).
+      description: Sent every 60 seconds, also while a long run is in flight. No body.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /runs/{ref}/agent-token:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    post:
+      operationId: createAgentToken
+      summary: Create a short-lived token for one agent run on this issue.
+      description: |
+        The token an agent uses for the CinderStack MCP tools. It is scoped to
+        the issue `ref` and its tree; no kind reaches other issues. See
+        `AgentTokenKind` for what each kind may do. The token is named after
+        the issue's team and the agent, so the app detects the agent from it
+        (0045). It expires after the team's `max_minutes` plus a margin. The
+        runner deletes it when the run ends. Workers and the Merge Resolver get
+        no CinderStack access and so no token (0122).
+
+        A new token for the same issue and agent replaces the previous one.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, agent]
+              properties:
+                kind:
+                  $ref: '#/components/schemas/AgentTokenKind'
+                agent:
+                  type: string
+                  description: Name of the team's agent that runs with the token.
+      responses:
+        '201':
+          description: The plain token, shown only once.
+          headers:
+            CinderStack-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expires_at]
+                properties:
+                  token:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+    delete:
+      operationId: deleteAgentTokens
+      summary: Delete the issue's agent tokens when its run ends.
+      description: Deletes every agent token of the issue `ref`. Also `204` when there is none.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+components:
+  securitySchemes:
+    runnerToken:
+      type: http
+      scheme: bearer
+      description: A Sanctum personal access token of the project's runner user with the `runner` ability.
+  parameters:
+    RunnerVersion:
+      name: CinderStack-Runner-Version
+      in: header
+      required: true
+      description: The runner's version, e.g. `1.2.0`.
+      schema:
+        type: string
+    Ref:
+      name: ref
+      in: path
+      required: true
+      description: An issue reference.
+      schema:
+        type: string
+        pattern: '^[A-Z][A-Z0-9]*-[0-9]+$'
+        examples: [CSR-9]
+  headers:
+    ApiVersion:
+      description: The app's runner API version, e.g. `1.0.0`. On every response.
+      required: true
+      schema:
+        type: string
+    ETag:
+      description: Identifies the answer; send it back as `If-None-Match`.
+      required: true
+      schema:
+        type: string
+  responses:
+    NoContent:
+      description: Done.
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+    IssueWithComments:
+      description: The issue, with its comments.
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/IssueWithComments'
+    Unauthenticated:
+      description: No token, or the token is invalid or expired.
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The token lacks the `runner` ability.
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Not found in this token's project (also when it exists in another project).
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: The issue's status is not `expected_status`; nothing changed.
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                required: [status]
+                properties:
+                  status:
+                    $ref: '#/components/schemas/StatusValue'
+    ValidationFailed:
+      description: The request is invalid.
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                required: [errors]
+                properties:
+                  errors:
+                    description: Messages per field, as Laravel returns them.
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: string
+    UpgradeRequired:
+      description: The runner is older than the app supports, or sent no version.
+      headers:
+        CinderStack-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                required: [minimum_runner_version]
+                properties:
+                  minimum_runner_version:
+                    type: string
+  schemas:
+    Error:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    StatusValue:
+      type: string
+      enum: [backlog, todo, in_progress, blocked, review, done, cancelled]
+    MergeStatus:
+      description: Whether a trusted team's merge went through (`success`), failed (`issue`) or is unknown.
+      enum: [success, issue, null]
+    Labeled:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+    IssueSummary:
+      type: object
+      required: [ref, title]
+      properties:
+        ref:
+          type: string
+        title:
+          type: string
+    Issue:
+      description: An issue as the app's `get_issue` tool returns it, without comments.
+      type: object
+      required:
+        - id
+        - number
+        - ref
+        - title
+        - body
+        - status
+        - priority
+        - merge_status
+        - position
+        - team
+        - parent
+        - agent
+        - sub_issues
+        - created_at
+        - updated_at
+        - completed_at
+        - archived_at
+      properties:
+        id:
+          type: integer
+        number:
+          type: integer
+        ref:
+          type: string
+          pattern: '^[A-Z][A-Z0-9]*-[0-9]+$'
+        title:
+          type: string
+        body:
+          description: Untrusted text written by people or agents.
+          type: [string, 'null']
+        status:
+          allOf:
+            - $ref: '#/components/schemas/Labeled'
+            - properties:
+                value:
+                  $ref: '#/components/schemas/StatusValue'
+        priority:
+          allOf:
+            - $ref: '#/components/schemas/Labeled'
+            - properties:
+                value:
+                  enum: [low, normal, high, urgent]
+        merge_status:
+          $ref: '#/components/schemas/MergeStatus'
+        position:
+          type: integer
+        team:
+          oneOf:
+            - type: object
+              required: [id, name]
+              properties:
+                id:
+                  type: integer
+                name:
+                  type: string
+            - type: 'null'
+        parent:
+          oneOf:
+            - $ref: '#/components/schemas/IssueSummary'
+            - type: 'null'
+        agent:
+          description: The agent that created the issue, if any.
+          oneOf:
+            - type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+            - type: 'null'
+        sub_issues:
+          description: Sub-issues in creation order.
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/IssueSummary'
+              - type: object
+                required: [status]
+                properties:
+                  status:
+                    $ref: '#/components/schemas/Labeled'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: [string, 'null']
+          format: date-time
+        archived_at:
+          type: [string, 'null']
+          format: date-time
+    IssueWithComments:
+      allOf:
+        - $ref: '#/components/schemas/Issue'
+        - type: object
+          required: [comments]
+          properties:
+            comments:
+              type: array
+              items:
+                $ref: '#/components/schemas/Comment'
+    Comment:
+      type: object
+      required: [id, body, author, created_at]
+      properties:
+        id:
+          type: integer
+        body:
+          description: Untrusted text written by people or agents.
+          type: string
+        author:
+          description: The user who wrote it; `agent` is set when an agent wrote it through its token.
+          type: object
+          required: [name, agent]
+          properties:
+            name:
+              type: string
+            agent:
+              type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+    MessageBody:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+    Project:
+      type: object
+      required: [key, name, repository_url, forge, base_branch, environment]
+      properties:
+        key:
+          type: string
+          examples: [CSR]
+        name:
+          type: string
+        repository_url:
+          type: string
+          format: uri
+        forge:
+          description: The forge that hosts the repository.
+          type: string
+          examples: [github, forgejo]
+        base_branch:
+          type: string
+          examples: [main]
+        environment:
+          description: Where runs happen; set by admins in the app, never from issue text (0098).
+          enum: [default, docker, existing]
+    Team:
+      type: object
+      required: [id, name, max_minutes, trusted, agents]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        max_minutes:
+          description: The longest an agent run of this team may take.
+          type: integer
+          minimum: 1
+        trusted:
+          description: Whether the runner requests the merge after the pull request (2026-11-04-runner-waits-for-merge).
+          type: boolean
+        agents:
+          type: array
+          items:
+            type: object
+            required: [name, role, client, model, instructions]
+            properties:
+              name:
+                type: string
+              role:
+                description: The agent's part in the team, e.g. orchestrator, worker, writer, merge resolver.
+                type: string
+              client:
+                description: The agent CLI, e.g. `claude` or `opencode`.
+                type: string
+              model:
+                type: [string, 'null']
+              instructions:
+                description: Untrusted text, goes into the prompt as data.
+                type: [string, 'null']
+    Report:
+      type: object
+      required: [runner_version, clients, environments]
+      properties:
+        runner_version:
+          type: string
+        clients:
+          type: array
+          items:
+            type: object
+            required: [name, version, state]
+            properties:
+              name:
+                type: string
+                examples: [claude]
+              version:
+                type: [string, 'null']
+              state:
+                description: Whether the client can run (EMBER-40).
+                enum: [ready, missing_binary, missing_credential, invalid_credential]
+        environments:
+          description: The environments this runner can serve.
+          type: array
+          items:
+            enum: [default, docker, existing]
+    AgentTokenKind:
+      description: |
+        What an agent token may do, limited to the issue it was made for:
+
+        - `orchestrator` and `writer`: the agent tools `get_issue`,
+          `list_comments`, `add_comment`, `create_issue` (sub-issues of the
+          issue only), `update_issue` (within the issue tree), `ask_person`
+          and `reply_person`.
+        - `reader`: for the orchestrator's own sub-issue, only `get_issue` and
+          `list_comments`.
+
+        No kind reaches issues outside the issue tree, and no kind has the
+        `runner` ability.
+      enum: [orchestrator, writer, reader]
