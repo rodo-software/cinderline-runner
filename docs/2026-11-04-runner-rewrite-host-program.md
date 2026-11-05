@@ -1,8 +1,10 @@
 # The runner is rewritten in Go as a native host program in its own repository; agents run in containers
 
+> **Status note (2026-11-05):** points 11 and 19 of decision [2026-11-05-runner-rewrite-details](decisions/2026-11-05-runner-rewrite-details.md) supersede this record's name and service lines: the command is `cinderstack`, not `ember`, and on Windows the daemon is a logon scheduled task, not a Windows service.
+
 - **Status:** Accepted
 - **Date:** 2026-11-04
-- **Source:** Decided by Willem on 2026-11-04 while preparing EMBER-20, one batched round of questions; proposed by Claude. The plan is [`docs/runner-rewrite-plan.md`](../runner-rewrite-plan.md). Amends 0095 (agents and runner share one container), 0104 (others build runners against the MCP interface), 0112 (the runner is a Node script in `runner/`), and decision 2026-11-03-mvp-launch-decisions on D2 (distribution as a prebuilt runner image), D3 ("the runner stays in Docker") and the exclusion of native Windows.
+- **Source:** Decided by Willem on 2026-11-04 while preparing EMBER-20, one batched round of questions; proposed by Claude. The plan is [`docs/runner-rewrite-plan.md`](runner-rewrite-plan.md). Amends 0095 (agents and runner share one container), 0104 (others build runners against the MCP interface), 0112 (the runner is a Node script in `runner/`), and decision 2026-11-03-mvp-launch-decisions on D2 (distribution as a prebuilt runner image), D3 ("the runner stays in Docker") and the exclusion of native Windows.
 
 ## Decision
 

@@ -1,0 +1,42 @@
+# Linux CI for Forgejo; macOS and Windows run in .github/workflows/ci.yml; see decision 2026-11-05-ci.
+name: ci
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+jobs:
+  linux:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: staticcheck ./...
+      - run: go test -race ./...
+      - run: govulncheck ./...
+  # Only main and tags reach GitHub
+  mirror:
+    if: github.event_name == 'push'
+    needs: [linux]
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Push main and tags to GitHub
+        env:
+          TOKEN: ${{ secrets.MIRROR_GITHUB_TOKEN }}
+        run: |
+          remote="https://x-access-token:${TOKEN}@github.com/rodo-software/cinderstack-runner.git"
+          git push --force "$remote" refs/remotes/origin/main:refs/heads/main
+          git push "$remote" --tags
