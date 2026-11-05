@@ -6,7 +6,7 @@ Guidance for any AI coding agent (Claude Code, Codex, Cursor, others) working in
 
 The CinderStack runner: a native Go program on a developer's machine that takes To do issues from a CinderStack instance, runs an agent team on each in its own Docker container, pushes a branch and opens a pull request. CinderStack itself (the issue tracker, called Ember in older documents and in issue keys such as EMBER-20) lives in its own repository; this runner talks to it only over the versioned REST runner API and gives agents short-lived tokens for MCP.
 
-**Source of truth:** [`docs/runner-rewrite-plan.md`](docs/runner-rewrite-plan.md) says what gets built and in which order; read the milestone you work on before starting. Binding decisions and their reasons are in [`docs/decisions/`](docs/decisions/README.md). `legacy/` (git-ignored, on Willem's machine only) is today's Node runner, the reference for the parity port in M3.
+**Source of truth:** [`docs/runner-rewrite-plan.md`](docs/runner-rewrite-plan.md) says what gets built and in which order; read the milestone you work on before starting. Binding decisions and their reasons are in [`docs/decisions/`](docs/decisions/README.md). `legacy/` (git-ignored, on Willem's machine only, never committed) is today's Node runner, the reference for the parity port in M3; teams reach it through the issue texts: the relevant parts of its `runner.mjs`, `lib.mjs` and `node --test` suites are copied into each M3 issue (decision 2026-11-05-legacy-reference).
 
 ## Scope
 
@@ -28,7 +28,7 @@ Apply **KISS first, then DRY, then SOLID where it pays off**. When they conflict
 
 ## Testing and quality
 
-- Every behaviour gets a Go test **before** its real implementation: M3 ports the cases of the `node --test` suites in `legacy/` and runs them against the fakes.
+- Every behaviour gets a Go test **before** its real implementation: M3 ports the cases of the `node --test` suites in `legacy/` (copied into each M3 issue's text) and runs them against the fakes.
 - Tests that need Docker, git on the network or a forge run in CI on Linux, not in an agent's run: the container you run in has no Docker.
 - **An issue is done only when `gofmt -l .` prints nothing and `go vet`, `staticcheck`, `go test -race ./...` and `govulncheck ./...` pass.** CI runs them on Linux, macOS and Windows.
 
