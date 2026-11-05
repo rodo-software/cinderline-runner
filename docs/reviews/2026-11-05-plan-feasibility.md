@@ -33,3 +33,14 @@ Found by looking at this run's own container and worktree.
 
 - Plan M2 puts state "beside" the config folder on the host; M3 puts paused notes and sessions on "a per-project state volume". Sessions must sit in a volume (the CLI runs in a container); paused notes can be either. Pick one wording before M2.
 - `docs/2026-11-04-runner-rewrite-host-program.md` still says the command is `ember` and the daemon is a Windows service; both were superseded by decision 2026-11-05-runner-rewrite-details (points 11 and 19). It also sits in `docs/`, not `docs/decisions/`, and links to `../runner-rewrite-plan.md`, which from `docs/` points outside the folder.
+
+## Follow-up for CSR-4, later on 2026-11-05
+
+Checked again from a run of today's runner after Go was added to its image:
+
+- **Blocker 1 is closed.** The image has Go 1.27.3 (linux/arm64), staticcheck 2026.2.2 and govulncheck 1.9.0; proxy.golang.org and vuln.go.dev are reachable. A scratch module passed `gofmt -l`, `go vet`, `staticcheck`, `go test -race` (cgo works), `govulncheck`, and cross-builds for Windows and macOS. A Unix socket listen-and-dial test passes on Linux.
+- **Blockers 2 and 3 are still open**, no decision recorded: who writes the CI under `.github/`, and whether CI runs on GitHub while `origin` stays `git.rodo.nl`. They block M0's "CI is green" condition, not the Go skeleton.
+- **Blocker 4 is still open** and only blocks M3.
+- **M2 waits for M1** (app repository) by decision 2026-11-05-runner-rewrite-details, point 3.
+
+So M0's repository skeleton (`LICENSE`, `NOTICE`, `README.md`, `go.mod`, `cmd/cinderstack` with `version`, `internal/name`, the socket test) can be queued now.
