@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
       - name: Push main and tags to GitHub
         env:
-          TOKEN: ${{ secrets.GITHUB_MIRROR_TOKEN }}
+          TOKEN: ${{ secrets.MIRROR_GITHUB_TOKEN }}
         run: |
           remote="https://x-access-token:${TOKEN}@github.com/rodo-software/cinderstack-runner.git"
           git push --force "$remote" refs/remotes/origin/main:refs/heads/main
