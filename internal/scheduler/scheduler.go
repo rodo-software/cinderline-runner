@@ -1,0 +1,177 @@
+// Package scheduler runs one slot per project: recovery at start, then a loop
+// that long-polls for work, claims, runs and publishes, plus timers for review
+// branches and merge checks. The steps themselves are hooks that M3 fills.
+//
+// It keeps no run or step table (decision 0091): between loops a slot holds
+// nothing but its backoff.
+package scheduler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
+	"sync"
+	"time"
+
+	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
+)
+
+// Hooks are the steps M3 fills. A nil hook is skipped.
+type Hooks struct {
+	Recover        func(ctx context.Context, c *cinderstack.Client) error // once at slot start, before the first Work
+	Run            func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error
+	Publish        func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error
+	ReviewBranches func(ctx context.Context, c *cinderstack.Client) error // keep Review branches current, on a timer
+	MergeCheck     func(ctx context.Context, c *cinderstack.Client) error // merge checks, on a timer
+}
+
+// Slot is one project's slot. One per project (plan section 2); a per-project
+// slot count would start several of these for one project.
+type Slot struct {
+	Project string // the project key, for log lines
+	Client  *cinderstack.Client
+	Hooks   Hooks
+}
+
+// Scheduler runs slots. Zero fields take their defaults.
+type Scheduler struct {
+	Log            *slog.Logger  // default slog.Default()
+	ReviewInterval time.Duration // default 5 minutes; a placeholder M3 settles
+	MergeInterval  time.Duration // default 60 seconds (MERGE_POLL_SECONDS); a placeholder M3 settles
+	MaxBackoff     time.Duration // default 60 seconds; the first wait after a failure is 1s or this, if less
+}
+
+// Run starts one goroutine per slot and blocks until ctx is done and every slot has returned.
+func (s *Scheduler) Run(ctx context.Context, slots []Slot) {
+	cfg := *s
+	if cfg.Log == nil {
+		cfg.Log = slog.Default()
+	}
+	if cfg.ReviewInterval <= 0 {
+		cfg.ReviewInterval = 5 * time.Minute
+	}
+	if cfg.MergeInterval <= 0 {
+		cfg.MergeInterval = 60 * time.Second
+	}
+	if cfg.MaxBackoff <= 0 {
+		cfg.MaxBackoff = 60 * time.Second
+	}
+	var wg sync.WaitGroup
+	for _, slot := range slots {
+		wg.Go(func() { cfg.timers(ctx, slot) })
+		wg.Go(func() { cfg.slot(ctx, slot) })
+	}
+	wg.Wait()
+}
+
+// slot runs cycles until ctx is done, backing off after each failure.
+func (s *Scheduler) slot(ctx context.Context, slot Slot) {
+	backoff := min(time.Second, s.MaxBackoff)
+	for {
+		ref, polled, err := s.cycle(ctx, slot)
+		if ctx.Err() != nil {
+			return
+		}
+		if polled {
+			backoff = min(time.Second, s.MaxBackoff)
+		}
+		args := []any{"project", slot.Project}
+		if ref != "" {
+			args = append(args, "issue", ref)
+		}
+		s.Log.Error("slot failed", append(args, "err", err, "retry_in", backoff)...)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, s.MaxBackoff)
+	}
+}
+
+// cycle is recovery and then the work loop, until an error, a panic or ctx is
+// done. It returns the issue being handled at the failure, if any, and whether
+// a Work call succeeded.
+func (s *Scheduler) cycle(ctx context.Context, slot Slot) (ref string, polled bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("panic: %v\n%s", p, debug.Stack())
+		}
+	}()
+	c, h := slot.Client, slot.Hooks
+	if h.Recover != nil {
+		if err := h.Recover(ctx, c); err != nil {
+			return "", false, fmt.Errorf("recover: %w", err)
+		}
+	}
+	for ctx.Err() == nil {
+		ref = ""
+		issue, err := c.Work(ctx)
+		if errors.Is(err, cinderstack.ErrNoChange) || (err == nil && issue == nil) {
+			polled = true
+			continue // the long-poll already waited
+		}
+		if err != nil {
+			return "", polled, err
+		}
+		polled, ref = true, issue.Ref
+		if h.Run == nil {
+			s.Log.Info("no run step yet, skipping", "project", slot.Project, "issue", ref)
+			continue // not claimed, so it stays To do; the ETag keeps this from spinning
+		}
+		var conflict *cinderstack.ConflictError
+		if _, err := c.ClaimIssue(ctx, ref, "todo"); errors.As(err, &conflict) {
+			s.Log.Info("claim conflict, moving on", "project", slot.Project, "issue", ref, "status", conflict.Status)
+			continue
+		} else if err != nil {
+			return ref, polled, err
+		}
+		// From the claim on, the hooks own turning a failure into a comment and
+		// Review (M3); here an error from Run or Publish is a slot failure.
+		if err := h.Run(ctx, c, *issue); err != nil {
+			return ref, polled, fmt.Errorf("run: %w", err)
+		}
+		// Phase 9's gate goes here, between run and publish (plan section 5); nothing yet.
+		if h.Publish != nil {
+			if err := h.Publish(ctx, c, *issue); err != nil {
+				return ref, polled, fmt.Errorf("publish: %w", err)
+			}
+		}
+	}
+	return ref, polled, ctx.Err()
+}
+
+// timers calls ReviewBranches and MergeCheck on their tickers until ctx is
+// done, beside the work loop, so a long run does not hold them up.
+func (s *Scheduler) timers(ctx context.Context, slot Slot) {
+	review, merge := time.NewTicker(s.ReviewInterval), time.NewTicker(s.MergeInterval)
+	defer review.Stop()
+	defer merge.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-review.C:
+			s.tick(ctx, slot, "review branches failed", slot.Hooks.ReviewBranches)
+		case <-merge.C:
+			s.tick(ctx, slot, "merge check failed", slot.Hooks.MergeCheck)
+		}
+	}
+}
+
+// tick calls hook, if any, and logs its error or panic; neither stops the timers.
+func (s *Scheduler) tick(ctx context.Context, slot Slot, msg string, hook func(context.Context, *cinderstack.Client) error) {
+	if hook == nil {
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			s.Log.Warn(msg, "project", slot.Project, "err", fmt.Sprintf("panic: %v\n%s", p, debug.Stack()))
+		}
+	}()
+	if err := hook(ctx, slot.Client); err != nil && ctx.Err() == nil {
+		s.Log.Warn(msg, "project", slot.Project, "err", err)
+	}
+}
