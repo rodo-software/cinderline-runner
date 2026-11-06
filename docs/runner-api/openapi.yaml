@@ -808,7 +808,7 @@ components:
           enum: [default, docker, existing]
     Team:
       type: object
-      required: [id, name, max_minutes, trusted, agents]
+      required: [id, name, max_minutes, trusted, max_sub_issues, ponytail, agents]
       properties:
         id:
           type: integer
@@ -821,11 +821,18 @@ components:
         trusted:
           description: Whether the runner requests the merge after the pull request (2026-11-04-runner-waits-for-merge).
           type: boolean
+        max_sub_issues:
+          description: The most sub-issues one issue may get, for the orchestrator's prompt (decision 0122).
+          type: integer
+          minimum: 0
+        ponytail:
+          description: Whether the team's Claude Code runs load the ponytail plugin (2026-11-03-per-team-ponytail-plugin).
+          type: boolean
         agents:
           type: array
           items:
             type: object
-            required: [name, role, client, model, instructions]
+            required: [name, role, client, model, instructions, description, price]
             properties:
               name:
                 type: string
@@ -838,8 +845,20 @@ components:
               model:
                 type: [string, 'null']
               instructions:
-                description: Untrusted text, goes into the prompt as data.
+                description: The agent's own instructions, first in its prompt (decision 2026-11-06-prompts).
                 type: [string, 'null']
+              description:
+                description: What the agent is good at, listed in the orchestrator's prompt.
+                type: [string, 'null']
+              price:
+                description: The model's price in USD per million tokens, listed in the orchestrator's prompt; null when unknown.
+                type: [object, 'null']
+                required: [input, output]
+                properties:
+                  input:
+                    type: number
+                  output:
+                    type: number
     Report:
       type: object
       required: [runner_version, clients, environments]

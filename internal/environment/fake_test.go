@@ -9,25 +9,17 @@ import (
 
 func TestFake(t *testing.T) {
 	boom := errors.New("boom")
-	spec := Spec{Project: "WEB", Issue: "WEB-1", Image: "default", Dir: "/runs/WEB-1", Env: []string{"DB_HOST=db"}}
-	f := &Fake{
-		Starts: []StartReply{{ID: "c1"}},
-		Stops:  []error{boom},
-		Tails:  []TailReply{{Tail: "last lines"}},
-	}
+	spec := Spec{Issue: "WEB-1", Dir: "/runs/WEB-1", Cmd: []string{"claude"}, Env: []string{"ANTHROPIC_API_KEY=k"}}
+	f := &Fake{Runs: []RunReply{{Output: "out"}}, Cleanups: []error{boom}}
 	ctx := context.Background()
 
-	if id, err := f.Start(ctx, spec); id != "c1" || err != nil {
-		t.Errorf("Start = %q, %v", id, err)
+	if out, err := f.Run(ctx, spec); out != "out" || err != nil {
+		t.Errorf("Run = %q, %v", out, err)
 	}
-	if tail, err := f.Tail(ctx, "c1"); tail != "last lines" || err != nil {
-		t.Errorf("Tail = %q, %v", tail, err)
+	if err := f.Cleanup(ctx); !errors.Is(err, boom) {
+		t.Errorf("Cleanup = %v, want boom", err)
 	}
-	if err := f.Stop(ctx, "c1"); !errors.Is(err, boom) {
-		t.Errorf("Stop = %v, want boom", err)
-	}
-
-	want := []Call{{"Start", []any{spec}}, {"Tail", []any{"c1"}}, {"Stop", []any{"c1"}}}
+	want := []Call{{"Run", []any{spec}}, {"Cleanup", nil}}
 	if calls := f.Calls(); !reflect.DeepEqual(calls, want) {
 		t.Errorf("Calls() = %+v, want %+v", calls, want)
 	}
@@ -36,20 +28,10 @@ func TestFake(t *testing.T) {
 func TestFakeEmptyQueues(t *testing.T) {
 	f := &Fake{}
 	ctx := context.Background()
-	tests := []struct {
-		method string
-		call   func() (zero bool, err error)
-	}{
-		{"Start", func() (bool, error) { id, err := f.Start(ctx, Spec{}); return id == "", err }},
-		{"Stop", func() (bool, error) { return true, f.Stop(ctx, "c1") }},
-		{"Tail", func() (bool, error) { s, err := f.Tail(ctx, "c1"); return s == "", err }},
+	if out, err := f.Run(ctx, Spec{}); out != "" || !errors.Is(err, ErrNotScripted) {
+		t.Errorf("Run = %q, %v; want ErrNotScripted", out, err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.method, func(t *testing.T) {
-			zero, err := tt.call()
-			if !zero || !errors.Is(err, ErrNotScripted) {
-				t.Errorf("zero = %v, err = %v; want zero value and ErrNotScripted", zero, err)
-			}
-		})
+	if err := f.Cleanup(ctx); !errors.Is(err, ErrNotScripted) {
+		t.Errorf("Cleanup = %v, want ErrNotScripted", err)
 	}
 }

@@ -106,11 +106,9 @@ func (c *CLI) add(args []string) int {
 			say("%q is not an absolute URL with a host.", v)
 			continue
 		}
-		if proj.RepositoryURL != "" {
-			if want, err := url.Parse(proj.RepositoryURL); err == nil && !sameRepository(u, want) {
-				say("%s is not the project's repository, %s.", v, proj.RepositoryURL)
-				continue
-			}
+		if proj.RepositoryURL != "" && !config.SameRepository(v, proj.RepositoryURL) {
+			say("%s is not the project's repository, %s.", v, proj.RepositoryURL)
+			continue
 		}
 		p.Repository = v
 	}
@@ -195,15 +193,4 @@ func (c *CLI) offerCopy(others []config.Project, p config.Project, ask func(stri
 		fmt.Fprintf(c.Stdout, "Copied model credentials from %s at %s\n", from.Key, from.URL)
 		return 0
 	}
-}
-
-// sameRepository reports whether a and b name the same repository: host and
-// path compared case-insensitively without user info, port, a trailing / or
-// .git, so ssh://git@host/o/r.git is https://host/o/r.
-func sameRepository(a, b *url.URL) bool {
-	key := func(u *url.URL) string {
-		path := strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
-		return strings.ToLower(u.Hostname() + path)
-	}
-	return key(a) == key(b)
 }

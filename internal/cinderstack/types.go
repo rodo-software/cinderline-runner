@@ -1,6 +1,9 @@
 package cinderstack
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Labeled is a value with its display label, such as a status.
 type Labeled struct {
@@ -89,15 +92,25 @@ type TeamAgent struct {
 	Client       string  `json:"client"`
 	Model        *string `json:"model"`
 	Instructions *string `json:"instructions"`
+	Description  *string `json:"description"` // what the agent is good at, for the orchestrator's prompt
+	Price        *Price  `json:"price"`       // nil when unknown
+}
+
+// Price is a model's price in USD per million tokens.
+type Price struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
 }
 
 // Team is a team of the project, with its agents.
 type Team struct {
-	ID         int         `json:"id"`
-	Name       string      `json:"name"`
-	MaxMinutes int         `json:"max_minutes"`
-	Trusted    bool        `json:"trusted"`
-	Agents     []TeamAgent `json:"agents"`
+	ID           int         `json:"id"`
+	Name         string      `json:"name"`
+	MaxMinutes   int         `json:"max_minutes"`
+	Trusted      bool        `json:"trusted"`
+	MaxSubIssues int         `json:"max_sub_issues"` // CinderStack refuses more sub-issues on one issue
+	Ponytail     bool        `json:"ponytail"`       // load the ponytail plugin in Claude Code runs (2026-11-03-per-team-ponytail-plugin)
+	Agents       []TeamAgent `json:"agents"`
 }
 
 // ReportClient is the state of one agent CLI on this machine.
@@ -116,9 +129,22 @@ type Report struct {
 
 // UpdateIssueRequest changes an issue. Status needs ExpectedStatus; empty fields are not sent.
 type UpdateIssueRequest struct {
-	Status         string `json:"status,omitempty"`
-	ExpectedStatus string `json:"expected_status,omitempty"`
-	MergeStatus    string `json:"merge_status,omitempty"`
+	Status           string `json:"status,omitempty"`
+	ExpectedStatus   string `json:"expected_status,omitempty"`
+	MergeStatus      string `json:"merge_status,omitempty"`
+	ClearMergeStatus bool   `json:"-"` // sends merge_status null instead
+}
+
+// MarshalJSON sends merge_status null when ClearMergeStatus is set.
+func (r UpdateIssueRequest) MarshalJSON() ([]byte, error) {
+	type plain UpdateIssueRequest
+	if !r.ClearMergeStatus {
+		return json.Marshal(plain(r))
+	}
+	return json.Marshal(struct {
+		plain
+		MergeStatus *string `json:"merge_status"` // shadows plain's
+	}{plain: plain(r)})
 }
 
 // TokenKind is what an agent token may do (decision 2026-11-05-runner-rewrite-details point 6).
@@ -127,7 +153,6 @@ type TokenKind string
 // The agent token kinds.
 const (
 	KindOrchestrator TokenKind = "orchestrator"
-	KindWriter       TokenKind = "writer"
 	KindReader       TokenKind = "reader"
 )
 

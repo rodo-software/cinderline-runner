@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rodo-software/cinderstack-runner/internal/name"
 )
@@ -149,6 +150,28 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+// merge_poll_seconds is optional: absent or 0 is legacy's default, 60
+// seconds; a negative value is refused.
+func TestMergePoll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"version":1,"projects":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || cfg.MergePoll() != 60*time.Second {
+		t.Fatalf("default = %v; want 60s", err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1,"merge_poll_seconds":30,"projects":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err = Load(path); err != nil || cfg.MergePoll() != 30*time.Second {
+		t.Fatalf("set = %v; want 30s", err)
+	}
+	if err := (&Config{Version: 1, MergePollSeconds: -1}).Validate(); err == nil || err.Error() != "merge_poll_seconds must not be negative" {
+		t.Errorf("negative: %v", err)
+	}
+}
+
 func TestSaveReplaces(t *testing.T) {
 	path := writeFile(t, "old")
 	if err := (&Config{}).Save(path); err != nil {
@@ -265,5 +288,30 @@ func TestSocketWithoutRuntimeDir(t *testing.T) {
 	}
 	if p.Socket != filepath.Join(cache, name.Name, "sock") {
 		t.Errorf("socket %s, want under %s", p.Socket, cache)
+	}
+}
+
+func TestSameRepository(t *testing.T) {
+	for _, tt := range []struct {
+		a, b string
+		same bool
+	}{
+		{"https://h.example.com/o/r", "https://h.example.com/o/r.git", true},
+		{"https://h.example.com/o/r", "ssh://git@H.example.com/O/R.git/", true},
+		{"https://u:p@h.example.com/o/r/", "http://h.example.com/o/r", true},
+		{"https://h.example.com/o/r", "https://h.example.com/o/r2", false},
+		{"https://h.example.com/o/r", "https://g.example.com/o/r", false},
+		// Ported from legacy lib.test.mjs "assertRepository accepts only the configured repository".
+		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/Willem/ember", true},
+		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/willem/ember.git", true},
+		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/willem/other", false},
+		// A project without a repository, or one that does not parse, is never the configured one.
+		{"", "https://h.example.com/o/r", false},
+		{"https://h.example.com/o/r", "::", false},
+		{"https:///o/r", "https:///o/r", false},
+	} {
+		if got := SameRepository(tt.a, tt.b); got != tt.same {
+			t.Errorf("SameRepository(%q, %q) = %v", tt.a, tt.b, got)
+		}
 	}
 }

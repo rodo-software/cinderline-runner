@@ -1,0 +1,28 @@
+# Legacy reference for M3: copied into the M3 issue texts
+
+- **Status:** Accepted
+- **Date:** 2026-11-05
+- **Source:** Decided by Willem on CSR-19, picking option B of the feasibility review (`docs/reviews/2026-11-05-plan-feasibility.md`, blocker 4).
+
+## Decision
+
+- M3 reaches the legacy reference through the issue texts. Willem copies the relevant parts of `legacy/`'s `runner.mjs`, `lib.mjs` and `node --test` suites into each M3 issue's text (CSR-20 to CSR-27), without any `.env` or token, before the issue enters To do.
+- `legacy/` itself stays git-ignored on Willem's machine. Nothing from `legacy/` and no `.env` is ever committed to this public repository (decision 2026-11-05-runner-rewrite-details, point 5).
+- Option A (a private branch or repository the runner clones) and option C (M3 issues written from the old suites by a person) are rejected.
+
+## Reason
+
+- Blocker 4 of the feasibility review: `legacy/` is git-ignored and lives only on Willem's machine, so a team could not see what M3 ports.
+- Option B needs no new repository and no new credentials: each M3 team reads the excerpts in its own issue's text, and nothing from `legacy/` is committed anywhere.
+
+## Amendment 2026-11-06: CSR-20 ported from the app repository's `runner/`
+
+- **Source:** Decided by Willem on CSR-20 (option A), proposed by Claude.
+- **Decision:** CSR-20 entered To do without legacy excerpts in its text. Its team ported instead from the app repository's `runner/` (`runner.mjs`, `lib.mjs`, `runner.test.mjs`, `lib.test.mjs`) at commit `ecde51a` (2026-11-06, EMBER-112 merge), which was readable in the run's container. Nothing from it is committed here; the pull request cites only test names. The other M3 issues still follow the decision above unless Willem decides otherwise for them.
+- **Reason:** the plan calls `legacy/` a copy of the app repository's `runner/`, so the same cases were within reach, and waiting for excerpts would have blocked the issue.
+
+## Amendment 2026-11-06: CSR-21 to CSR-27 port from the same source
+
+- **Source:** Decided by Willem on CSR-21 (option A), proposed by Claude.
+- **Decision:** the amendment above now covers every remaining M3 issue, CSR-21 to CSR-27: an issue without legacy excerpts in its text ports from the app repository's `runner/` at commit `ecde51a`. Nothing from it is committed here; pull requests cite only test names and function names.
+- **Reason:** CSR-21 also entered To do without excerpts, and asking the same question on each M3 issue would block each one for no new information.

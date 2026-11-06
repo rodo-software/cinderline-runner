@@ -42,6 +42,24 @@ type IsAncestorReply struct {
 	Err error
 }
 
+// HeadReply is one scripted reply to Head.
+type HeadReply struct {
+	Commit string
+	Err    error
+}
+
+// BoolReply is one scripted reply to Clean or ConflictMarkers.
+type BoolReply struct {
+	Yes bool
+	Err error
+}
+
+// LogReply is one scripted reply to Log.
+type LogReply struct {
+	Log string
+	Err error
+}
+
 // Fake is a scripted Workspace. Fill the queues before use; each call pops
 // the next reply in order and is recorded. An empty queue returns the zero
 // value and ErrNotScripted.
@@ -51,6 +69,11 @@ type Fake struct {
 	MergeBases []MergeBaseReply
 	Ancestors  []IsAncestorReply
 	Pushes     []error // replies to Push
+	Heads      []HeadReply
+	Cleans     []BoolReply
+	Markers    []BoolReply // replies to ConflictMarkers
+	Resets     []error
+	Logs       []LogReply
 
 	mu    sync.Mutex
 	calls []Call
@@ -125,4 +148,64 @@ func (f *Fake) Push(_ context.Context, dir, branch string) error {
 	err := f.Pushes[0]
 	f.Pushes = f.Pushes[1:]
 	return err
+}
+
+func (f *Fake) Head(_ context.Context, dir string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Head", dir)
+	if len(f.Heads) == 0 {
+		return "", fmt.Errorf("%w for Head", ErrNotScripted)
+	}
+	r := f.Heads[0]
+	f.Heads = f.Heads[1:]
+	return r.Commit, r.Err
+}
+
+func (f *Fake) Clean(_ context.Context, dir string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Clean", dir)
+	if len(f.Cleans) == 0 {
+		return false, fmt.Errorf("%w for Clean", ErrNotScripted)
+	}
+	r := f.Cleans[0]
+	f.Cleans = f.Cleans[1:]
+	return r.Yes, r.Err
+}
+
+func (f *Fake) ConflictMarkers(_ context.Context, dir string, files []string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("ConflictMarkers", dir, files)
+	if len(f.Markers) == 0 {
+		return false, fmt.Errorf("%w for ConflictMarkers", ErrNotScripted)
+	}
+	r := f.Markers[0]
+	f.Markers = f.Markers[1:]
+	return r.Yes, r.Err
+}
+
+func (f *Fake) Reset(_ context.Context, dir, commit string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Reset", dir, commit)
+	if len(f.Resets) == 0 {
+		return fmt.Errorf("%w for Reset", ErrNotScripted)
+	}
+	err := f.Resets[0]
+	f.Resets = f.Resets[1:]
+	return err
+}
+
+func (f *Fake) Log(_ context.Context, dir, base string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Log", dir, base)
+	if len(f.Logs) == 0 {
+		return "", fmt.Errorf("%w for Log", ErrNotScripted)
+	}
+	r := f.Logs[0]
+	f.Logs = f.Logs[1:]
+	return r.Log, r.Err
 }

@@ -20,7 +20,9 @@ import (
 
 // Hooks are the steps M3 fills. A nil hook is skipped.
 type Hooks struct {
-	Recover        func(ctx context.Context, c *cinderstack.Client) error // once at slot start, before the first Work
+	Recover        func(ctx context.Context, c *cinderstack.Client) error                          // once at slot start, before the first Work
+	Pin            func(ctx context.Context, c *cinderstack.Client) error                          // before the claims of each poll; an error is a slot failure, so nothing is claimed
+	Check          func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error // before each claim; an error skips the issue, unclaimed
 	Run            func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error
 	Publish        func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error
 	ReviewBranches func(ctx context.Context, c *cinderstack.Client) error // keep Review branches current, on a timer
@@ -39,7 +41,7 @@ type Slot struct {
 type Scheduler struct {
 	Log            *slog.Logger  // default slog.Default()
 	ReviewInterval time.Duration // default 5 minutes; a placeholder M3 settles
-	MergeInterval  time.Duration // default 60 seconds (MERGE_POLL_SECONDS); a placeholder M3 settles
+	MergeInterval  time.Duration // default 60 seconds; the daemon sets config.json's merge_poll_seconds (legacy MERGE_POLL_SECONDS)
 	MaxBackoff     time.Duration // default 60 seconds; the first wait after a failure is 1s or this, if less
 
 	status map[string]*ProjectStatus // by project key; shared with Run's copy, guarded by statusMu
@@ -116,7 +118,7 @@ func (s *Scheduler) Run(ctx context.Context, slots []Slot) {
 func (s *Scheduler) slot(ctx context.Context, slot Slot) {
 	backoff := min(time.Second, s.MaxBackoff)
 	for {
-		ref, polled, err := s.cycle(ctx, slot)
+		polled, err := s.cycle(ctx, slot)
 		if ctx.Err() != nil {
 			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 			return
@@ -127,11 +129,7 @@ func (s *Scheduler) slot(ctx context.Context, slot Slot) {
 		if polled {
 			backoff = min(time.Second, s.MaxBackoff)
 		}
-		args := []any{"project", slot.Project}
-		if ref != "" {
-			args = append(args, "issue", ref)
-		}
-		s.Log.Error("slot failed", append(args, "err", err, "retry_in", backoff)...)
+		s.Log.Error("slot failed", "project", slot.Project, "err", err, "retry_in", backoff)
 		select {
 		case <-ctx.Done():
 			return
@@ -142,9 +140,8 @@ func (s *Scheduler) slot(ctx context.Context, slot Slot) {
 }
 
 // cycle is recovery and then the work loop, until an error, a panic or ctx is
-// done. It returns the issue being handled at the failure, if any, and whether
-// a Work call succeeded.
-func (s *Scheduler) cycle(ctx context.Context, slot Slot) (ref string, polled bool, err error) {
+// done. It returns whether a Work call succeeded.
+func (s *Scheduler) cycle(ctx context.Context, slot Slot) (polled bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("panic: %v\n%s", p, debug.Stack())
@@ -153,51 +150,141 @@ func (s *Scheduler) cycle(ctx context.Context, slot Slot) (ref string, polled bo
 	c, h := slot.Client, slot.Hooks
 	if h.Recover != nil {
 		if err := h.Recover(ctx, c); err != nil {
-			return "", false, fmt.Errorf("recover: %w", err)
+			return false, fmt.Errorf("recover: %w", err)
 		}
 	}
+	// Work names only the first To do issue, so while that one is skipped
+	// every poll, changed or not, walks the board again (legacy parity).
+	stuck := false
 	for ctx.Err() == nil {
-		ref = ""
 		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 		issue, err := c.Work(ctx)
-		if err == nil || errors.Is(err, cinderstack.ErrNoChange) {
-			s.setStatus(slot.Project, func(st *ProjectStatus) {
-				st.Connected, st.LastPoll, st.LastError, st.LastErrorAt = true, time.Now(), "", time.Time{}
-			})
+		noChange := errors.Is(err, cinderstack.ErrNoChange)
+		if err != nil && !noChange {
+			return polled, err
 		}
-		if errors.Is(err, cinderstack.ErrNoChange) || (err == nil && issue == nil) {
-			polled = true
+		polled = true
+		s.setStatus(slot.Project, func(st *ProjectStatus) {
+			st.Connected, st.LastPoll, st.LastError, st.LastErrorAt = true, time.Now(), "", time.Time{}
+		})
+		if !noChange && issue == nil {
+			stuck = false
+			continue // no work
+		}
+		if noChange && !stuck {
 			continue // the long-poll already waited
 		}
-		if err != nil {
-			return "", polled, err
-		}
-		polled, ref = true, issue.Ref
 		if h.Run == nil {
-			s.Log.Info("no run step yet, skipping", "project", slot.Project, "issue", ref)
+			s.Log.Info("no run step yet, skipping", "project", slot.Project, "issue", issue.Ref)
 			continue // not claimed, so it stays To do; the ETag keeps this from spinning
 		}
-		var conflict *cinderstack.ConflictError
-		if _, err := c.ClaimIssue(ctx, ref, "todo"); errors.As(err, &conflict) {
-			s.Log.Info("claim conflict, moving on", "project", slot.Project, "issue", ref, "status", conflict.Status)
+		claimed, err := s.claimNext(ctx, slot, issue)
+		if err != nil {
+			return polled, err
+		}
+		if stuck = claimed == nil; stuck {
 			continue
-		} else if err != nil {
-			return ref, polled, err
 		}
-		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = ref })
-		// From the claim on, the hooks own turning a failure into a comment and
-		// Review (M3); here an error from Run or Publish is a slot failure.
-		if err := h.Run(ctx, c, *issue); err != nil {
-			return ref, polled, fmt.Errorf("run: %w", err)
-		}
-		// Phase 9's gate goes here, between run and publish (plan section 5); nothing yet.
-		if h.Publish != nil {
-			if err := h.Publish(ctx, c, *issue); err != nil {
-				return ref, polled, fmt.Errorf("publish: %w", err)
-			}
+		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = claimed.Ref })
+		s.finish(ctx, slot, *claimed)
+	}
+	return polled, ctx.Err()
+}
+
+// claimNext pins the repository, then claims the first To do issue that
+// passes Check: first (Work's answer, nil when re-walking), then the board in
+// order. An issue that is skipped or not claimed does not block the ones
+// behind it. It returns nil when nothing was claimed.
+func (s *Scheduler) claimNext(ctx context.Context, slot Slot, first *cinderstack.Issue) (*cinderstack.Issue, error) {
+	c, h := slot.Client, slot.Hooks
+	if h.Pin != nil {
+		if err := h.Pin(ctx, c); err != nil {
+			return nil, fmt.Errorf("repository: %w", err)
 		}
 	}
-	return ref, polled, ctx.Err()
+	var queue []cinderstack.Issue
+	if first != nil {
+		queue = append(queue, *first)
+	}
+	tried, listed := map[string]bool{}, false
+	for {
+		if len(queue) == 0 {
+			if listed {
+				return nil, nil
+			}
+			// shortcut: one page of To do issues, as the API returns them; page if a board outgrows it.
+			all, err := c.ListIssues(ctx, "todo")
+			if err != nil {
+				return nil, err
+			}
+			queue, listed = all, true
+			continue
+		}
+		issue := queue[0]
+		queue = queue[1:]
+		if tried[issue.Ref] {
+			continue
+		}
+		tried[issue.Ref] = true
+		if h.Check != nil {
+			if err := h.Check(ctx, c, issue); err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				s.Log.Warn("skipped before the claim", "project", slot.Project, "issue", issue.Ref, "err", err)
+				continue
+			}
+		}
+		var conflict *cinderstack.ConflictError
+		if _, err := c.ClaimIssue(ctx, issue.Ref, "todo"); errors.As(err, &conflict) {
+			s.Log.Info("claim conflict, moving on", "project", slot.Project, "issue", issue.Ref, "status", conflict.Status)
+			continue
+		} else if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			s.Log.Warn("not claimed", "project", slot.Project, "issue", issue.Ref, "err", err)
+			continue
+		}
+		return &issue, nil
+	}
+}
+
+// finish runs and publishes a claimed issue. From the claim on, every failure
+// ends in a comment and Review (plan M3), so an issue never stays In progress
+// with nobody working on it. A stop leaves it In progress: the next start's
+// recovery puts it back in To do.
+func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Issue) {
+	c, h := slot.Client, slot.Hooks
+	err := s.step(slot, issue, func() error { return h.Run(ctx, c, issue) })
+	// Phase 9's gate goes here, between run and publish (plan section 5); nothing yet.
+	if err == nil && h.Publish != nil {
+		err = s.step(slot, issue, func() error { return h.Publish(ctx, c, issue) })
+	}
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+	s.Log.Error("run failed", "project", slot.Project, "issue", issue.Ref, "err", err)
+	if _, err := c.AddComment(ctx, issue.Ref, "The run stopped with an error: "+err.Error()); err != nil {
+		s.Log.Error("failure comment not added", "project", slot.Project, "issue", issue.Ref, "err", err)
+	}
+	// Refused when the issue is no longer In progress, for example after a question (decision 0116).
+	review := cinderstack.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}
+	if _, err := c.UpdateIssue(ctx, issue.Ref, review); err != nil {
+		s.Log.Error("not moved to Review", "project", slot.Project, "issue", issue.Ref, "err", err)
+	}
+}
+
+// step calls f and turns a panic into an error, logging its stack, so a
+// panicking hook still ends its issue in Review.
+func (s *Scheduler) step(slot Slot, issue cinderstack.Issue, f func() error) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.Log.Error("panic", "project", slot.Project, "issue", issue.Ref, "stack", string(debug.Stack()))
+			err = fmt.Errorf("panic: %v", p)
+		}
+	}()
+	return f()
 }
 
 // timers calls ReviewBranches and MergeCheck on their tickers until ctx is

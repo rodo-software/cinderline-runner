@@ -106,6 +106,9 @@ var operations = []operation{
 	{"updateIssue merge", func(ctx context.Context, c *Client) (any, error) {
 		return c.UpdateIssue(ctx, "CSR-9", UpdateIssueRequest{MergeStatus: "success"})
 	}, "PATCH", "/api/runner/v1/issues/CSR-9", "", `{"merge_status":"success"}`, 200, issueWithCommentsJSON},
+	{"updateIssue clear merge", func(ctx context.Context, c *Client) (any, error) {
+		return c.UpdateIssue(ctx, "CSR-9", UpdateIssueRequest{ClearMergeStatus: true})
+	}, "PATCH", "/api/runner/v1/issues/CSR-9", "", `{"merge_status":null}`, 200, issueWithCommentsJSON},
 	{"claimIssue", func(ctx context.Context, c *Client) (any, error) { return c.ClaimIssue(ctx, "CSR-9", "todo") },
 		"POST", "/api/runner/v1/issues/CSR-9/claim", "", `{"expected_status":"todo"}`, 200, issueWithCommentsJSON},
 	{"listComments", func(ctx context.Context, c *Client) (any, error) {
@@ -118,7 +121,7 @@ var operations = []operation{
 		"POST", "/api/runner/v1/issues/CSR-9/progress", "", `{"body":"step 2"}`, 204, ""},
 	{"getTeam", func(ctx context.Context, c *Client) (any, error) { return c.GetTeam(ctx, 2) },
 		"GET", "/api/runner/v1/teams/2", "", "", 200,
-		`{"id":2,"name":"Dev","max_minutes":30,"trusted":true,"agents":[{"name":"Ada","role":"orchestrator","client":"claude","model":null,"instructions":"be brief"}]}`},
+		`{"id":2,"name":"Dev","max_minutes":30,"trusted":true,"max_sub_issues":7,"ponytail":true,"agents":[{"name":"Ada","role":"orchestrator","client":"claude","model":null,"instructions":"be brief","description":null,"price":{"input":5,"output":25}},{"name":"Qwen","role":"worker","client":"opencode","model":"q","instructions":null,"description":"Cheap.","price":null}]}`},
 	{"putReport", func(ctx context.Context, c *Client) (any, error) {
 		v := "2.0.1"
 		return nil, c.PutReport(ctx, Report{RunnerVersion: version, Clients: []ReportClient{
@@ -130,8 +133,8 @@ var operations = []operation{
 	{"heartbeat", func(ctx context.Context, c *Client) (any, error) { return nil, c.Heartbeat(ctx) },
 		"POST", "/api/runner/v1/heartbeat", "", "", 204, ""},
 	{"createAgentToken", func(ctx context.Context, c *Client) (any, error) {
-		return c.CreateAgentToken(ctx, "CSR-9", KindWriter, "Ada")
-	}, "POST", "/api/runner/v1/runs/CSR-9/agent-token", "", `{"kind":"writer","agent":"Ada"}`, 201,
+		return c.CreateAgentToken(ctx, "CSR-9", KindOrchestrator, "Ada")
+	}, "POST", "/api/runner/v1/runs/CSR-9/agent-token", "", `{"kind":"orchestrator","agent":"Ada"}`, 201,
 		`{"token":"` + agentToken + `","expires_at":"2026-11-05T12:00:00Z"}`},
 	{"deleteAgentTokens", func(ctx context.Context, c *Client) (any, error) { return nil, c.DeleteAgentTokens(ctx, "CSR-9") },
 		"DELETE", "/api/runner/v1/runs/CSR-9/agent-token", "", "", 204, ""},
