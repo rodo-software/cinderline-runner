@@ -106,7 +106,14 @@ func deref(s *string) string {
 	return *s
 }
 
+// progress reports a step on the issue a person watches (decision
+// 2026-11-04-run-progress-updates). A failure only logs: progress never stops
+// a run. Cut to CinderStack's 200 characters, as a sub-issue title alone may
+// be that long.
 func (p Project) progress(ctx context.Context, c *cinderstack.Client, ref, msg string) {
+	if r := []rune(msg); len(r) > 200 {
+		msg = string(r[:200])
+	}
 	if err := c.AddProgress(ctx, ref, msg); err != nil {
 		p.Log.Warn("progress not reported", "project", p.Config.Key, "issue", ref, "err", err)
 	}
@@ -357,10 +364,14 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients
 			break
 		}
 		log.Warn("run failed", "attempt", attempt, "turn_limit", res.HitTurnLimit, "err", err)
+		if attempt == 2 {
+			break
+		}
 		next = turn
 		if res.HitTurnLimit && res.SessionID != "" {
 			next.SessionID, next.Prompt = res.SessionID, ContinuePrompt(r.Ref)
 		}
+		p.progress(ctx, c, j.Ref, retryProgress(res, attempt+1))
 	}
 	if ctx.Err() != nil {
 		return "", ctx.Err()

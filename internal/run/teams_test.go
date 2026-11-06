@@ -475,6 +475,11 @@ func TestAFailedWorkerIsMarkedFailedAndTheRoundGoesOn(t *testing.T) {
 	if review := turns(&r.claude.Fake)[0].Prompt; !strings.Contains(review, "- CSR-2: Part (Qwen, failed)\n- CSR-3: More (Qwen)") {
 		t.Errorf("review prompt = %q", review)
 	}
+	// Each run reports its step on the parent, a retry as runner.mjs retryProgress.
+	wantProgress := []string{"Running Qwen on CSR-2 Part", "Retrying (attempt 2)", "Running Qwen on CSR-3 More", "Builder is reviewing the sub-issues"}
+	if got := r.progress(); !slices.Equal(got, wantProgress) {
+		t.Errorf("progress = %q, want %q", got, wantProgress)
+	}
 }
 
 // runSubIssue(): a worker out of turns continues its own session; a failed
@@ -506,6 +511,9 @@ func TestSubIssueEdges(t *testing.T) {
 	ts := turns(&r.opencode.Fake)
 	if len(ts) != 2 || ts[1].SessionID != "w1" || ts[1].Prompt != ContinuePrompt("CSR-2") {
 		t.Errorf("worker turns = %+v, want the second to continue w1", ts)
+	}
+	if got := r.progress(); !slices.Contains(got, "Continuing after the turn limit") {
+		t.Errorf("progress = %q, want the continue line", got)
 	}
 	if got := r.commentOn("CSR-2"); got != "Finished." {
 		t.Errorf("CSR-2 comment = %q", got)

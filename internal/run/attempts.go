@@ -27,6 +27,15 @@ func CommentsPrompt(ref string) string {
 // person's comments failed twice and the finished work is published anyway.
 const UnreadComments = "\n\nA person commented during the run, but resuming the agent to read those comments failed twice, so this result doesn't take them into account. Read them before you go on."
 
+// retryProgress is the progress line of the run after a failed one, as
+// legacy runner.mjs retryProgress.
+func retryProgress(res client.Result, attempt int) string {
+	if res.HitTurnLimit {
+		return "Continuing after the turn limit"
+	}
+	return fmt.Sprintf("Retrying (attempt %d)", attempt)
+}
+
 // Job is one issue's agent run for Attempts.
 type Job struct {
 	Ref       string
@@ -146,9 +155,7 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 			cursor, readFail, done = newestCommentID(cs), 0, &finished
 			next = resume(res.SessionID, CommentsPrompt(j.Ref))
 			log.Info("resuming to read a person's comments", "session", res.SessionID)
-			if err := c.AddProgress(ctx, j.Ref, "Reading new comments from a person"); err != nil {
-				log.Warn("progress not reported", "err", err)
-			}
+			p.progress(ctx, c, j.Ref, "Reading new comments from a person")
 			continue
 		}
 		log.Warn("run failed", "attempt", attempt, "turn_limit", res.HitTurnLimit, "err", err)
@@ -164,6 +171,7 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 				prompt = ContinuePrompt(j.Ref)
 			}
 			next = resume(next.SessionID, prompt)
+			p.progress(ctx, c, j.Ref, retryProgress(res, readFail+1))
 			continue
 		}
 
@@ -177,6 +185,7 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 			next = t
 			log.Info("starting over")
 		}
+		p.progress(ctx, c, j.Ref, retryProgress(res, attempt))
 	}
 
 	return Outcome{Result: res}, bothFailed(ctx, log, env, j.Container, err)

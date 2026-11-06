@@ -92,15 +92,24 @@ type TeamAgent struct {
 	Client       string  `json:"client"`
 	Model        *string `json:"model"`
 	Instructions *string `json:"instructions"`
+	Description  *string `json:"description"` // what the agent is good at, for the orchestrator's prompt
+	Price        *Price  `json:"price"`       // nil when unknown
+}
+
+// Price is a model's price in USD per million tokens.
+type Price struct {
+	Input  float64 `json:"input"`
+	Output float64 `json:"output"`
 }
 
 // Team is a team of the project, with its agents.
 type Team struct {
-	ID         int         `json:"id"`
-	Name       string      `json:"name"`
-	MaxMinutes int         `json:"max_minutes"`
-	Trusted    bool        `json:"trusted"`
-	Agents     []TeamAgent `json:"agents"`
+	ID           int         `json:"id"`
+	Name         string      `json:"name"`
+	MaxMinutes   int         `json:"max_minutes"`
+	Trusted      bool        `json:"trusted"`
+	MaxSubIssues int         `json:"max_sub_issues"` // CinderStack refuses more sub-issues on one issue
+	Agents       []TeamAgent `json:"agents"`
 }
 
 // ReportClient is the state of one agent CLI on this machine.

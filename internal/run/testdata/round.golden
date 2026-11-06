@@ -1,0 +1,8 @@
+The runner ran these sub-issues of CSR-3, one at a time in this worktree, and moved them to review:
+
+- CSR-4: Part (Qwen)
+- CSR-5: More (Qwen, failed)
+
+Each agent's report is a comment on its sub-issue; read them with list_comments. Also read the latest comments on CSR-3: a person may have answered a question. If a person's answer also asks you something, reply with reply_person on CSR-3 first.
+
+Review each sub-issue in review: check the code in this worktree, then move it to done or cancelled. For rework or what is left, create new sub-issues and end your turn. When nothing is left to do, end your turn with no To do sub-issues: the runner then opens the pull request. Same rules as before.

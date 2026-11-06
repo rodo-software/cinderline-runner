@@ -263,6 +263,9 @@ func TestACommentResumeThatFailsTwice(t *testing.T) {
 	if len(env.Calls()) != 0 {
 		t.Fatalf("environment calls = %v, want no tail", env.Calls())
 	}
+	if w := api.writes(); !slices.Contains(w, `POST /issues/CSR-7/progress {"body":"Retrying (attempt 2)"}`) {
+		t.Fatalf("writes = %q, want the retry's progress line", w)
+	}
 	if !strings.Contains(UnreadComments, "resuming the agent to read those comments failed twice") {
 		t.Fatalf("UnreadComments = %q", UnreadComments)
 	}

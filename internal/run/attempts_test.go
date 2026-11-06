@@ -178,3 +178,34 @@ func TestAttemptsLogsEveryStep(t *testing.T) {
 		}
 	}
 }
+
+// Ported from runner.mjs retryProgress (decision
+// 2026-11-04-run-progress-updates): the run after a failure reports what it
+// does, "Continuing after the turn limit" or "Retrying (attempt 2)", and a
+// failing progress line never stops the run (runner.test.mjs "a failing
+// progress line never stops the run": the fake API answers 404).
+func TestAttemptsReportsTheRetry(t *testing.T) {
+	for want, limit := range map[string]bool{"Retrying (attempt 2)": false, "Continuing after the turn limit": true} {
+		t.Run(want, func(t *testing.T) {
+			api := working()
+			cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", HitTurnLimit: limit}, Err: errFailed}, {}}}
+			if _, err := project(t).Attempts(context.Background(), api.client(t), cl, &environment.Fake{}, job); err != nil {
+				t.Fatal(err)
+			}
+			if w := api.writes(); len(w) != 1 || w[0] != `POST /issues/CSR-7/progress {"body":"`+want+`"}` {
+				t.Fatalf("writes = %q, want the one progress line %q", w, want)
+			}
+		})
+	}
+}
+
+// A progress line is cut to CinderStack's 200 characters, as legacy
+// progress() does: a sub-issue title alone may be that long.
+func TestProgressIsCutTo200Characters(t *testing.T) {
+	api := &fakeAPI{routes: map[string]reply{"POST /issues/CSR-7/progress": {204, ""}}}
+	project(t).progress(context.Background(), api.client(t), "CSR-7", strings.Repeat("é", 250))
+	w := api.writes()
+	if len(w) != 1 || w[0] != `POST /issues/CSR-7/progress {"body":"`+strings.Repeat("é", 200)+`"}` {
+		t.Fatalf("writes = %q", w)
+	}
+}
