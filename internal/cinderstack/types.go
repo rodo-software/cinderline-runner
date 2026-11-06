@@ -1,6 +1,9 @@
 package cinderstack
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Labeled is a value with its display label, such as a status.
 type Labeled struct {
@@ -116,9 +119,22 @@ type Report struct {
 
 // UpdateIssueRequest changes an issue. Status needs ExpectedStatus; empty fields are not sent.
 type UpdateIssueRequest struct {
-	Status         string `json:"status,omitempty"`
-	ExpectedStatus string `json:"expected_status,omitempty"`
-	MergeStatus    string `json:"merge_status,omitempty"`
+	Status           string `json:"status,omitempty"`
+	ExpectedStatus   string `json:"expected_status,omitempty"`
+	MergeStatus      string `json:"merge_status,omitempty"`
+	ClearMergeStatus bool   `json:"-"` // sends merge_status null instead
+}
+
+// MarshalJSON sends merge_status null when ClearMergeStatus is set.
+func (r UpdateIssueRequest) MarshalJSON() ([]byte, error) {
+	type plain UpdateIssueRequest
+	if !r.ClearMergeStatus {
+		return json.Marshal(plain(r))
+	}
+	return json.Marshal(struct {
+		plain
+		MergeStatus *string `json:"merge_status"` // shadows plain's
+	}{plain: plain(r)})
 }
 
 // TokenKind is what an agent token may do (decision 2026-11-05-runner-rewrite-details point 6).

@@ -15,7 +15,10 @@ type Forge interface {
 	// opened again.
 	FindPullRequest(ctx context.Context, branch string) (pr PullRequest, found bool, err error)
 	RequestMerge(ctx context.Context, pr PullRequest) error
-	MergeState(ctx context.Context, pr PullRequest) (MergeState, error)
+	// MergeState is where the newest pull request of branch stands, in any
+	// state; "" when the branch has none. By branch, as legacy
+	// pullRequestOutcome: the runner keeps no pull request numbers (0091).
+	MergeState(ctx context.Context, branch string) (MergeState, error)
 }
 
 // PullRequestInput is what a new pull request is opened with.
@@ -32,11 +35,12 @@ type PullRequest struct {
 	URL    string
 }
 
-// MergeState is where a requested merge stands.
+// MergeState is where a pull request stands.
 type MergeState string
 
 const (
-	MergePending MergeState = "pending"
+	MergePending MergeState = "pending" // open, without failed checks
 	MergeMerged  MergeState = "merged"
-	MergeFailed  MergeState = "failed" // failed checks or a conflict
+	MergeClosed  MergeState = "closed" // closed without merging
+	MergeFailed  MergeState = "failed" // open, with failed checks on its head
 )

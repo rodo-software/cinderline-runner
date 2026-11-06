@@ -275,9 +275,10 @@ func (p Project) reviewBranch(ctx context.Context, c *cinderstack.Client, ws wor
 }
 
 // setMergeStatus writes a trusted issue's merge_status (decision
-// 2026-11-04-merge-status). A failed write only logs.
+// 2026-11-04-merge-status); "" writes null. A failed write only logs.
 func (p Project) setMergeStatus(ctx context.Context, c *cinderstack.Client, ref, status string) {
-	if _, err := c.UpdateIssue(ctx, ref, cinderstack.UpdateIssueRequest{MergeStatus: status}); err != nil {
+	req := cinderstack.UpdateIssueRequest{MergeStatus: status, ClearMergeStatus: status == ""}
+	if _, err := c.UpdateIssue(ctx, ref, req); err != nil {
 		p.Log.Warn("merge status not set", "project", p.Config.Key, "issue", ref, "err", err)
 	}
 }

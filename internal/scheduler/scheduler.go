@@ -41,7 +41,7 @@ type Slot struct {
 type Scheduler struct {
 	Log            *slog.Logger  // default slog.Default()
 	ReviewInterval time.Duration // default 5 minutes; a placeholder M3 settles
-	MergeInterval  time.Duration // default 60 seconds (MERGE_POLL_SECONDS); a placeholder M3 settles
+	MergeInterval  time.Duration // default 60 seconds; the daemon sets config.json's merge_poll_seconds (legacy MERGE_POLL_SECONDS)
 	MaxBackoff     time.Duration // default 60 seconds; the first wait after a failure is 1s or this, if less
 
 	status map[string]*ProjectStatus // by project key; shared with Run's copy, guarded by statusMu

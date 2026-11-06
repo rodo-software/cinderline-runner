@@ -106,6 +106,9 @@ var operations = []operation{
 	{"updateIssue merge", func(ctx context.Context, c *Client) (any, error) {
 		return c.UpdateIssue(ctx, "CSR-9", UpdateIssueRequest{MergeStatus: "success"})
 	}, "PATCH", "/api/runner/v1/issues/CSR-9", "", `{"merge_status":"success"}`, 200, issueWithCommentsJSON},
+	{"updateIssue clear merge", func(ctx context.Context, c *Client) (any, error) {
+		return c.UpdateIssue(ctx, "CSR-9", UpdateIssueRequest{ClearMergeStatus: true})
+	}, "PATCH", "/api/runner/v1/issues/CSR-9", "", `{"merge_status":null}`, 200, issueWithCommentsJSON},
 	{"claimIssue", func(ctx context.Context, c *Client) (any, error) { return c.ClaimIssue(ctx, "CSR-9", "todo") },
 		"POST", "/api/runner/v1/issues/CSR-9/claim", "", `{"expected_status":"todo"}`, 200, issueWithCommentsJSON},
 	{"listComments", func(ctx context.Context, c *Client) (any, error) {

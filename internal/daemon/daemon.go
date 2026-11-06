@@ -99,6 +99,7 @@ func Run(ctx context.Context, o Options) error {
 		runCtx, cancel := context.WithCancel(ctx)
 		var wg sync.WaitGroup
 		slots := d.slots(runCtx, &wg, log, o, cfg)
+		d.sched.MergeInterval = cfg.MergePoll() // no Run is going: the last one returned
 		wg.Go(func() { d.sched.Run(runCtx, slots) })
 		log.Info("scheduler started", "slots", len(slots))
 		if reply != nil {

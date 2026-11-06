@@ -116,10 +116,10 @@ func (f *Fake) RequestMerge(_ context.Context, pr PullRequest) error {
 	return err
 }
 
-func (f *Fake) MergeState(_ context.Context, pr PullRequest) (MergeState, error) {
+func (f *Fake) MergeState(_ context.Context, branch string) (MergeState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("MergeState", pr)
+	f.record("MergeState", branch)
 	if len(f.MergeStates) == 0 {
 		return "", fmt.Errorf("%w for MergeState", ErrNotScripted)
 	}

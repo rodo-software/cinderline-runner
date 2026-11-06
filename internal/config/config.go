@@ -4,12 +4,14 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/rodo-software/cinderstack-runner/internal/name"
@@ -23,8 +25,19 @@ const maxSocketPath = 103
 
 // Config is the content of config.json. It holds no secrets: those live in the keychain.
 type Config struct {
-	Version  int       `json:"version"`
-	Projects []Project `json:"projects"`
+	Version int `json:"version"`
+	// MergePollSeconds is how often the merge status of trusted Review
+	// issues is checked, legacy's MERGE_POLL_SECONDS; 0 is its default.
+	MergePollSeconds int       `json:"merge_poll_seconds,omitempty"`
+	Projects         []Project `json:"projects"`
+}
+
+// MergePoll is the merge check interval, 60 seconds unless set.
+func (c *Config) MergePoll() time.Duration {
+	if c.MergePollSeconds > 0 {
+		return time.Duration(c.MergePollSeconds) * time.Second
+	}
+	return 60 * time.Second
 }
 
 // Project is one CinderStack project, identified by the pair (URL, Key).
@@ -105,8 +118,12 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Validate reports the first invalid project. Zero projects is valid.
+// Validate reports a negative merge_poll_seconds or the first invalid
+// project. Zero projects is valid.
 func (c *Config) Validate() error {
+	if c.MergePollSeconds < 0 {
+		return errors.New("merge_poll_seconds must not be negative")
+	}
 	type id struct{ url, key string }
 	seen := map[id]bool{}
 	for i, p := range c.Projects {
