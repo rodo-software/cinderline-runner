@@ -135,14 +135,24 @@ func (d *Docker) output(ctx context.Context, env []string, argv ...string) (stri
 }
 
 // volume is the name of the project's volume of the given kind.
-func (d *Docker) volume(kind string) string {
-	return name.Name + "-" + d.Project + "-" + kind
+func (d *Docker) volume(kind string) string { return Volume(d.Project, kind) }
+
+// Volume is the name of a project's volume of the given kind: repo, runs,
+// or state for the clients' sessions and config dirs.
+func Volume(project, kind string) string {
+	return name.Name + "-" + project + "-" + kind
 }
 
-// labels are the --label flags for what the runner creates (review item 9):
-// the project, and the issue when there is one.
-func (d *Docker) labels(issue string) []string {
-	l := []string{"--label", name.Name + ".project=" + d.Project}
+func (d *Docker) labels(issue string) []string { return Labels(d.Project, issue) }
+
+// ProjectLabel is the label every container, network and volume the runner
+// creates carries; recovery finds stale ones by it (review item 9).
+func ProjectLabel(project string) string { return name.Name + ".project=" + project }
+
+// Labels are the --label flags for what the runner creates: the project, and
+// the issue when there is one.
+func Labels(project, issue string) []string {
+	l := []string{"--label", ProjectLabel(project)}
 	if issue != "" {
 		l = append(l, "--label", name.Name+".issue="+issue)
 	}

@@ -10,20 +10,18 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
 	"github.com/rodo-software/cinderstack-runner/internal/workspace"
 )
 
 // TeamJob is one issue's run by a team with workers, for Rounds.
 type TeamJob struct {
-	Ref       string
-	Branch    string
-	Base      string // for a fresh clone
-	Container string
-	MaxTurns  int
-	Team      cinderstack.Team // the API lists its orchestrator first
-	Prompt    string           // the orchestrator's fresh prompt
+	Ref      string
+	Branch   string
+	Base     string // for a fresh clone
+	MaxTurns int
+	Team     cinderstack.Team // the API lists its orchestrator first
+	Prompt   string           // the orchestrator's fresh prompt
 }
 
 // Ran is a sub-issue a round ran, for the orchestrator's next prompt.
@@ -139,7 +137,7 @@ func waiting(ctx context.Context, c *cinderstack.Client, ref string) (bool, erro
 // more; if that fails twice, the finished work is published with
 // UnreadComments (decision 2026-11-03-comments-during-a-run). The outcome
 // and errors mean what they mean for Attempts.
-func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, env environment.Environment, ws workspace.Workspace, j TeamJob) (out Outcome, err error) {
+func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob) (out Outcome, err error) {
 	log := p.Log.With("project", p.Config.Key, "issue", j.Ref)
 	if len(j.Team.Agents) == 0 {
 		return Outcome{}, fmt.Errorf("team %s has no agents", j.Team.Name)
@@ -176,7 +174,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 	// Also on a clone fresh from the base, where the merge changes nothing,
 	// as Prepare does not say whether it continued the remote branch.
 	p.CatchUp(ctx, c, clients, ws, Upkeep{Ref: j.Ref, Branch: j.Branch, Base: j.Base, Dir: dir, MaxTurns: j.MaxTurns, Team: j.Team}, parent.Title)
-	ran, err := p.runSubIssues(ctx, c, clients, env, ws, j, dir, parent.SubIssues, true)
+	ran, err := p.runSubIssues(ctx, c, clients, ws, j, dir, parent.SubIssues, true)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -194,7 +192,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		}
 		cursor := newestCommentID(cs)
 
-		turn := client.Turn{Dir: dir, SessionID: session, MaxTurns: j.MaxTurns, Model: deref(orch.Model)}
+		turn := client.Turn{Dir: dir, SessionID: session, MaxTurns: j.MaxTurns, MaxMinutes: j.Team.MaxMinutes, Model: deref(orch.Model), Ponytail: j.Team.Ponytail}
 		switch {
 		case session == "":
 			turn.Prompt = j.Prompt
@@ -212,7 +210,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		}
 		turn.Token = tok.Token
 
-		res, err := p.Attempts(ctx, c, cl, env, Job{Ref: j.Ref, Client: orch.Client, Container: j.Container, Turn: turn, NoComments: true})
+		res, err := p.Attempts(ctx, c, cl, Job{Ref: j.Ref, Client: orch.Client, Turn: turn, NoComments: true})
 		if res.SessionID != "" {
 			session = res.SessionID
 			if err := p.SavePaused(j.Ref, Paused{Dir: dir, Session: session, Client: orch.Client}); err != nil {
@@ -250,7 +248,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		}
 
 		finished = nil
-		if ran, err = p.runSubIssues(ctx, c, clients, env, ws, j, dir, after.SubIssues, false); err != nil {
+		if ran, err = p.runSubIssues(ctx, c, clients, ws, j, dir, after.SubIssues, false); err != nil {
 			return Outcome{}, err
 		}
 		if w, err := waiting(ctx, c, j.Ref); w || err != nil {
@@ -266,7 +264,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 // runSubIssues runs the parent's open sub-issues one at a time, in creation
 // order, and returns those that ran. Its only error is a stop; a sub-issue
 // it cannot claim is skipped, as legacy does.
-func (p Project) runSubIssues(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, env environment.Environment, ws workspace.Workspace, j TeamJob, dir string, subs []cinderstack.SubIssue, afterRestart bool) ([]Ran, error) {
+func (p Project) runSubIssues(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob, dir string, subs []cinderstack.SubIssue, afterRestart bool) ([]Ran, error) {
 	var ran []Ran
 	for _, s := range subIssuesToRun(subs, afterRestart) {
 		log := p.Log.With("project", p.Config.Key, "issue", s.Ref, "parent", j.Ref)
@@ -281,7 +279,7 @@ func (p Project) runSubIssues(ctx context.Context, c *cinderstack.Client, client
 		}
 
 		r := Ran{Ref: s.Ref, Title: s.Title}
-		report, err := p.runSubIssue(ctx, c, clients, env, ws, j, dir, &r, log)
+		report, err := p.runSubIssue(ctx, c, clients, ws, j, dir, &r, log)
 		if ctx.Err() != nil {
 			return ran, ctx.Err() // it stays In progress, so the resumed parent runs it again
 		}
@@ -311,7 +309,7 @@ func (p Project) runSubIssues(ctx context.Context, c *cinderstack.Client, client
 // The orchestrator's own sub-issue runs in a fresh session with a reader
 // token, so its main session's context stays its own; a worker gets no
 // token (decision 2026-11-05-runner-rewrite-details point 6, 0122).
-func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, env environment.Environment, ws workspace.Workspace, j TeamJob, dir string, r *Ran, log *slog.Logger) (string, error) {
+func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob, dir string, r *Ran, log *slog.Logger) (string, error) {
 	sub, err := c.GetIssue(ctx, r.Ref)
 	if err != nil {
 		return "", err
@@ -335,10 +333,12 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients
 	self := agent.Name == j.Team.Agents[0].Name
 
 	turn := client.Turn{
-		Dir:      dir,
-		Prompt:   WorkerPrompt(deref(agent.Instructions), r.Ref, j.Ref, sub.Title, deref(sub.Body), j.Branch, self),
-		MaxTurns: j.MaxTurns,
-		Model:    deref(agent.Model),
+		Dir:        dir,
+		Prompt:     WorkerPrompt(deref(agent.Instructions), r.Ref, j.Ref, sub.Title, deref(sub.Body), j.Branch, self),
+		MaxTurns:   j.MaxTurns,
+		MaxMinutes: j.Team.MaxMinutes,
+		Model:      deref(agent.Model),
+		Ponytail:   j.Team.Ponytail,
 	}
 	if self {
 		// On the sub-issue: a reader token for the parent would replace the orchestrator's.
@@ -380,7 +380,7 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients
 		return "", cerr
 	}
 	if err != nil {
-		return "", bothFailed(ctx, log, env, j.Container, err)
+		return "", bothFailed(res, err)
 	}
 	return cmp.Or(res.Report, "(The agent ended without a report.)"), nil
 }

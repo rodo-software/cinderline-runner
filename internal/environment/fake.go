@@ -18,25 +18,18 @@ type Call struct {
 	Args   []any
 }
 
-// StartReply is one scripted reply to Start.
-type StartReply struct {
-	ID  string
-	Err error
-}
-
-// TailReply is one scripted reply to Tail.
-type TailReply struct {
-	Tail string
-	Err  error
+// RunReply is one scripted reply to Run.
+type RunReply struct {
+	Output string
+	Err    error
 }
 
 // Fake is a scripted Environment. Fill the queues before use; each call pops
 // the next reply in order and is recorded. An empty queue returns the zero
 // value and ErrNotScripted.
 type Fake struct {
-	Starts []StartReply
-	Stops  []error // replies to Stop
-	Tails  []TailReply
+	Runs     []RunReply
+	Cleanups []error // replies to Cleanup
 
 	mu    sync.Mutex
 	calls []Call
@@ -49,42 +42,26 @@ func (f *Fake) Calls() []Call {
 	return append([]Call(nil), f.calls...)
 }
 
-func (f *Fake) record(method string, args ...any) {
-	f.calls = append(f.calls, Call{method, args})
-}
-
-func (f *Fake) Start(_ context.Context, s Spec) (string, error) {
+func (f *Fake) Run(_ context.Context, s Spec) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("Start", s)
-	if len(f.Starts) == 0 {
-		return "", fmt.Errorf("%w for Start", ErrNotScripted)
+	f.calls = append(f.calls, Call{"Run", []any{s}})
+	if len(f.Runs) == 0 {
+		return "", fmt.Errorf("%w for Run", ErrNotScripted)
 	}
-	r := f.Starts[0]
-	f.Starts = f.Starts[1:]
-	return r.ID, r.Err
+	r := f.Runs[0]
+	f.Runs = f.Runs[1:]
+	return r.Output, r.Err
 }
 
-func (f *Fake) Stop(_ context.Context, id string) error {
+func (f *Fake) Cleanup(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("Stop", id)
-	if len(f.Stops) == 0 {
-		return fmt.Errorf("%w for Stop", ErrNotScripted)
+	f.calls = append(f.calls, Call{"Cleanup", nil})
+	if len(f.Cleanups) == 0 {
+		return fmt.Errorf("%w for Cleanup", ErrNotScripted)
 	}
-	err := f.Stops[0]
-	f.Stops = f.Stops[1:]
+	err := f.Cleanups[0]
+	f.Cleanups = f.Cleanups[1:]
 	return err
-}
-
-func (f *Fake) Tail(_ context.Context, id string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Tail", id)
-	if len(f.Tails) == 0 {
-		return "", fmt.Errorf("%w for Tail", ErrNotScripted)
-	}
-	r := f.Tails[0]
-	f.Tails = f.Tails[1:]
-	return r.Tail, r.Err
 }

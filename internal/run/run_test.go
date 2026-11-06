@@ -1,8 +1,10 @@
 package run
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/config"
+	"github.com/rodo-software/cinderstack-runner/internal/environment"
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
 )
 
@@ -93,7 +96,7 @@ func project(t *testing.T) Project {
 	t.Helper()
 	keyring.MockInit()
 	state := t.TempDir()
-	return Project{Config: cfg, Secrets: secrets.New(state), State: state, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	return Project{Config: cfg, Secrets: secrets.New(state), State: state, Env: &environment.Fake{Cleanups: []error{nil}}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
 func issueJSON(ref, status string) string {
@@ -120,6 +123,29 @@ func TestRecoverPutsInProgressBackInTodo(t *testing.T) {
 	}
 	if got := api.writes(); !slices.Equal(got, want) {
 		t.Fatalf("writes = %q, want %q", got, want)
+	}
+}
+
+// Review item 9: what a previous process left in Docker is removed first,
+// so its networks do not use up Docker's address pools. A failure there
+// only logs: it must not keep the project from working.
+func TestRecoverCleansUpStaleResources(t *testing.T) {
+	for _, cleanupErr := range []error{nil, errors.New("docker is not running")} {
+		p := project(t)
+		var logs bytes.Buffer
+		p.Log = slog.New(slog.NewTextHandler(&logs, nil))
+		env := &environment.Fake{Cleanups: []error{cleanupErr}}
+		p.Env = env
+		api := &fakeAPI{routes: map[string]reply{"GET /issues?status=in_progress": {200, `{"issues":[]}`}}}
+		if err := p.Recover(context.Background(), api.client(t)); err != nil {
+			t.Fatal(err)
+		}
+		if c := env.Calls(); len(c) != 1 || c[0].Method != "Cleanup" {
+			t.Errorf("environment calls = %v, want Cleanup", c)
+		}
+		if cleanupErr != nil && !strings.Contains(logs.String(), "docker is not running") {
+			t.Errorf("log lacks the cleanup failure:\n%s", logs.String())
+		}
 	}
 }
 

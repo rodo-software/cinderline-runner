@@ -11,7 +11,6 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
 	"github.com/rodo-software/cinderstack-runner/internal/workspace"
 )
 
@@ -23,7 +22,7 @@ import (
 
 func ptr(s string) *string { return &s }
 
-var devTeam = cinderstack.Team{ID: 1, Name: "Dev", Agents: []cinderstack.TeamAgent{
+var devTeam = cinderstack.Team{ID: 1, Name: "Dev", MaxMinutes: 45, Agents: []cinderstack.TeamAgent{
 	{Name: "Builder", Role: "orchestrator", Client: "claude", Model: ptr("m"), Instructions: ptr("Lead.")},
 	{Name: "Qwen", Role: "worker", Client: "opencode", Model: ptr("openrouter/qwen"), Instructions: ptr("Code.")},
 }}
@@ -148,7 +147,6 @@ type teamRun struct {
 	claude   *agentCLI
 	opencode *agentCLI
 	ws       *workspace.Fake
-	env      *environment.Fake
 	job      TeamJob
 }
 
@@ -163,15 +161,14 @@ func newTeamRun(tr *tree) *teamRun {
 			Commits:  make([]workspace.CommitReply, 10),
 			Pushes:   make([]error, 10),
 		},
-		env: &environment.Fake{Tails: []environment.TailReply{{Tail: "last lines"}, {Tail: "last lines"}}},
-		job: TeamJob{Ref: "CSR-1", Branch: "cinderstack/CSR-1", Base: "main", Container: "box", MaxTurns: 30, Team: devTeam, Prompt: "plan CSR-1"},
+		job: TeamJob{Ref: "CSR-1", Branch: "cinderstack/CSR-1", Base: "main", MaxTurns: 30, Team: devTeam, Prompt: "plan CSR-1"},
 	}
 }
 
 func (r *teamRun) run(t *testing.T, ctx context.Context, p Project) (Outcome, error) {
 	t.Helper()
 	clients := map[string]client.Client{"claude": r.claude, "opencode": r.opencode}
-	return p.Rounds(ctx, r.api.client(t), clients, r.env, r.ws, r.job)
+	return p.Rounds(ctx, r.api.client(t), clients, r.ws, r.job)
 }
 
 func (r *teamRun) writes(prefix string) []string {
@@ -391,6 +388,7 @@ func TestAFreshTeamRunPlansRunsAndReviews(t *testing.T) {
 	p := project(t)
 	tr := newTree("in_progress")
 	r := newTeamRun(tr)
+	r.job.Team.Ponytail = true // every turn of a ponytail team carries it
 	r.claude.Runs = []client.RunReply{ok("s1", "Planned."), ok("s1", "Done.")}
 	r.claude.during = func(t client.Turn) {
 		if t.SessionID == "" {
@@ -411,10 +409,10 @@ func TestAFreshTeamRunPlansRunsAndReviews(t *testing.T) {
 		t.Errorf("Prepare calls = %+v", got)
 	}
 	plan := turns(&r.claude.Fake)[0]
-	if want := (client.Turn{Dir: "/fresh", Prompt: "plan CSR-1", MaxTurns: 30, Model: "m", Token: "orchestrator-CSR-1"}); plan != want {
+	if want := (client.Turn{Dir: "/fresh", Prompt: "plan CSR-1", MaxTurns: 30, MaxMinutes: 45, Model: "m", Token: "orchestrator-CSR-1", Ponytail: true}); plan != want {
 		t.Errorf("planning turn = %+v, want %+v", plan, want)
 	}
-	if w := turns(&r.opencode.Fake)[0]; w.Dir != "/fresh" || w.Token != "" {
+	if w := turns(&r.opencode.Fake)[0]; w.Dir != "/fresh" || w.Token != "" || w.MaxMinutes != 45 || !w.Ponytail {
 		t.Errorf("worker turn = %+v", w)
 	}
 	if want := (Paused{Dir: "/fresh", Session: "s1", Client: "claude"}); noteDuringWorker != want {
@@ -446,7 +444,7 @@ func TestAFailedWorkerIsMarkedFailedAndTheRoundGoesOn(t *testing.T) {
 	r.claude.during = func(client.Turn) { tr.set("CSR-2", "done"); tr.set("CSR-3", "done") }
 	r.opencode.Runs = []client.RunReply{
 		{Result: client.Result{SessionID: "w1"}, Err: errFailed},
-		{Result: client.Result{SessionID: "w2"}, Err: errFailed},
+		{Result: client.Result{SessionID: "w2", Tail: "last lines"}, Err: errFailed},
 		ok("w3", "Qwen report."),
 	}
 
@@ -626,7 +624,7 @@ func TestAStopKeepsTheNoteForTheRestart(t *testing.T) {
 func TestARoundThatFailsTwiceEndsTheRun(t *testing.T) {
 	p := project(t)
 	r := newTeamRun(newTree("in_progress"))
-	r.claude.Runs = []client.RunReply{{Err: errFailed}, {Err: errFailed}}
+	r.claude.Runs = []client.RunReply{{Err: errFailed}, {Result: client.Result{Tail: "last lines"}, Err: errFailed}}
 	_, err := r.run(t, context.Background(), p)
 	if err == nil || !strings.Contains(err.Error(), "last lines") {
 		t.Fatalf("Rounds error = %v, want the tail", err)

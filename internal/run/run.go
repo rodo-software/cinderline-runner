@@ -17,6 +17,7 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/config"
+	"github.com/rodo-software/cinderstack-runner/internal/environment"
 	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
 )
@@ -25,7 +26,8 @@ import (
 type Project struct {
 	Config  config.Project
 	Secrets *secrets.Secrets
-	State   string // the host state folder (config.Paths.State)
+	State   string                  // the host state folder (config.Paths.State)
+	Env     environment.Environment // where the project's turns run
 	Log     *slog.Logger
 }
 
@@ -43,9 +45,14 @@ func PausedDir(state string, p config.Project) string {
 
 // Recover puts back what a previous process left: a project has one runner
 // and it works on one issue at a time, so at start none of its In progress
-// issues is really being worked on. First it drops the paused notes of
-// issues a person has since closed (0114).
+// issues is really being worked on. First it removes the containers and
+// networks a previous process left (review item 9), then it drops the paused
+// notes of issues a person has since closed (0114).
 func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
+	if err := p.Env.Cleanup(ctx); err != nil {
+		// Only hygiene: a failure must not keep the project from working.
+		p.Log.Warn("stale containers and networks not removed", "project", p.Config.Key, "err", err)
+	}
 	dir := PausedDir(p.State, p.Config)
 	entries, err := os.ReadDir(dir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

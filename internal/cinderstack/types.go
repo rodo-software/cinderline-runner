@@ -109,6 +109,7 @@ type Team struct {
 	MaxMinutes   int         `json:"max_minutes"`
 	Trusted      bool        `json:"trusted"`
 	MaxSubIssues int         `json:"max_sub_issues"` // CinderStack refuses more sub-issues on one issue
+	Ponytail     bool        `json:"ponytail"`       // load the ponytail plugin in Claude Code runs (2026-11-03-per-team-ponytail-plugin)
 	Agents       []TeamAgent `json:"agents"`
 }
 

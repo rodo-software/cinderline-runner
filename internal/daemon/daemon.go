@@ -17,6 +17,7 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/config"
+	"github.com/rodo-software/cinderstack-runner/internal/environment"
 	"github.com/rodo-software/cinderstack-runner/internal/localapi"
 	"github.com/rodo-software/cinderstack-runner/internal/run"
 	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
@@ -151,7 +152,8 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			defer t.Stop()
 			c.RunHeartbeats(ctx, t.C)
 		})
-		hooks := run.Project{Config: p, Secrets: sec, State: o.Paths.State, Log: log}.Hooks()
+		env := &environment.Docker{Project: p.Key, Log: log}
+		hooks := run.Project{Config: p, Secrets: sec, State: o.Paths.State, Env: env, Log: log}.Hooks()
 		slots = append(slots, scheduler.Slot{Project: p.Key, Client: c, Hooks: hooks})
 		projects = append(projects, st)
 		slotted[p.Key] = true
