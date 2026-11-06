@@ -20,4 +20,6 @@ type Workspace interface {
 	// IsAncestor reports whether commit ancestor is an ancestor of descendant.
 	IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error)
 	Push(ctx context.Context, dir, branch string) error
+	// Head returns the commit the clone's branch is on.
+	Head(ctx context.Context, dir string) (string, error)
 }

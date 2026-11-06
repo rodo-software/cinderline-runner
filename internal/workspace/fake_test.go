@@ -15,6 +15,7 @@ func TestFake(t *testing.T) {
 		MergeBases: []MergeBaseReply{{Conflicts: []string{"a.go", "b.go"}}},
 		Ancestors:  []IsAncestorReply{{Yes: true}},
 		Pushes:     []error{boom},
+		Heads:      []HeadReply{{Commit: "abc123"}},
 	}
 	ctx := context.Background()
 	dir := "/runs/WEB-1"
@@ -36,6 +37,9 @@ func TestFake(t *testing.T) {
 	if err := f.Push(ctx, dir, "x/WEB-1"); !errors.Is(err, boom) {
 		t.Errorf("Push = %v, want boom", err)
 	}
+	if c, err := f.Head(ctx, dir); c != "abc123" || err != nil {
+		t.Errorf("Head = %q, %v", c, err)
+	}
 
 	want := []Call{
 		{"Prepare", []any{"x/WEB-1", "main"}},
@@ -44,6 +48,7 @@ func TestFake(t *testing.T) {
 		{"MergeBase", []any{dir, "main"}},
 		{"IsAncestor", []any{dir, "main", "HEAD"}},
 		{"Push", []any{dir, "x/WEB-1"}},
+		{"Head", []any{dir}},
 	}
 	if calls := f.Calls(); !reflect.DeepEqual(calls, want) {
 		t.Errorf("Calls() = %+v, want %+v", calls, want)
@@ -62,6 +67,7 @@ func TestFakeEmptyQueues(t *testing.T) {
 		{"MergeBase", func() (bool, error) { c, err := f.MergeBase(ctx, "/d", "main"); return c == nil, err }},
 		{"IsAncestor", func() (bool, error) { y, err := f.IsAncestor(ctx, "/d", "a", "b"); return !y, err }},
 		{"Push", func() (bool, error) { return true, f.Push(ctx, "/d", "b") }},
+		{"Head", func() (bool, error) { c, err := f.Head(ctx, "/d"); return c == "", err }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {

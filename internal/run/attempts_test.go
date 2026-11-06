@@ -28,11 +28,22 @@ func turns(f *client.Fake) []client.Turn {
 	return out
 }
 
-func attempt(t *testing.T, runs ...client.RunReply) (client.Result, *client.Fake, *environment.Fake, error) {
+var job = Job{Ref: "CSR-7", Client: "claude", Kind: KindCode, Container: "box", Turn: first}
+
+// working is CinderStack while the agent works: the issue stays In progress
+// and nobody comments.
+func working() *fakeAPI {
+	return &fakeAPI{routes: map[string]reply{
+		"GET /issues/CSR-7":          {200, issueJSON("CSR-7", "in_progress")},
+		"GET /issues/CSR-7/comments": {200, `{"comments":[]}`},
+	}}
+}
+
+func attempt(t *testing.T, runs ...client.RunReply) (Outcome, *client.Fake, *environment.Fake, error) {
 	t.Helper()
 	cl := &client.Fake{Runs: runs}
 	env := &environment.Fake{Tails: []environment.TailReply{{Tail: "last lines"}}}
-	res, err := project(t).Attempts(context.Background(), cl, env, "box", "CSR-7", first)
+	res, err := project(t).Attempts(context.Background(), working().client(t), cl, env, job)
 	return res, cl, env, err
 }
 
@@ -126,7 +137,7 @@ func TestAttemptsSecondFailureCarriesTheTail(t *testing.T) {
 func TestAttemptsSecondFailureWithoutTail(t *testing.T) {
 	cl := &client.Fake{Runs: []client.RunReply{{Err: errFailed}, {Err: errFailed}}}
 	env := &environment.Fake{Tails: []environment.TailReply{{Err: errors.New("gone")}}}
-	_, err := project(t).Attempts(context.Background(), cl, env, "box", "CSR-7", first)
+	_, err := project(t).Attempts(context.Background(), working().client(t), cl, env, job)
 	if err == nil || !strings.Contains(err.Error(), "both runs failed") || !strings.Contains(err.Error(), "gone") {
 		t.Fatalf("err = %v", err)
 	}
@@ -138,11 +149,12 @@ func TestAttemptsStopsWithoutRetry(t *testing.T) {
 	cancel()
 	cl := &client.Fake{Runs: []client.RunReply{{Err: context.Canceled}, {}}}
 	env := &environment.Fake{}
-	_, err := project(t).Attempts(ctx, cl, env, "box", "CSR-7", first)
+	_, err := project(t).Attempts(ctx, working().client(t), cl, env, job)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if len(cl.Calls()) != 1 || len(env.Calls()) != 0 {
+	// The cursor read already sees the stop, so no run starts; none is retried.
+	if len(cl.Calls()) > 1 || len(env.Calls()) != 0 {
 		t.Fatalf("client calls = %v, environment calls = %v", cl.Calls(), env.Calls())
 	}
 }
@@ -153,7 +165,7 @@ func TestAttemptsLogsEveryStep(t *testing.T) {
 	p := project(t)
 	p.Log = slog.New(slog.NewTextHandler(&buf, nil))
 	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", HitTurnLimit: true}, Err: errFailed}, {}}}
-	if _, err := p.Attempts(context.Background(), cl, &environment.Fake{}, "box", "CSR-7", first); err != nil {
+	if _, err := p.Attempts(context.Background(), working().client(t), cl, &environment.Fake{}, job); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
