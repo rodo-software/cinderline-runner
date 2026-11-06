@@ -30,6 +30,13 @@ type PullRequestReply struct {
 	Err         error
 }
 
+// FindReply is one scripted reply to FindPullRequest.
+type FindReply struct {
+	PullRequest PullRequest
+	Found       bool
+	Err         error
+}
+
 // MergeStateReply is one scripted reply to MergeState.
 type MergeStateReply struct {
 	State MergeState
@@ -42,6 +49,7 @@ type MergeStateReply struct {
 type Fake struct {
 	DefaultBranches []DefaultBranchReply
 	PullRequests    []PullRequestReply
+	Finds           []FindReply
 	Merges          []error // replies to RequestMerge
 	MergeStates     []MergeStateReply
 
@@ -82,6 +90,18 @@ func (f *Fake) OpenPullRequest(_ context.Context, in PullRequestInput) (PullRequ
 	r := f.PullRequests[0]
 	f.PullRequests = f.PullRequests[1:]
 	return r.PullRequest, r.Err
+}
+
+func (f *Fake) FindPullRequest(_ context.Context, branch string) (PullRequest, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("FindPullRequest", branch)
+	if len(f.Finds) == 0 {
+		return PullRequest{}, false, fmt.Errorf("%w for FindPullRequest", ErrNotScripted)
+	}
+	r := f.Finds[0]
+	f.Finds = f.Finds[1:]
+	return r.PullRequest, r.Found, r.Err
 }
 
 func (f *Fake) RequestMerge(_ context.Context, pr PullRequest) error {

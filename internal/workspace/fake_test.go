@@ -16,6 +16,10 @@ func TestFake(t *testing.T) {
 		Ancestors:  []IsAncestorReply{{Yes: true}},
 		Pushes:     []error{boom},
 		Heads:      []HeadReply{{Commit: "abc123"}},
+		Cleans:     []BoolReply{{Yes: true}},
+		Markers:    []BoolReply{{Yes: true}},
+		Resets:     []error{boom},
+		Logs:       []LogReply{{Log: "abc T"}},
 	}
 	ctx := context.Background()
 	dir := "/runs/WEB-1"
@@ -40,6 +44,18 @@ func TestFake(t *testing.T) {
 	if c, err := f.Head(ctx, dir); c != "abc123" || err != nil {
 		t.Errorf("Head = %q, %v", c, err)
 	}
+	if yes, err := f.Clean(ctx, dir); !yes || err != nil {
+		t.Errorf("Clean = %v, %v", yes, err)
+	}
+	if yes, err := f.ConflictMarkers(ctx, dir, []string{"a.go"}); !yes || err != nil {
+		t.Errorf("ConflictMarkers = %v, %v", yes, err)
+	}
+	if err := f.Reset(ctx, dir, "abc123"); !errors.Is(err, boom) {
+		t.Errorf("Reset = %v, want boom", err)
+	}
+	if l, err := f.Log(ctx, dir, "main"); l != "abc T" || err != nil {
+		t.Errorf("Log = %q, %v", l, err)
+	}
 
 	want := []Call{
 		{"Prepare", []any{"x/WEB-1", "main"}},
@@ -49,6 +65,10 @@ func TestFake(t *testing.T) {
 		{"IsAncestor", []any{dir, "main", "HEAD"}},
 		{"Push", []any{dir, "x/WEB-1"}},
 		{"Head", []any{dir}},
+		{"Clean", []any{dir}},
+		{"ConflictMarkers", []any{dir, []string{"a.go"}}},
+		{"Reset", []any{dir, "abc123"}},
+		{"Log", []any{dir, "main"}},
 	}
 	if calls := f.Calls(); !reflect.DeepEqual(calls, want) {
 		t.Errorf("Calls() = %+v, want %+v", calls, want)
@@ -68,6 +88,10 @@ func TestFakeEmptyQueues(t *testing.T) {
 		{"IsAncestor", func() (bool, error) { y, err := f.IsAncestor(ctx, "/d", "a", "b"); return !y, err }},
 		{"Push", func() (bool, error) { return true, f.Push(ctx, "/d", "b") }},
 		{"Head", func() (bool, error) { c, err := f.Head(ctx, "/d"); return c == "", err }},
+		{"Clean", func() (bool, error) { y, err := f.Clean(ctx, "/d"); return !y, err }},
+		{"ConflictMarkers", func() (bool, error) { y, err := f.ConflictMarkers(ctx, "/d", nil); return !y, err }},
+		{"Reset", func() (bool, error) { return true, f.Reset(ctx, "/d", "c") }},
+		{"Log", func() (bool, error) { l, err := f.Log(ctx, "/d", "main"); return l == "", err }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {

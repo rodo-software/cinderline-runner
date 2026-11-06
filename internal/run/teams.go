@@ -166,6 +166,9 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 	if err != nil {
 		return Outcome{}, err
 	}
+	// Also on a clone fresh from the base, where the merge changes nothing,
+	// as Prepare does not say whether it continued the remote branch.
+	p.CatchUp(ctx, c, clients, ws, Upkeep{Ref: j.Ref, Branch: j.Branch, Base: j.Base, Dir: dir, MaxTurns: j.MaxTurns, Team: j.Team}, parent.Title)
 	ran, err := p.runSubIssues(ctx, c, clients, env, ws, j, dir, parent.SubIssues, true)
 	if err != nil {
 		return Outcome{}, err

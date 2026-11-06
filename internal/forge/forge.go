@@ -10,6 +10,10 @@ type Forge interface {
 	// OpenPullRequest opens a pull request for in.Branch, or returns the open
 	// one that already exists for it.
 	OpenPullRequest(ctx context.Context, in PullRequestInput) (PullRequest, error)
+	// FindPullRequest returns the open pull request of branch; found is
+	// false when none is open, so a pull request a person closed is not
+	// opened again.
+	FindPullRequest(ctx context.Context, branch string) (pr PullRequest, found bool, err error)
 	RequestMerge(ctx context.Context, pr PullRequest) error
 	MergeState(ctx context.Context, pr PullRequest) (MergeState, error)
 }

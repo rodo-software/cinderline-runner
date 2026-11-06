@@ -363,12 +363,13 @@ func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 		t.Errorf("progress = %q, want %q", got, wantProgress)
 	}
 
-	// Each sub-issue is committed under its ref and title, then pushed (0122).
+	// The base is merged in first (CSR-25); each sub-issue is committed
+	// under its ref and title, then pushed (0122).
 	var steps []string
 	for _, c := range r.ws.Calls() {
 		steps = append(steps, c.Method+" "+strings.ReplaceAll(c.Args[0].(string), clone, "clone")+" "+c.Args[1].(string))
 	}
-	wantSteps := []string{"Commit clone CSR-3: Mine", "Push clone cinderstack/CSR-1", "Commit clone CSR-2: Part", "Push clone cinderstack/CSR-1"}
+	wantSteps := []string{"Commit clone CSR-1: Parent", "MergeBase clone main", "Commit clone CSR-3: Mine", "Push clone cinderstack/CSR-1", "Commit clone CSR-2: Part", "Push clone cinderstack/CSR-1"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Errorf("workspace = %q, want %q", steps, wantSteps)
 	}
@@ -465,8 +466,8 @@ func TestAFailedWorkerIsMarkedFailedAndTheRoundGoesOn(t *testing.T) {
 	if len(ts) != 3 || ts[1].SessionID != "" || ts[1].Prompt != ts[0].Prompt {
 		t.Errorf("worker turns = %+v, want the second fresh", ts)
 	}
-	if got := len(r.wsCalls("Commit")); got != 2 {
-		t.Errorf("commits = %d, want 2", got)
+	if got := len(r.wsCalls("Commit")); got != 3 {
+		t.Errorf("commits = %d, want the catch-up's and 2", got)
 	}
 	if got := len(r.wsCalls("Push")); got != 2 {
 		t.Errorf("pushes = %d, want 2", got)

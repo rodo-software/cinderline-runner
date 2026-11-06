@@ -14,6 +14,7 @@ func TestFake(t *testing.T) {
 	f := &Fake{
 		DefaultBranches: []DefaultBranchReply{{Branch: "main"}},
 		PullRequests:    []PullRequestReply{{PullRequest: pr}},
+		Finds:           []FindReply{{PullRequest: pr, Found: true}},
 		Merges:          []error{nil, boom},
 		MergeStates:     []MergeStateReply{{State: MergePending}, {State: MergeMerged}},
 	}
@@ -24,6 +25,9 @@ func TestFake(t *testing.T) {
 	}
 	if got, err := f.OpenPullRequest(ctx, in); got != pr || err != nil {
 		t.Errorf("OpenPullRequest = %+v, %v", got, err)
+	}
+	if got, found, err := f.FindPullRequest(ctx, "x/WEB-1"); got != pr || !found || err != nil {
+		t.Errorf("FindPullRequest = %+v, %v, %v", got, found, err)
 	}
 	if err := f.RequestMerge(ctx, pr); err != nil {
 		t.Errorf("first RequestMerge = %v", err)
@@ -40,6 +44,7 @@ func TestFake(t *testing.T) {
 	want := []Call{
 		{"DefaultBranch", nil},
 		{"OpenPullRequest", []any{in}},
+		{"FindPullRequest", []any{"x/WEB-1"}},
 		{"RequestMerge", []any{pr}},
 		{"RequestMerge", []any{pr}},
 		{"MergeState", []any{pr}},
@@ -61,6 +66,10 @@ func TestFakeEmptyQueues(t *testing.T) {
 		{"OpenPullRequest", func() (bool, error) {
 			p, err := f.OpenPullRequest(ctx, PullRequestInput{})
 			return p == PullRequest{}, err
+		}},
+		{"FindPullRequest", func() (bool, error) {
+			p, found, err := f.FindPullRequest(ctx, "b")
+			return p == PullRequest{} && !found, err
 		}},
 		{"RequestMerge", func() (bool, error) { return true, f.RequestMerge(ctx, PullRequest{}) }},
 		{"MergeState", func() (bool, error) { s, err := f.MergeState(ctx, PullRequest{}); return s == "", err }},
