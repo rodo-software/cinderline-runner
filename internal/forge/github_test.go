@@ -38,8 +38,16 @@ func recorded(t *testing.T, repository string, replies ...reply) (*GitHub, *[]re
 	if err != nil {
 		t.Fatal(err)
 	}
+	var reqs *[]request
+	g.HTTP, reqs = recorder(t, replies)
+	return g, reqs
+}
+
+// recorder is an HTTP client that records its requests and answers them
+// with replies in order.
+func recorder(t *testing.T, replies []reply) (*http.Client, *[]request) {
 	var reqs []request
-	g.HTTP = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+	c := &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
 		req := request{method: r.Method, url: r.URL.String(), header: r.Header}
 		if r.Body != nil {
 			data, _ := io.ReadAll(r.Body)
@@ -66,7 +74,7 @@ func recorded(t *testing.T, repository string, replies ...reply) (*GitHub, *[]re
 			t.Errorf("%d replies left unused", len(replies))
 		}
 	})
-	return g, &reqs
+	return c, &reqs
 }
 
 type roundTrip func(*http.Request) (*http.Response, error)
