@@ -93,7 +93,7 @@ func TestImageBuiltWhenMissing(t *testing.T) {
 
 func TestDefaultDockerfile(t *testing.T) {
 	s := string(defaultimage.Dockerfile)
-	for _, want := range []string{"php:8.4", "composer", "setup_22.x", " git ", "pdo_mysql", "--uid 1000", "USER runner"} {
+	for _, want := range []string{"php:8.4", "composer", "setup_22.x", " git ", "pdo_mysql", "golang:1.27.3", "staticcheck@", "govulncheck@", "GOTOOLCHAIN=local", "--uid 1000", "USER runner"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Dockerfile lacks %q", want)
 		}
