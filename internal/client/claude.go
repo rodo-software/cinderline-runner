@@ -37,7 +37,7 @@ var errTurnLimit = errors.New("claude: stopped at the turn limit")
 // Run runs one turn. The turn limit is an error with HitTurnLimit set, so
 // Attempts continues the session (CSR-21).
 func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := c.prepareState(ctx); err != nil {
+	if err := prepareState(ctx, c.Exec, c.Project); err != nil {
 		return Result{}, err
 	}
 	session := t.SessionID
@@ -45,14 +45,9 @@ func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
 		session = newSessionID()
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
-		Issue: path.Base(t.Dir), // the clone is RunsPath/<REF>
-		Dir:   t.Dir,
-		// The repo volume holds the objects the clone's alternates point at.
-		Mounts: append([]string{
-			"-v", workspace.Volume(c.Project, "repo") + ":" + workspace.RepoPath + ":ro",
-			"-v", workspace.Volume(c.Project, "runs") + ":" + workspace.RunsPath,
-			"-v", workspace.Volume(c.Project, "state") + ":" + StatePath,
-		}, c.Tools.Args...),
+		Issue:   path.Base(t.Dir), // the clone is RunsPath/<REF>
+		Dir:     t.Dir,
+		Mounts:  agentMounts(c.Project, c.Tools),
 		Env:     append(append([]string(nil), c.Tools.Env...), claudeEnv(c.Credential, t)...),
 		Cmd:     append([]string{tools.Path + "/bin/claude"}, claudeArgs(t, session, c.MCPURL)...),
 		Stdin:   t.Prompt,
@@ -69,17 +64,26 @@ func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
 	return res, err
 }
 
+// agentMounts mounts the issue's clone, the repo volume that holds the
+// objects the clone's alternates point at, the state volume and the tools.
+func agentMounts(project string, t tools.Mount) []string {
+	return append([]string{
+		"-v", workspace.Volume(project, "repo") + ":" + workspace.RepoPath + ":ro",
+		"-v", workspace.Volume(project, "runs") + ":" + workspace.RunsPath,
+		"-v", workspace.Volume(project, "state") + ":" + StatePath,
+	}, t.Args...)
+}
+
 // prepareState makes the project's state volume and hands its root to the
 // agent user: a new volume belongs to root, and the CLIs write their config
 // dirs and sessions in it. Every turn, as it costs a second and repairs
-// itself.
-func (c *Claude) prepareState(ctx context.Context) error {
-	x := c.Exec
+// itself. A nil x means workspace.RunCommand.
+func prepareState(ctx context.Context, x workspace.Exec, project string) error {
 	if x == nil {
 		x = workspace.RunCommand
 	}
-	vol := workspace.Volume(c.Project, "state")
-	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, workspace.Labels(c.Project, "")...), vol)...); err != nil {
+	vol := workspace.Volume(project, "state")
+	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, workspace.Labels(project, "")...), vol)...); err != nil {
 		return fmt.Errorf("state volume: %w", err)
 	}
 	if _, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none", "-v", vol+":/s", "--entrypoint", "sh", workspace.GitImage, "-c", "chown "+workspace.AgentUser+" /s"); err != nil {
