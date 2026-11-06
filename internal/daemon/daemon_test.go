@@ -50,6 +50,8 @@ func newApp(t *testing.T) *app {
 			a.mu.Unlock()
 			w.Header().Set("ETag", `"v1"`)
 			io.WriteString(w, `{"issue":{"ref":"A-1","title":"T","status":{"value":"todo","label":"To do"}}}`)
+		case path == "/issues": // recovery's list of In progress issues
+			io.WriteString(w, `{"issues":[]}`)
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}

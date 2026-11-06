@@ -164,3 +164,23 @@ func (c *Config) Save(path string) (err error) {
 	// The rename makes the write atomic: a crash leaves the old file or the new one, never a torn one.
 	return os.Rename(f.Name(), path)
 }
+
+// SameRepository reports whether a and b name the same repository: host and
+// path compared case-insensitively without user info, port, a trailing / or
+// .git, so ssh://git@host/o/r.git and git@host:o/r are https://host/o/r. An
+// empty or unparsable URL is never the same as anything.
+func SameRepository(a, b string) bool {
+	key := func(s string) string {
+		if i := strings.Index(s, ":"); i > 0 && !strings.Contains(s, "://") {
+			s = "ssh://" + s[:i] + "/" + s[i+1:] // scp form: git@host:o/r
+		}
+		u, err := url.Parse(s)
+		if err != nil || u.Hostname() == "" {
+			return ""
+		}
+		path := strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
+		return strings.ToLower(u.Hostname() + path)
+	}
+	ka := key(a)
+	return ka != "" && ka == key(b)
+}

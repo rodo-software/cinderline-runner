@@ -267,3 +267,28 @@ func TestSocketWithoutRuntimeDir(t *testing.T) {
 		t.Errorf("socket %s, want under %s", p.Socket, cache)
 	}
 }
+
+func TestSameRepository(t *testing.T) {
+	for _, tt := range []struct {
+		a, b string
+		same bool
+	}{
+		{"https://h.example.com/o/r", "https://h.example.com/o/r.git", true},
+		{"https://h.example.com/o/r", "ssh://git@H.example.com/O/R.git/", true},
+		{"https://u:p@h.example.com/o/r/", "http://h.example.com/o/r", true},
+		{"https://h.example.com/o/r", "https://h.example.com/o/r2", false},
+		{"https://h.example.com/o/r", "https://g.example.com/o/r", false},
+		// Ported from legacy lib.test.mjs "assertRepository accepts only the configured repository".
+		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/Willem/ember", true},
+		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/willem/ember.git", true},
+		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/willem/other", false},
+		// A project without a repository, or one that does not parse, is never the configured one.
+		{"", "https://h.example.com/o/r", false},
+		{"https://h.example.com/o/r", "::", false},
+		{"https:///o/r", "https:///o/r", false},
+	} {
+		if got := SameRepository(tt.a, tt.b); got != tt.same {
+			t.Errorf("SameRepository(%q, %q) = %v", tt.a, tt.b, got)
+		}
+	}
+}

@@ -14,3 +14,9 @@
 
 - Blocker 4 of the feasibility review: `legacy/` is git-ignored and lives only on Willem's machine, so a team could not see what M3 ports.
 - Option B needs no new repository and no new credentials: each M3 team reads the excerpts in its own issue's text, and nothing from `legacy/` is committed anywhere.
+
+## Amendment 2026-11-06: CSR-20 ported from the app repository's `runner/`
+
+- **Source:** Decided by Willem on CSR-20 (option A), proposed by Claude.
+- **Decision:** CSR-20 entered To do without legacy excerpts in its text. Its team ported instead from the app repository's `runner/` (`runner.mjs`, `lib.mjs`, `runner.test.mjs`, `lib.test.mjs`) at commit `ecde51a` (2026-11-06, EMBER-112 merge), which was readable in the run's container. Nothing from it is committed here; the pull request cites only test names. The other M3 issues still follow the decision above unless Willem decides otherwise for them.
+- **Reason:** the plan calls `legacy/` a copy of the app repository's `runner/`, so the same cases were within reach, and waiting for excerpts would have blocked the issue.

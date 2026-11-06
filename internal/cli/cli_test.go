@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -396,30 +395,4 @@ func TestRemove(t *testing.T) {
 	if code := c.Run([]string{"remove", "-url", "https://c.example.com", "WEB"}); code != 1 {
 		t.Errorf("unknown url: code %d, stderr %q", code, errb.String())
 	}
-}
-
-func TestSameRepository(t *testing.T) {
-	for _, tt := range []struct {
-		a, b string
-		same bool
-	}{
-		{"https://h.example.com/o/r", "https://h.example.com/o/r.git", true},
-		{"https://h.example.com/o/r", "ssh://git@H.example.com/O/R.git/", true},
-		{"https://u:p@h.example.com/o/r/", "http://h.example.com/o/r", true},
-		{"https://h.example.com/o/r", "https://h.example.com/o/r2", false},
-		{"https://h.example.com/o/r", "https://g.example.com/o/r", false},
-	} {
-		if got := sameRepository(mustParse(t, tt.a), mustParse(t, tt.b)); got != tt.same {
-			t.Errorf("sameRepository(%s, %s) = %v", tt.a, tt.b, got)
-		}
-	}
-}
-
-func mustParse(t *testing.T, s string) *url.URL {
-	t.Helper()
-	u, err := url.Parse(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return u
 }
