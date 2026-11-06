@@ -1,12 +1,18 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/rodo-software/cinderstack-runner/internal/environment"
+	"github.com/rodo-software/cinderstack-runner/internal/tools"
 )
 
 // Ported from lib.test.mjs "opencodeArgs continues a session only when resuming".
@@ -163,5 +169,81 @@ func TestParseOpenCodeRecordedError(t *testing.T) {
 	out := `{"type":"error","timestamp":1793984449344,"sessionID":"ses_e4e31bb00ffeDTtaaRXCNF5InN","error":{"name":"APIError","data":{"message":"User not found.","statusCode":401,"isRetryable":false,"responseBody":"{\"error\":{\"message\":\"User not found.\",\"code\":401}}","metadata":{"url":"https://openrouter.ai/api/v1/chat/completions"}}}}`
 	if got, want := parseOpenCode(out), (Result{SessionID: "ses_e4e31bb00ffeDTtaaRXCNF5InN"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("parseOpenCode = %+v, want %+v", got, want)
+	}
+}
+
+// Run: a fresh turn runs the tools volume's opencode in the issue's clone
+// with the prompt on stdin, only the OpenRouter key and the token, the musl
+// libraries, the state volume prepared for the agent user, and the team's
+// time limit; OpenCode names the session.
+func TestOpenCodeRunFresh(t *testing.T) {
+	out := "noise\n" + `{"type":"text","sessionID":"ses_1","part":{"messageID":"m","text":"Done."}}` + "\n" +
+		`{"type":"step_finish","sessionID":"ses_1","part":{"tokens":{"output":5}}}`
+	env := &environment.Fake{Runs: []environment.RunReply{{Output: out}}}
+	var docker [][]string
+	c := &OpenCode{
+		Project: "CSR", Env: env, Key: "sk-or-k", MCPURL: "https://cs.example/mcp",
+		Tools: tools.Mount{
+			Args:        []string{"-v", "tools:/opt/cinderstack:ro"},
+			Env:         []string{"DISABLE_AUTOUPDATER=1"},
+			OpenCodeEnv: []string{"LD_LIBRARY_PATH=/opt/cinderstack/lib"},
+		},
+		Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
+			docker = append(docker, argv)
+			return "", nil
+		},
+	}
+	turn := Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "openrouter/q/c", Token: "tok"}
+	res, err := c.Run(context.Background(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := env.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("Environment calls = %+v", calls)
+	}
+	want := environment.Spec{
+		Issue:   "CSR-7",
+		Dir:     "/runs/CSR-7",
+		Mounts:  []string{"-v", "cinderstack-CSR-repo:/repo:ro", "-v", "cinderstack-CSR-runs:/runs", "-v", "cinderstack-CSR-state:/state", "-v", "tools:/opt/cinderstack:ro"},
+		Env:     append([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderstack/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp")...),
+		Cmd:     append([]string{"/opt/cinderstack/bin/opencode"}, opencodeArgs(turn)...),
+		Stdin:   "do it",
+		Timeout: 30 * time.Minute,
+	}
+	if s := calls[0].Args[0].(environment.Spec); !reflect.DeepEqual(s, want) {
+		t.Errorf("Spec =\n%+v\nwant\n%+v", s, want)
+	}
+	if res.SessionID != "ses_1" || res.Report != "Done." || res.Tail != environment.Tail(out) || res.Usage == nil || res.HitTurnLimit {
+		t.Errorf("Result = %+v", res)
+	}
+	if len(docker) != 2 || !slices.Contains(docker[0], "volume") || !slices.Contains(docker[1], "chown 1000:1000 /s") {
+		t.Errorf("state volume preparation = %q", docker)
+	}
+}
+
+// Run: a resumed turn passes its session and keeps it when the container
+// fails before OpenCode printed one; the failure is returned with the result.
+func TestOpenCodeRunResumeFails(t *testing.T) {
+	env := &environment.Fake{Runs: []environment.RunReply{{Output: "crash", Err: environment.ErrTimeout}}}
+	c := &OpenCode{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", SessionID: "ses_1", MaxTurns: 5})
+	if !errors.Is(err, environment.ErrTimeout) || res.SessionID != "ses_1" || res.Tail != "crash" {
+		t.Errorf("Run = %+v, %v", res, err)
+	}
+	if cmd := env.Calls()[0].Args[0].(environment.Spec).Cmd; !reflect.DeepEqual(cmd[len(cmd)-2:], []string{"--session", "ses_1"}) {
+		t.Errorf("Cmd = %q, want a resume of ses_1", cmd)
+	}
+}
+
+func TestOpenCodeRunStateVolumeFails(t *testing.T) {
+	env := &environment.Fake{}
+	boom := errors.New("docker broke")
+	c := &OpenCode{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
+	if _, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"}); !errors.Is(err, boom) {
+		t.Errorf("Run err = %v, want %v", err, boom)
+	}
+	if len(env.Calls()) != 0 {
+		t.Error("the turn ran without its state volume")
 	}
 }

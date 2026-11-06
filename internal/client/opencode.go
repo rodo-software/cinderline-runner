@@ -1,11 +1,55 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"path"
 	"strings"
+	"time"
 
+	"github.com/rodo-software/cinderstack-runner/internal/environment"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderstack-runner/internal/tools"
+	"github.com/rodo-software/cinderstack-runner/internal/workspace"
 )
+
+// OpenCode is the OpenCode Client: one container per turn through the
+// Environment (decision 2026-11-06-container-per-turn), the binary from the
+// tools volume.
+type OpenCode struct {
+	Project string                  // project key, for its volumes
+	Env     environment.Environment // where the turn runs
+	Exec    workspace.Exec          // prepares the state volume; nil means workspace.RunCommand
+	Key     string                  // the project's OpenRouter key
+	MCPURL  string                  // CinderStack's MCP endpoint, as the agent container reaches it
+	Tools   tools.Mount             // from tools.Tools.Mount for the Environment's image
+}
+
+var _ Client = (*OpenCode)(nil)
+
+// Run runs one turn. OpenCode has no turn limit to hit (see opencodeConfig),
+// so HitTurnLimit stays false.
+func (c *OpenCode) Run(ctx context.Context, t Turn) (Result, error) {
+	if err := prepareState(ctx, c.Exec, c.Project); err != nil {
+		return Result{}, err
+	}
+	out, err := c.Env.Run(ctx, environment.Spec{
+		Issue:  path.Base(t.Dir), // the clone is RunsPath/<REF>
+		Dir:    t.Dir,
+		Mounts: agentMounts(c.Project, c.Tools),
+		// OpenCodeEnv: on musl, the libraries the binary needs from the tools volume.
+		Env:     append(append(append([]string(nil), c.Tools.Env...), c.Tools.OpenCodeEnv...), opencodeEnv(c.Key, t, c.MCPURL)...),
+		Cmd:     append([]string{tools.Path + "/bin/opencode"}, opencodeArgs(t)...),
+		Stdin:   t.Prompt,
+		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
+	})
+	res := parseOpenCode(out)
+	if res.SessionID == "" {
+		res.SessionID = t.SessionID
+	}
+	res.Tail = environment.Tail(out)
+	return res, err
+}
 
 // opencodeArgs is OpenCode's headless argv for one turn; the prompt goes in
 // on stdin. OpenCode names the session itself, so only a continued turn
