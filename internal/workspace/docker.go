@@ -139,10 +139,16 @@ func (d *Docker) volume(kind string) string {
 	return name.Name + "-" + d.Project + "-" + kind
 }
 
-// labels are the --label flags for what the runner creates (review item 9):
-// the project, and the issue when there is one.
-func (d *Docker) labels(issue string) []string {
-	l := []string{"--label", name.Name + ".project=" + d.Project}
+func (d *Docker) labels(issue string) []string { return Labels(d.Project, issue) }
+
+// ProjectLabel is the label every container, network and volume the runner
+// creates carries; recovery finds stale ones by it (review item 9).
+func ProjectLabel(project string) string { return name.Name + ".project=" + project }
+
+// Labels are the --label flags for what the runner creates: the project, and
+// the issue when there is one.
+func Labels(project, issue string) []string {
+	l := []string{"--label", ProjectLabel(project)}
 	if issue != "" {
 		l = append(l, "--label", name.Name+".issue="+issue)
 	}
