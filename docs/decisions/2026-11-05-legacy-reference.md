@@ -20,3 +20,9 @@
 - **Source:** Decided by Willem on CSR-20 (option A), proposed by Claude.
 - **Decision:** CSR-20 entered To do without legacy excerpts in its text. Its team ported instead from the app repository's `runner/` (`runner.mjs`, `lib.mjs`, `runner.test.mjs`, `lib.test.mjs`) at commit `ecde51a` (2026-11-06, EMBER-112 merge), which was readable in the run's container. Nothing from it is committed here; the pull request cites only test names. The other M3 issues still follow the decision above unless Willem decides otherwise for them.
 - **Reason:** the plan calls `legacy/` a copy of the app repository's `runner/`, so the same cases were within reach, and waiting for excerpts would have blocked the issue.
+
+## Amendment 2026-11-06: CSR-21 to CSR-27 port from the same source
+
+- **Source:** Decided by Willem on CSR-21 (option A), proposed by Claude.
+- **Decision:** the amendment above now covers every remaining M3 issue, CSR-21 to CSR-27: an issue without legacy excerpts in its text ports from the app repository's `runner/` at commit `ecde51a`. Nothing from it is committed here; pull requests cite only test names and function names.
+- **Reason:** CSR-21 also entered To do without excerpts, and asking the same question on each M3 issue would block each one for no new information.
