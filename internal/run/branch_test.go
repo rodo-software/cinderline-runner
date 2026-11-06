@@ -204,7 +204,7 @@ func TestUpdateBranchResolver(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.way, func(t *testing.T) {
-			r := newUpkeepRun(cinderstack.Team{Name: "Dev", Agents: []cinderstack.TeamAgent{devTeam.Agents[0], devTeam.Agents[1], resolverAgent}})
+			r := newUpkeepRun(cinderstack.Team{Name: "Dev", MaxMinutes: 45, Agents: []cinderstack.TeamAgent{devTeam.Agents[0], devTeam.Agents[1], resolverAgent}})
 			r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
 			r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
 			r.ws.Logs = []workspace.LogReply{{Log: "abc CSR-1: T"}}
@@ -252,7 +252,7 @@ func TestUpdateBranchResolver(t *testing.T) {
 				t.Fatalf("resolver runs = %d, want 1 (never a retry)", len(runs))
 			}
 			turn := runs[0].Args[0].(client.Turn)
-			if turn.Token != "" || turn.SessionID != "" || turn.Dir != "/clone" || turn.Model != "openrouter/qwen" || turn.MaxTurns != 30 {
+			if turn.Token != "" || turn.SessionID != "" || turn.Dir != "/clone" || turn.Model != "openrouter/qwen" || turn.MaxTurns != 30 || turn.MaxMinutes != 45 {
 				t.Errorf("resolver turn = %+v, want a fresh session in the clone without a token (0122)", turn)
 			}
 			if !strings.HasPrefix(turn.Prompt, "Resolve merges.") || !strings.Contains(turn.Prompt, "# Your task: merge main into cinderstack/CSR-1") ||

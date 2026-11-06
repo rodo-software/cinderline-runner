@@ -1,24 +1,44 @@
-// Package environment defines Environment, the container a run's agent works
-// in, and Fake, its in-memory stand-in for tests.
+// Package environment defines Environment, where an agent turn runs, and
+// Fake, its in-memory stand-in for tests.
 package environment
 
-import "context"
+import (
+	"context"
+	"errors"
+	"time"
+)
 
-// Environment starts and stops the containers of runs.
+// Environment runs agent turns, each in a fresh container with its own
+// private services, so nothing one turn started outlives it (Willem's
+// decision on CSR-31: a process left behind could read a later turn's
+// token).
 type Environment interface {
-	// Start starts the container for a run and returns its ID.
-	Start(ctx context.Context, s Spec) (string, error)
-	Stop(ctx context.Context, id string) error
-	// Tail returns the end of the container's output (the last 4,000
-	// characters in the real implementation).
-	Tail(ctx context.Context, id string) (string, error)
+	// Run runs s.Cmd and returns its whole output, standard output and error
+	// interleaved. A command that ran and failed returns an error with an
+	// ExitCode method; one stopped at s.Timeout returns ErrTimeout.
+	Run(ctx context.Context, s Spec) (string, error)
+	// Cleanup removes what an earlier process left, at start, while no run
+	// is in progress.
+	Cleanup(ctx context.Context) error
 }
 
-// Spec is what a run's container is started with.
+// ErrTimeout is a run stopped at its Timeout, the team's max_minutes.
+var ErrTimeout = errors.New("stopped at the time limit")
+
+// Spec is one agent turn.
 type Spec struct {
-	Project string
-	Issue   string
-	Image   string
-	Dir     string   // the issue's clone, mounted as the working directory
-	Env     []string // KEY=value
+	Issue  string   // the issue's ref, in names and labels
+	Dir    string   // the working directory: the issue's clone
+	Mounts []string // docker run flags that mount the clone, the tools and the state
+	// Env is all the container gets besides the database settings: the
+	// turn's model credential, its scoped token and the client's settings,
+	// as KEY=value.
+	Env     []string
+	Cmd     []string
+	Stdin   string
+	Timeout time.Duration // 0: none
 }
+
+// Tail is the end of a turn's output kept for comments: the last 40 lines,
+// at most 4,000 characters, as today.
+func Tail(output string) string { return tail(output, 40, 4000) }

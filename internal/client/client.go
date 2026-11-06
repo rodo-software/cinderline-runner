@@ -19,7 +19,10 @@ type Turn struct {
 	Prompt    string
 	SessionID string
 	MaxTurns  int
-	Model     string // the agent's model; empty: the client's default
+	// MaxMinutes is the team's time limit for the turn, at which the
+	// Environment stops it; 0: none.
+	MaxMinutes int
+	Model      string // the agent's model; empty: the client's default
 	// Token is the run's scoped CinderStack token for the MCP server; empty
 	// gives the agent none, as workers and the Merge Resolver (0122). Never log it.
 	Token string

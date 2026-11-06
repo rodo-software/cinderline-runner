@@ -12,7 +12,6 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
 )
 
 // The cases of legacy runner.test.mjs, lib.test.mjs and lib.prompt.test.mjs
@@ -107,7 +106,7 @@ func TestAnsweredIssueResumesAndCanPauseAgain(t *testing.T) {
 	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "the-session"}}}}
 	j := job
 	j.Turn.Dir, j.Resume = got.Dir, got.Session
-	out, err := p.Attempts(context.Background(), api.client(t), cl, &environment.Fake{}, j)
+	out, err := p.Attempts(context.Background(), api.client(t), cl, j)
 	if err != nil || !out.Paused {
 		t.Fatalf("Attempts = %+v, %v; want paused", out, err)
 	}
@@ -139,7 +138,7 @@ func TestAQuestionPausesTheRun(t *testing.T) {
 			cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1"}, Err: errFailed}}}
 			j := job
 			j.Turn.Dir = t.TempDir()
-			out, err := p.Attempts(context.Background(), api.client(t), cl, &environment.Fake{}, j)
+			out, err := p.Attempts(context.Background(), api.client(t), cl, j)
 			if err != nil || !out.Paused || len(cl.Calls()) != 1 {
 				t.Fatalf("Attempts = %+v, %v after %d runs; want paused after 1", out, err, len(cl.Calls()))
 			}
@@ -155,7 +154,7 @@ func TestAQuestionPausesTheRun(t *testing.T) {
 func TestAFinishedRunDoesNotPause(t *testing.T) {
 	p := project(t)
 	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1"}}}}
-	out, err := p.Attempts(context.Background(), working().client(t), cl, &environment.Fake{}, job)
+	out, err := p.Attempts(context.Background(), working().client(t), cl, job)
 	if err != nil || out.Paused || out.Unread {
 		t.Fatalf("Attempts = %+v, %v", out, err)
 	}
@@ -214,7 +213,7 @@ func TestACommentDuringARun(t *testing.T) {
 				{Result: client.Result{SessionID: "the-session", Report: "built"}},
 				{Result: client.Result{SessionID: "the-session", Report: "read them"}},
 			}}
-			out, err := p.Attempts(context.Background(), api.client(t), cl, &environment.Fake{}, job)
+			out, err := p.Attempts(context.Background(), api.client(t), cl, job)
 			if err != nil || out.Paused || out.Unread {
 				t.Fatalf("Attempts = %+v, %v", out, err)
 			}
@@ -250,8 +249,7 @@ func TestACommentResumeThatFailsTwice(t *testing.T) {
 		{Result: client.Result{SessionID: "the-session"}, Err: errFailed},
 		{Result: client.Result{SessionID: "the-session"}, Err: errFailed},
 	}}
-	env := &environment.Fake{}
-	out, err := p.Attempts(context.Background(), api.client(t), cl, env, job)
+	out, err := p.Attempts(context.Background(), api.client(t), cl, job)
 	if err != nil || !out.Unread || out.Paused || out.Report != "built" {
 		t.Fatalf("Attempts = %+v, %v; want the finished work with Unread", out, err)
 	}
@@ -259,9 +257,6 @@ func TestACommentResumeThatFailsTwice(t *testing.T) {
 	want := client.Turn{Dir: first.Dir, Prompt: CommentsPrompt("CSR-7"), SessionID: "the-session", MaxTurns: first.MaxTurns}
 	if len(ts) != 3 || ts[1] != want || ts[2] != want {
 		t.Fatalf("turns = %+v, want two resumes %+v", ts, want)
-	}
-	if len(env.Calls()) != 0 {
-		t.Fatalf("environment calls = %v, want no tail", env.Calls())
 	}
 	if w := api.writes(); !slices.Contains(w, `POST /issues/CSR-7/progress {"body":"Retrying (attempt 2)"}`) {
 		t.Fatalf("writes = %q, want the retry's progress line", w)
@@ -282,7 +277,7 @@ func TestACommentResumeContinuesAfterTheTurnLimit(t *testing.T) {
 		{Result: client.Result{SessionID: "s1", HitTurnLimit: true}, Err: errFailed},
 		{Result: client.Result{SessionID: "s1", Report: "done"}},
 	}}
-	out, err := p.Attempts(context.Background(), api.client(t), cl, &environment.Fake{}, job)
+	out, err := p.Attempts(context.Background(), api.client(t), cl, job)
 	if err != nil || out.Unread || out.Report != "done" {
 		t.Fatalf("Attempts = %+v, %v", out, err)
 	}
@@ -298,7 +293,7 @@ func TestAFailedResumeStartsOver(t *testing.T) {
 	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "the-session"}, Err: errFailed}, {}}}
 	j := job
 	j.Resume = "the-session"
-	if _, err := p.Attempts(context.Background(), working().client(t), cl, &environment.Fake{}, j); err != nil {
+	if _, err := p.Attempts(context.Background(), working().client(t), cl, j); err != nil {
 		t.Fatal(err)
 	}
 	if ts := turns(cl); len(ts) != 2 || ts[1] != first {
@@ -314,7 +309,7 @@ func TestAttemptsFailsWhenCinderStackDoes(t *testing.T) {
 			api := working()
 			api.routes[route] = reply{500, `{"message":"Server error."}`}
 			cl := &client.Fake{Runs: []client.RunReply{{}}}
-			if _, err := project(t).Attempts(context.Background(), api.client(t), cl, &environment.Fake{}, job); err == nil {
+			if _, err := project(t).Attempts(context.Background(), api.client(t), cl, job); err == nil {
 				t.Fatal("Attempts succeeded without CinderStack")
 			}
 		})

@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	defaultimage "github.com/rodo-software/cinderstack-runner/images/default"
 )
@@ -110,7 +114,7 @@ func TestUp(t *testing.T) {
 	}
 	want := []execCall{
 		{nil, append(append([]string{"docker", "network", "create"}, issueLabels...), "cinderstack-CSR-CSR-31")},
-		{nil, append(append([]string{"docker", "run", "--detach", "--rm"}, issueLabels...),
+		{nil, append(append([]string{"docker", "run", "--detach"}, issueLabels...),
 			"--name", "cinderstack-CSR-CSR-31-mysql", "--network", "cinderstack-CSR-CSR-31", "--network-alias", "mysql",
 			"-e", "MYSQL_DATABASE=laravel_testing", "-e", "MYSQL_USER=laravel", "-e", "MYSQL_PASSWORD=laravel", "-e", "MYSQL_ROOT_PASSWORD=root",
 			MySQLImage)},
@@ -142,7 +146,7 @@ func TestUpFailureLeavesNothing(t *testing.T) {
 	}
 }
 
-func TestDownRemovesBothEvenAfterAFailure(t *testing.T) {
+func TestDownRemovesAllEvenAfterAFailure(t *testing.T) {
 	boom := errors.New("boom")
 	d, calls := scripted(nil, map[int]error{0: boom})
 	if err := d.down(context.Background(), "CSR-31"); !errors.Is(err, boom) {
@@ -150,7 +154,7 @@ func TestDownRemovesBothEvenAfterAFailure(t *testing.T) {
 	}
 	want := []execCall{
 		// -v removes MySQL's anonymous data volume with it.
-		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderstack-CSR-CSR-31-mysql"}},
+		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderstack-CSR-CSR-31-agent", "cinderstack-CSR-CSR-31-mysql"}},
 		{nil, []string{"docker", "network", "rm", "cinderstack-CSR-CSR-31"}},
 	}
 	if !reflect.DeepEqual(*calls, want) {
@@ -206,5 +210,219 @@ func TestTail(t *testing.T) {
 	}
 	if got := tail("ééé", 1, 2); got != "…éé" {
 		t.Errorf("tail = %q, want whole characters", got)
+	}
+}
+
+// runner returns a Docker whose Exec and Stream record every call. stream
+// plays the agent container: it gets the output writer.
+func runner(fail map[string]error, stream func(ctx context.Context, out io.Writer) error) (*Docker, func() []execCall, *bytes.Buffer) {
+	var (
+		mu    sync.Mutex
+		calls []execCall
+	)
+	record := func(env []string, argv []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls = append(calls, execCall{env, argv})
+	}
+	var logs bytes.Buffer
+	d := &Docker{
+		Project: "CSR",
+		Log:     slog.New(slog.NewTextHandler(&logs, nil)),
+		Exec: func(ctx context.Context, env []string, argv ...string) (string, error) {
+			record(env, argv)
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "", fail[strings.Join(argv[:3], " ")]
+		},
+		Stream: func(ctx context.Context, env []string, stdin string, out io.Writer, argv ...string) error {
+			record(env, append(argv, "<stdin:"+stdin+">"))
+			return stream(ctx, out)
+		},
+	}
+	return d, func() []execCall {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]execCall(nil), calls...)
+	}, &logs
+}
+
+const secret = "sk-ant-secret"
+
+var turn = Spec{
+	Issue:  "CSR-31",
+	Dir:    "/runs/CSR-31",
+	Mounts: []string{"-v", "cinderstack-CSR-runs:/runs"},
+	Env:    []string{"ANTHROPIC_API_KEY=" + secret, "CINDERSTACK_TOKEN=tok=en"},
+	Cmd:    []string{"claude", "-p"},
+	Stdin:  "the prompt",
+}
+
+func TestRun(t *testing.T) {
+	d, calls, logs := runner(nil, func(_ context.Context, out io.Writer) error {
+		io.WriteString(out, "first line\nsecond ")
+		io.WriteString(out, "line\nno newline")
+		return nil
+	})
+	out, err := d.Run(context.Background(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "first line\nsecond line\nno newline" {
+		t.Errorf("output = %q", out)
+	}
+	image := imageTag()
+	agent := append(append([]string{"docker", "run", "--rm", "--interactive"}, issueLabels...),
+		"--name", "cinderstack-CSR-CSR-31-agent", "--network", "cinderstack-CSR-CSR-31",
+		"--add-host", "host.docker.internal:host-gateway", "--user", "1000:1000", "--workdir", "/runs/CSR-31",
+		"-e", "DB_HOST=mysql", "-e", "DB_PORT=3306", "-e", "DB_DATABASE=laravel_testing", "-e", "DB_USERNAME=laravel", "-e", "DB_PASSWORD=laravel",
+		// Secrets by name only: their values travel in the docker command's environment.
+		"-e", "ANTHROPIC_API_KEY", "-e", "CINDERSTACK_TOKEN",
+		"-v", "cinderstack-CSR-runs:/runs", image, "claude", "-p", "<stdin:the prompt>")
+	got := calls()
+	if len(got) != 6 {
+		t.Fatalf("calls =\n%q", got)
+	}
+	if want := (execCall{turn.Env, agent}); !reflect.DeepEqual(got[3], want) {
+		t.Errorf("agent call =\n%q\nwant\n%q", got[3], want)
+	}
+	wantAfter := []execCall{
+		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderstack-CSR-CSR-31-agent", "cinderstack-CSR-CSR-31-mysql"}},
+		{nil, []string{"docker", "network", "rm", "cinderstack-CSR-CSR-31"}},
+	}
+	if !reflect.DeepEqual(got[0].Argv[:3], []string{"docker", "image", "inspect"}) || got[1].Argv[1] != "network" || got[2].Argv[1] != "run" {
+		t.Errorf("before the agent: %q, want image, network, MySQL", got[:3])
+	}
+	if !reflect.DeepEqual(got[4:6], wantAfter) {
+		t.Errorf("after the agent:\n%q\nwant\n%q", got[4:6], wantAfter)
+	}
+	for _, c := range got {
+		if strings.Contains(strings.Join(c.Argv, " "), secret) {
+			t.Errorf("secret in argv %q", c.Argv)
+		}
+	}
+	for _, line := range []string{`line="first line"`, `line="second line"`, `line="no newline"`} {
+		if !strings.Contains(logs.String(), line) || !strings.Contains(logs.String(), "issue=CSR-31") {
+			t.Errorf("log lacks %s with the issue:\n%s", line, logs)
+		}
+	}
+}
+
+func imageTag() string {
+	d, _ := scripted(nil, nil)
+	tag, _ := d.Image(context.Background())
+	return tag
+}
+
+func TestRunStopsAtTheTimeout(t *testing.T) {
+	stopped := make(chan struct{})
+	d, calls, _ := runner(nil, func(_ context.Context, out io.Writer) error {
+		io.WriteString(out, "working\n")
+		<-stopped
+		return exitErr(137)
+	})
+	record := d.Exec
+	d.Exec = func(ctx context.Context, env []string, argv ...string) (string, error) {
+		if argv[1] == "stop" {
+			close(stopped)
+		}
+		return record(ctx, env, argv...)
+	}
+	s := turn
+	s.Timeout = 10 * time.Millisecond
+	out, err := d.Run(context.Background(), s)
+	if !errors.Is(err, ErrTimeout) || out != "working\n" {
+		t.Errorf("Run = %q, %v; want the output and ErrTimeout", out, err)
+	}
+	var stop []string
+	for _, c := range calls() {
+		if c.Argv[1] == "stop" {
+			stop = c.Argv
+		}
+	}
+	if !reflect.DeepEqual(stop, []string{"docker", "stop", "cinderstack-CSR-CSR-31-agent"}) {
+		t.Errorf("stop = %q", stop)
+	}
+}
+
+// exitErr is a command that ran and exited with that code, as *exec.ExitError.
+type exitErr int
+
+func (e exitErr) Error() string { return "exit status" }
+func (e exitErr) ExitCode() int { return int(e) }
+
+func TestRunFailedCommandStillTearsDown(t *testing.T) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return exitErr(2) })
+	_, err := d.Run(context.Background(), turn)
+	var exit interface{ ExitCode() int }
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 || errors.Is(err, ErrTimeout) {
+		t.Errorf("Run = %v, want exit code 2", err)
+	}
+	if got := calls(); len(got) != 6 || got[5].Argv[1] != "network" {
+		t.Errorf("calls = %q, want the teardown", got)
+	}
+}
+
+// A stop of the runner kills the docker command but not its container, so
+// the teardown removes it, with a context that is not cancelled.
+func TestRunCancelledStillTearsDown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	d, calls, _ := runner(nil, func(ctx context.Context, _ io.Writer) error {
+		cancel()
+		return ctx.Err()
+	})
+	if _, err := d.Run(ctx, turn); !errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v, want Canceled", err)
+	}
+	got := calls()
+	if len(got) != 6 || !reflect.DeepEqual(got[4].Argv[:2], []string{"docker", "rm"}) {
+		t.Errorf("calls = %q, want the teardown", got)
+	}
+}
+
+func TestRunWithoutServicesRunsNoAgent(t *testing.T) {
+	boom := errors.New("boom")
+	d, calls, _ := runner(map[string]error{"docker network create": boom}, func(context.Context, io.Writer) error {
+		t.Error("agent started without its network")
+		return nil
+	})
+	if _, err := d.Run(context.Background(), turn); !errors.Is(err, boom) {
+		t.Errorf("Run = %v, want boom", err)
+	}
+	if got := calls(); len(got) != 2 {
+		t.Errorf("calls = %q, want inspect and network create only", got)
+	}
+}
+
+func TestRunRefusesBadSpecs(t *testing.T) {
+	for _, s := range []Spec{
+		{Issue: "../x", Cmd: []string{"claude"}},
+		{Issue: "CSR-31"},
+		{Issue: "CSR-31", Cmd: []string{"claude"}, Env: []string{"NOVALUE"}},
+	} {
+		d, calls, _ := runner(nil, nil)
+		if _, err := d.Run(context.Background(), s); err == nil {
+			t.Errorf("Run(%+v) = nil, want an error", s)
+		}
+		if len(calls()) != 0 {
+			t.Errorf("Run(%+v) ran %q", s, calls())
+		}
+	}
+}
+
+func TestStreamCommand(t *testing.T) {
+	var out bytes.Buffer
+	if err := streamCommand(context.Background(), []string{"GOFLAGS=-count=1"}, "", &out, "go", "env", "GOFLAGS"); err != nil || strings.TrimSpace(out.String()) != "-count=1" {
+		t.Errorf("streamCommand = %q, %v; want the extra environment passed", out.String(), err)
+	}
+	out.Reset()
+	err := streamCommand(context.Background(), nil, "", &out, "go", "no-such-command")
+	var exit interface{ ExitCode() int }
+	if !errors.As(err, &exit) || !strings.Contains(out.String(), "unknown command") {
+		t.Errorf("streamCommand = %v, output %q; want the exit and standard error in the output", err, out.String())
+	}
+	if err := streamCommand(context.Background(), nil, "", &out, "no-such-command-here"); err == nil {
+		t.Error("a command that does not exist ran")
 	}
 }

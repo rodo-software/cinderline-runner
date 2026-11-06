@@ -3,11 +3,9 @@ package run
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
 )
 
 // ContinuePrompt is what a run that hit the team's turn limit gets when it
@@ -38,11 +36,10 @@ func retryProgress(res client.Result, attempt int) string {
 
 // Job is one issue's agent run for Attempts.
 type Job struct {
-	Ref       string
-	Client    string // the agent's CLI, kept in a paused note
-	Container string
-	Turn      client.Turn // the fresh first turn
-	Resume    string      // a paused session to resume first with ResumePrompt, from TakePaused
+	Ref    string
+	Client string      // the agent's CLI, kept in a paused note
+	Turn   client.Turn // the fresh first turn
+	Resume string      // a paused session to resume first with ResumePrompt, from TakePaused
 	// NoComments leaves the comments to the caller: a team's rounds read
 	// them only after the last round, as legacy rounds() does.
 	NoComments bool
@@ -79,9 +76,9 @@ func personCommentedAfter(cs []cinderstack.Comment, cursor int) bool {
 // Attempts runs the agent for job.Ref, at most twice (plan M3, 0095). A run
 // that hit the turn limit continues its own session with a fresh budget, so
 // its context is kept; any other failure starts over in a fresh session.
-// After a second failure the error carries the output tail the Environment
-// kept, and the scheduler posts it as a comment before moving the issue to
-// Review, without publishing.
+// After a second failure the error carries the tail of its output, and the
+// scheduler posts it as a comment before moving the issue to Review, without
+// publishing.
 //
 // After every run, an issue that waits for a person (Blocked, or To do after
 // a quick answer) pauses the run: it writes the note and returns Paused
@@ -89,7 +86,7 @@ func personCommentedAfter(cs []cinderstack.Comment, cursor int) bool {
 // resumes its session to read them; that uses no attempt. A failed resume is
 // retried once in the same session, then the finished work is published with
 // UnreadComments (decision 2026-11-03-comments-during-a-run).
-func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.Client, env environment.Environment, j Job) (Outcome, error) {
+func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.Client, j Job) (Outcome, error) {
 	log := p.Log.With("project", p.Config.Key, "issue", j.Ref)
 	t := j.Turn
 	resume := func(session, prompt string) client.Turn {
@@ -188,16 +185,11 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 		p.progress(ctx, c, j.Ref, retryProgress(res, attempt))
 	}
 
-	return Outcome{Result: res}, bothFailed(ctx, log, env, j.Container, err)
+	return Outcome{Result: res}, bothFailed(res, err)
 }
 
-// bothFailed is the error of a second failed run, with the output tail the
-// Environment kept (0095).
-func bothFailed(ctx context.Context, log *slog.Logger, env environment.Environment, container string, err error) error {
-	tail, terr := env.Tail(ctx, container)
-	if terr != nil {
-		log.Warn("output tail not read", "err", terr)
-		tail = "(not available: " + terr.Error() + ")"
-	}
-	return fmt.Errorf("both runs failed (last: %w). Last lines of the output:\n\n```\n%s\n```", err, tail)
+// bothFailed is the error of a second failed run, with the end of its output
+// (0095).
+func bothFailed(res client.Result, err error) error {
+	return fmt.Errorf("both runs failed (last: %w). Last lines of the output:\n\n```\n%s\n```", err, res.Tail)
 }

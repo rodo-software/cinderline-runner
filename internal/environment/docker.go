@@ -1,13 +1,21 @@
 package environment
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	defaultimage "github.com/rodo-software/cinderstack-runner/images/default"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
@@ -26,9 +34,6 @@ var DBEnv = []string{"DB_HOST=mysql", "DB_PORT=3306", "DB_DATABASE=laravel_testi
 // mysqlEnv creates the database and user DBEnv names.
 var mysqlEnv = []string{"-e", "MYSQL_DATABASE=laravel_testing", "-e", "MYSQL_USER=laravel", "-e", "MYSQL_PASSWORD=laravel", "-e", "MYSQL_ROOT_PASSWORD=root"}
 
-// tailChars is how much of a run's output is kept for comments, as today.
-const tailChars = 4000
-
 // Docker is the default Environment: the default image, a private network
 // with a fresh MySQL per run (decision 2026-11-05-runner-rewrite-details
 // point 13), and every container and network labelled with the project and
@@ -36,6 +41,128 @@ const tailChars = 4000
 type Docker struct {
 	Project string         // project key, in names and labels
 	Exec    workspace.Exec // nil means workspace.RunCommand
+	Stream  Stream         // the agent container; nil means streamCommand
+	Log     *slog.Logger   // the agent's output, line by line; nil means slog.Default()
+}
+
+var _ Environment = (*Docker)(nil)
+
+// Stream runs argv with env added to the runner's environment and stdin as
+// its input, and writes its standard output and error to out as they come.
+// A command that ran and failed returns an error with an ExitCode method.
+type Stream func(ctx context.Context, env []string, stdin string, out io.Writer, argv ...string) error
+
+func streamCommand(ctx context.Context, env []string, stdin string, out io.Writer, argv ...string) error {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdin = strings.NewReader(stdin)
+	cmd.Stdout, cmd.Stderr = out, out
+	return cmd.Run()
+}
+
+var issueRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// Run runs one agent turn: a private network with a fresh MySQL, then the
+// agent container with only DBEnv and s.Env, stopped with docker stop at
+// s.Timeout. Its output goes to the log line by line as it comes. All three
+// are removed afterwards, also after a failure or a stop of the runner.
+func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
+	if !issueRef.MatchString(s.Issue) || len(s.Cmd) == 0 {
+		return "", fmt.Errorf("run: issue %q, command %q", s.Issue, s.Cmd)
+	}
+	var names []string
+	for i, kv := range s.Env {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			// Not quoted: it may be a secret.
+			return "", fmt.Errorf("run %s: environment entry %d is not KEY=value", s.Issue, i)
+		}
+		names = append(names, "-e", k)
+	}
+	image, err := d.Image(ctx)
+	if err != nil {
+		return "", err
+	}
+	if err := d.up(ctx, s.Issue); err != nil {
+		return "", err
+	}
+	// Removal must also happen when the runner stops.
+	defer func() {
+		if err := d.down(context.WithoutCancel(ctx), s.Issue); err != nil {
+			d.log().Warn("run's containers not removed", "project", d.Project, "issue", s.Issue, "err", err)
+		}
+	}()
+
+	net := d.network(s.Issue)
+	agent := net + "-agent"
+	argv := append(append([]string{"docker", "run", "--rm", "--interactive"}, workspace.Labels(d.Project, s.Issue)...),
+		"--name", agent, "--network", net, "--add-host", "host.docker.internal:host-gateway",
+		"--user", workspace.AgentUser, "--workdir", s.Dir)
+	for _, kv := range DBEnv {
+		argv = append(argv, "-e", kv)
+	}
+	// Secrets go by name: their values travel in the docker command's
+	// environment, never in its argv.
+	argv = append(append(append(append(argv, names...), s.Mounts...), image), s.Cmd...)
+
+	var timedOut atomic.Bool
+	if s.Timeout > 0 {
+		t := time.AfterFunc(s.Timeout, func() {
+			timedOut.Store(true)
+			if _, err := d.exec(context.WithoutCancel(ctx), "docker", "stop", agent); err != nil {
+				d.log().Warn("agent not stopped at the time limit", "project", d.Project, "issue", s.Issue, "err", err)
+			}
+		})
+		defer t.Stop()
+	}
+	out := &lines{log: d.log().With("project", d.Project, "issue", s.Issue)}
+	stream := d.Stream
+	if stream == nil {
+		stream = streamCommand
+	}
+	err = stream(ctx, s.Env, s.Stdin, out, argv...)
+	out.flush()
+	if timedOut.Load() {
+		err = fmt.Errorf("%w (%s)", ErrTimeout, s.Timeout)
+	} else if err != nil && ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	return out.all.String(), err
+}
+
+func (d *Docker) log() *slog.Logger {
+	if d.Log == nil {
+		return slog.Default()
+	}
+	return d.Log
+}
+
+// lines keeps all output and logs it a line at a time. The stream writes
+// from one goroutine at a time.
+type lines struct {
+	log     *slog.Logger
+	all     bytes.Buffer
+	pending []byte
+}
+
+func (l *lines) Write(p []byte) (int, error) {
+	l.all.Write(p)
+	l.pending = append(l.pending, p...)
+	for {
+		i := bytes.IndexByte(l.pending, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		l.log.Info("agent output", "line", string(l.pending[:i]))
+		l.pending = l.pending[i+1:]
+	}
+}
+
+func (l *lines) flush() {
+	if len(l.pending) > 0 {
+		l.log.Info("agent output", "line", string(l.pending))
+		l.pending = nil
+	}
 }
 
 // Image returns the default image's tag, building it from the embedded
@@ -59,8 +186,8 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 	return tag, err
 }
 
-// network is the name of the issue's private network; its MySQL is
-// network+"-mysql".
+// network is the name of the issue's private network; its containers are
+// network+"-mysql" and network+"-agent".
 func (d *Docker) network(issue string) string {
 	return name.Name + "-" + d.Project + "-" + issue
 }
@@ -73,7 +200,8 @@ func (d *Docker) up(ctx context.Context, issue string) error {
 	if _, err := d.exec(ctx, append(append([]string{"docker", "network", "create"}, labels...), net)...); err != nil {
 		return err
 	}
-	argv := append(append([]string{"docker", "run", "--detach", "--rm"}, labels...),
+	// No --rm: down removes it, and an automatic removal would race with that.
+	argv := append(append([]string{"docker", "run", "--detach"}, labels...),
 		"--name", net+"-mysql", "--network", net, "--network-alias", "mysql")
 	argv = append(append(argv, mysqlEnv...), MySQLImage)
 	if _, err := d.exec(ctx, argv...); err != nil {
@@ -82,11 +210,13 @@ func (d *Docker) up(ctx context.Context, issue string) error {
 	return nil
 }
 
-// down removes the issue's MySQL, with its data volume, and its network. It
-// tries both, so one failure does not leave the other behind.
+// down removes the issue's agent, if a killed docker command left it, and
+// MySQL with its data volume, then the network. It tries both, so one
+// failure does not leave the other behind. docker rm --force ignores a
+// container that is already gone.
 func (d *Docker) down(ctx context.Context, issue string) error {
 	net := d.network(issue)
-	_, err := d.exec(ctx, "docker", "rm", "--force", "--volumes", net+"-mysql")
+	_, err := d.exec(ctx, "docker", "rm", "--force", "--volumes", net+"-agent", net+"-mysql")
 	if _, nerr := d.exec(ctx, "docker", "network", "rm", net); nerr != nil {
 		err = errors.Join(err, nerr)
 	}

@@ -111,10 +111,11 @@ func (p Project) UpdateBranch(ctx context.Context, c *cinderstack.Client, client
 	}
 	p.progress(ctx, c, u.Ref, "Resolving the merge with "+u.Base)
 	res, runErr := cl.Run(ctx, client.Turn{
-		Dir:      u.Dir,
-		Prompt:   MergePrompt(deref(resolver.Instructions), u.Ref, u.Base, u.Branch, conflicts, commits),
-		MaxTurns: u.MaxTurns,
-		Model:    deref(resolver.Model),
+		Dir:        u.Dir,
+		Prompt:     MergePrompt(deref(resolver.Instructions), u.Ref, u.Base, u.Branch, conflicts, commits),
+		MaxTurns:   u.MaxTurns,
+		MaxMinutes: u.Team.MaxMinutes,
+		Model:      deref(resolver.Model),
 	})
 	if ctx.Err() != nil {
 		return conflicts, ctx.Err()
