@@ -21,10 +21,12 @@ import (
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
 )
 
-// fakeAPI answers "METHOD path" with queues[...] in order, the last reply
-// repeating, or else with routes[...]; a missing route is a 404. It records
-// every request with its JSON body.
+// fakeAPI answers "METHOD path" with handle, when it is set and answers, or
+// with queues[...] in order, the last reply repeating, or else with
+// routes[...]; a missing route is a 404. It records every request with its
+// JSON body.
 type fakeAPI struct {
+	handle func(key, body string) (reply, bool)
 	routes map[string]reply
 	queues map[string][]reply
 	mu     sync.Mutex
@@ -51,6 +53,11 @@ func (f *fakeAPI) client(t *testing.T) *cinderstack.Client {
 			rep, ok = q[0], true
 			if len(q) > 1 {
 				f.queues[key] = q[1:]
+			}
+		}
+		if f.handle != nil {
+			if r, handled := f.handle(key, string(in)); handled {
+				rep, ok = r, true
 			}
 		}
 		f.mu.Unlock()

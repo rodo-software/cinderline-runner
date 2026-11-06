@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/client"
@@ -34,6 +35,9 @@ type Job struct {
 	Container string
 	Turn      client.Turn // the fresh first turn
 	Resume    string      // a paused session to resume first with ResumePrompt, from TakePaused
+	// NoComments leaves the comments to the caller: a team's rounds read
+	// them only after the last round, as legacy rounds() does.
+	NoComments bool
 }
 
 // Outcome is how Attempts ended without an error.
@@ -81,7 +85,9 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 	log := p.Log.With("project", p.Config.Key, "issue", j.Ref)
 	t := j.Turn
 	resume := func(session, prompt string) client.Turn {
-		return client.Turn{Dir: t.Dir, Prompt: prompt, SessionID: session, MaxTurns: t.MaxTurns}
+		r := t
+		r.Prompt, r.SessionID = prompt, session
+		return r
 	}
 	next := t
 	if j.Resume != "" {
@@ -89,12 +95,16 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 	}
 
 	// An answer to ask_person is in already, so it is never delivered twice.
-	cs, err := c.ListComments(ctx, j.Ref)
-	if err != nil {
-		return Outcome{}, err
+	var cursor int
+	if !j.NoComments {
+		cs, err := c.ListComments(ctx, j.Ref)
+		if err != nil {
+			return Outcome{}, err
+		}
+		cursor = newestCommentID(cs)
 	}
-	cursor := newestCommentID(cs)
 	var (
+		err      error
 		res      client.Result
 		done     *client.Result // the finished work while its session reads comments
 		readFail int
@@ -123,6 +133,9 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 
 		if err == nil {
 			log.Info("run finished", "attempt", attempt, "session", res.SessionID)
+			if j.NoComments {
+				return Outcome{Result: res}, nil
+			}
 			cs, err := c.ListComments(ctx, j.Ref)
 			if err != nil {
 				return Outcome{Result: res}, err
@@ -167,10 +180,16 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 		}
 	}
 
-	tail, terr := env.Tail(ctx, j.Container)
+	return Outcome{Result: res}, bothFailed(ctx, log, env, j.Container, err)
+}
+
+// bothFailed is the error of a second failed run, with the output tail the
+// Environment kept (0095).
+func bothFailed(ctx context.Context, log *slog.Logger, env environment.Environment, container string, err error) error {
+	tail, terr := env.Tail(ctx, container)
 	if terr != nil {
 		log.Warn("output tail not read", "err", terr)
 		tail = "(not available: " + terr.Error() + ")"
 	}
-	return Outcome{Result: res}, fmt.Errorf("both runs failed (last: %w). Last lines of the output:\n\n```\n%s\n```", err, tail)
+	return fmt.Errorf("both runs failed (last: %w). Last lines of the output:\n\n```\n%s\n```", err, tail)
 }

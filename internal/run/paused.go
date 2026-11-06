@@ -78,8 +78,15 @@ func (p Project) dropPaused(ref string) {
 // resumed run starts fresh. It returns the note only when it names a session
 // of this client and its clone is still there.
 func (p Project) TakePaused(ref, client string) (Paused, bool) {
-	n, ok := p.readPaused(ref)
+	n, ok := p.resumable(ref, client)
 	p.dropPaused(ref)
+	return n, ok
+}
+
+// resumable returns issue ref's note when it names a session of this client
+// and its clone is still there, and leaves it in place.
+func (p Project) resumable(ref, client string) (Paused, bool) {
+	n, ok := p.readPaused(ref)
 	if !ok || n.Session == "" || n.Client != client {
 		return Paused{}, false
 	}
