@@ -28,7 +28,7 @@ func turns(f *client.Fake) []client.Turn {
 	return out
 }
 
-var job = Job{Ref: "CSR-7", Client: "claude", Kind: KindCode, Container: "box", Turn: first}
+var job = Job{Ref: "CSR-7", Client: "claude", Container: "box", Turn: first}
 
 // working is CinderStack while the agent works: the issue stays In progress
 // and nobody comments.

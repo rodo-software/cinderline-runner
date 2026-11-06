@@ -202,10 +202,10 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		}
 		turn.Token = tok.Token
 
-		res, err := p.Attempts(ctx, c, cl, env, Job{Ref: j.Ref, Client: orch.Client, Kind: KindCode, Container: j.Container, Turn: turn, NoComments: true})
+		res, err := p.Attempts(ctx, c, cl, env, Job{Ref: j.Ref, Client: orch.Client, Container: j.Container, Turn: turn, NoComments: true})
 		if res.SessionID != "" {
 			session = res.SessionID
-			if err := p.SavePaused(j.Ref, Paused{Dir: dir, Session: session, Client: orch.Client, Kind: KindCode}); err != nil {
+			if err := p.SavePaused(j.Ref, Paused{Dir: dir, Session: session, Client: orch.Client}); err != nil {
 				log.Warn("paused note not written", "err", err)
 			}
 		}

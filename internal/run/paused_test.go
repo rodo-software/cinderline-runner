@@ -13,13 +13,12 @@ import (
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/client"
 	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
 )
 
 // The cases of legacy runner.test.mjs, lib.test.mjs and lib.prompt.test.mjs
 // on questions, pauses and comments during a run. The legacy runner tests
 // drive a whole process with fake CLIs; these drive the same branches of
-// attempts(), takePaused() and dropChangedKind() against the fakes.
+// attempts() and takePaused() against the fakes.
 
 // pausedNote writes a note for CSR-7 whose clone exists, as pausedRun does.
 func pausedNote(t *testing.T, p Project, n Paused) Paused {
@@ -95,7 +94,7 @@ func TestCommentCursor(t *testing.T) {
 // the note names the same session and nothing is commented or moved.
 func TestAnsweredIssueResumesAndCanPauseAgain(t *testing.T) {
 	p := project(t)
-	note := pausedNote(t, p, Paused{Session: "the-session", Client: "claude", Kind: KindCode})
+	note := pausedNote(t, p, Paused{Session: "the-session", Client: "claude"})
 	got, ok := p.TakePaused("CSR-7", "claude")
 	if !ok || got != note {
 		t.Fatalf("TakePaused = %+v, %v; want %+v", got, ok, note)
@@ -145,7 +144,7 @@ func TestAQuestionPausesTheRun(t *testing.T) {
 				t.Fatalf("Attempts = %+v, %v after %d runs; want paused after 1", out, err, len(cl.Calls()))
 			}
 			got, ok := p.TakePaused("CSR-7", "claude")
-			if want := (Paused{Dir: j.Turn.Dir, Session: "s1", Client: "claude", Kind: KindCode}); !ok || got != want {
+			if want := (Paused{Dir: j.Turn.Dir, Session: "s1", Client: "claude"}); !ok || got != want {
 				t.Fatalf("note = %+v, %v; want %+v", got, ok, want)
 			}
 		})
@@ -195,63 +194,6 @@ func TestTakePaused(t *testing.T) {
 	}
 	if _, ok := project(t).TakePaused("CSR-7", "claude"); ok {
 		t.Fatal("TakePaused found a note that was never written")
-	}
-}
-
-// Ported from runner.test.mjs "a coding run paused before its team became a
-// writer starts over", with legacy dropChangedKind's comment naming the
-// paused coding run's last commit. A writer's paused note has no commit to
-// name; a note of the same kind stays.
-func TestDropChangedKind(t *testing.T) {
-	for _, tt := range []struct {
-		name, noteKind, kind string
-		comment              string // empty: the note stays and nothing is said
-	}{
-		{"code to write", KindCode, KindWrite, "The team changed while paused, so this run starts over. The paused coding run's last commit was abc123."},
-		{"write to code", KindWrite, KindCode, "The team changed while paused, so this run starts over."},
-		{"same kind", KindCode, KindCode, ""},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			p := project(t)
-			note := pausedNote(t, p, Paused{Session: "the-session", Client: "claude", Kind: tt.noteKind})
-			api := &fakeAPI{routes: map[string]reply{"POST /issues/CSR-7/comments": {201, comment(9, false)}}}
-			ws := &workspace.Fake{Heads: []workspace.HeadReply{{Commit: "abc123"}}}
-			if err := p.DropChangedKind(context.Background(), api.client(t), ws, "CSR-7", tt.kind); err != nil {
-				t.Fatal(err)
-			}
-			_, statErr := os.Stat(noteFile(p))
-			if tt.comment == "" {
-				if statErr != nil || len(api.writes()) != 0 {
-					t.Fatalf("note: %v, writes %q; want the note kept and nothing said", statErr, api.writes())
-				}
-				return
-			}
-			if !errors.Is(statErr, os.ErrNotExist) {
-				t.Fatalf("note: %v, want dropped", statErr)
-			}
-			body, _ := json.Marshal(map[string]string{"body": tt.comment})
-			if w := api.writes(); !slices.Equal(w, []string{"POST /issues/CSR-7/comments " + string(body)}) {
-				t.Fatalf("writes = %q, want the comment %q", w, tt.comment)
-			}
-			if c := ws.Calls(); tt.noteKind == KindCode && (len(c) != 1 || c[0].Args[0] != note.Dir) {
-				t.Fatalf("workspace calls = %v, want Head(%s)", c, note.Dir)
-			}
-		})
-	}
-}
-
-// A last commit git cannot read is left out, as in legacy; the run still
-// starts over.
-func TestDropChangedKindWithoutHead(t *testing.T) {
-	p := project(t)
-	pausedNote(t, p, Paused{Session: "s", Client: "claude", Kind: KindCode})
-	api := &fakeAPI{routes: map[string]reply{"POST /issues/CSR-7/comments": {201, comment(9, false)}}}
-	ws := &workspace.Fake{Heads: []workspace.HeadReply{{Err: errors.New("not a git repository")}}}
-	if err := p.DropChangedKind(context.Background(), api.client(t), ws, "CSR-7", KindWrite); err != nil {
-		t.Fatal(err)
-	}
-	if w := api.writes(); len(w) != 1 || !strings.Contains(w[0], `starts over."}`) {
-		t.Fatalf("writes = %q", w)
 	}
 }
 

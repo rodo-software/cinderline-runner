@@ -301,7 +301,7 @@ func TestWorkerPrompt(t *testing.T) {
 func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 	p := project(t)
 	clone := t.TempDir()
-	if err := p.SavePaused("CSR-1", Paused{Dir: clone, Session: "the-session", Client: "claude", Kind: KindCode}); err != nil {
+	if err := p.SavePaused("CSR-1", Paused{Dir: clone, Session: "the-session", Client: "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	tr := newTree("in_progress")
@@ -416,7 +416,7 @@ func TestAFreshTeamRunPlansRunsAndReviews(t *testing.T) {
 	if w := turns(&r.opencode.Fake)[0]; w.Dir != "/fresh" || w.Token != "" {
 		t.Errorf("worker turn = %+v", w)
 	}
-	if want := (Paused{Dir: "/fresh", Session: "s1", Client: "claude", Kind: KindCode}); noteDuringWorker != want {
+	if want := (Paused{Dir: "/fresh", Session: "s1", Client: "claude"}); noteDuringWorker != want {
 		t.Errorf("note between rounds = %+v, want %+v", noteDuringWorker, want)
 	}
 	if got := r.progress(); !slices.Equal(got, []string{"Builder is planning", "Running Qwen on CSR-2 Part", "Builder is reviewing the sub-issues"}) {
@@ -438,7 +438,7 @@ func TestAFailedWorkerIsMarkedFailedAndTheRoundGoesOn(t *testing.T) {
 	tr.add("CSR-2", "Part", "Qwen", "todo")
 	tr.add("CSR-3", "More", "Qwen", "todo")
 	r := newTeamRun(tr)
-	if err := p.SavePaused("CSR-1", Paused{Dir: t.TempDir(), Session: "s1", Client: "claude", Kind: KindCode}); err != nil {
+	if err := p.SavePaused("CSR-1", Paused{Dir: t.TempDir(), Session: "s1", Client: "claude"}); err != nil {
 		t.Fatal(err)
 	}
 	r.claude.Runs = []client.RunReply{ok("s1", "Reviewed.")}

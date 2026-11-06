@@ -130,8 +130,8 @@ var operations = []operation{
 	{"heartbeat", func(ctx context.Context, c *Client) (any, error) { return nil, c.Heartbeat(ctx) },
 		"POST", "/api/runner/v1/heartbeat", "", "", 204, ""},
 	{"createAgentToken", func(ctx context.Context, c *Client) (any, error) {
-		return c.CreateAgentToken(ctx, "CSR-9", KindWriter, "Ada")
-	}, "POST", "/api/runner/v1/runs/CSR-9/agent-token", "", `{"kind":"writer","agent":"Ada"}`, 201,
+		return c.CreateAgentToken(ctx, "CSR-9", KindOrchestrator, "Ada")
+	}, "POST", "/api/runner/v1/runs/CSR-9/agent-token", "", `{"kind":"orchestrator","agent":"Ada"}`, 201,
 		`{"token":"` + agentToken + `","expires_at":"2026-11-05T12:00:00Z"}`},
 	{"deleteAgentTokens", func(ctx context.Context, c *Client) (any, error) { return nil, c.DeleteAgentTokens(ctx, "CSR-9") },
 		"DELETE", "/api/runner/v1/runs/CSR-9/agent-token", "", "", 204, ""},

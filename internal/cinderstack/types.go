@@ -127,7 +127,6 @@ type TokenKind string
 // The agent token kinds.
 const (
 	KindOrchestrator TokenKind = "orchestrator"
-	KindWriter       TokenKind = "writer"
 	KindReader       TokenKind = "reader"
 )
 

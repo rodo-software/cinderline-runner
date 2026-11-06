@@ -31,7 +31,6 @@ const UnreadComments = "\n\nA person commented during the run, but resuming the 
 type Job struct {
 	Ref       string
 	Client    string // the agent's CLI, kept in a paused note
-	Kind      string // KindCode or KindWrite, kept in a paused note
 	Container string
 	Turn      client.Turn // the fresh first turn
 	Resume    string      // a paused session to resume first with ResumePrompt, from TakePaused
@@ -124,7 +123,7 @@ func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.
 			return Outcome{Result: res}, ierr
 		}
 		if s := issue.Status.Value; s == "blocked" || s == "todo" {
-			if err := p.SavePaused(j.Ref, Paused{Dir: t.Dir, Session: res.SessionID, Client: j.Client, Kind: j.Kind}); err != nil {
+			if err := p.SavePaused(j.Ref, Paused{Dir: t.Dir, Session: res.SessionID, Client: j.Client}); err != nil {
 				log.Warn("paused note not written", "err", err)
 			}
 			log.Info("paused for a person's answer", "status", s, "session", res.SessionID)
