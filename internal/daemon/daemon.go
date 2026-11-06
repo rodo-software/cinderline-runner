@@ -148,6 +148,15 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		c := cinderstack.New(p.URL, token, o.Version)
 		c.Log = log.With("project", p.Key)
 		wg.Go(func() {
+			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
+			// Clients stay empty until their detection in M7 (CSR-59); only the default environment exists yet.
+			r := cinderstack.Report{RunnerVersion: o.Version, Clients: []cinderstack.ReportClient{}, Environments: []string{"default"}}
+			if err := c.PutReport(ctx, r); err != nil && ctx.Err() == nil {
+				c.Log.Warn("report failed", "err", err)
+			}
+			if err := c.Heartbeat(ctx); err != nil && ctx.Err() == nil {
+				c.Log.Warn("heartbeat failed", "err", err)
+			}
 			t := time.NewTicker(cinderstack.HeartbeatInterval)
 			defer t.Stop()
 			c.RunHeartbeats(ctx, t.C)

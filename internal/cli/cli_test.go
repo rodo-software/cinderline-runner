@@ -122,6 +122,11 @@ func TestDispatch(t *testing.T) {
 		{[]string{"add", "x"}, 2, "", true},
 		{[]string{"remove"}, 2, "", true},
 		{[]string{"remove", "-bogus", "WEB"}, 2, "", true},
+		{[]string{"run", "x"}, 2, "", true},
+		{[]string{"status", "x"}, 2, "", true},
+		{[]string{"logs", "x"}, 2, "", true},
+		{[]string{"logs", "-n", "x"}, 2, "", true},
+		{[]string{"stop", "x"}, 2, "", true},
 	}
 	for _, tt := range tests {
 		c, out, errb := newCLI(t, "")
@@ -137,7 +142,7 @@ func TestDispatch(t *testing.T) {
 	}
 	c, _, errb := newCLI(t, "")
 	c.Run(nil)
-	for _, cmd := range []string{"add", "remove", "version"} {
+	for _, cmd := range []string{"add", "remove", "run", "status", "logs", "stop", "version"} {
 		if !strings.Contains(errb.String(), "  "+cmd) {
 			t.Errorf("usage %q does not list %s", errb.String(), cmd)
 		}

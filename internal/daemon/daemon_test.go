@@ -27,9 +27,10 @@ import (
 // app is a fake CinderStack: the first /work answers an issue, a repeated one is
 // held until the client goes away. polls counts the first ones, one per client.
 type app struct {
-	url   string
-	mu    sync.Mutex
-	polls int
+	url                 string
+	mu                  sync.Mutex
+	polls               int
+	reports, heartbeats []string // bodies and project tokens, in order
 }
 
 func (a *app) count() int {
@@ -52,6 +53,17 @@ func newApp(t *testing.T) *app {
 			io.WriteString(w, `{"issue":{"ref":"A-1","title":"T","status":{"value":"todo","label":"To do"}}}`)
 		case path == "/issues": // recovery's list of In progress issues
 			io.WriteString(w, `{"issues":[]}`)
+		case path == "/report":
+			body, _ := io.ReadAll(r.Body)
+			a.mu.Lock()
+			a.reports = append(a.reports, r.Header.Get("Authorization")+" "+string(body))
+			a.mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case path == "/heartbeat":
+			a.mu.Lock()
+			a.heartbeats = append(a.heartbeats, r.Header.Get("Authorization"))
+			a.mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
@@ -168,6 +180,30 @@ func TestStatus(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(p.Log); strings.Contains(string(raw), "tok-A") {
 		t.Errorf("the token is in the log:\n%s", raw)
+	}
+}
+
+// Decision on CSR-74 (option A): each slot reports and heartbeats at start, not only after the first 60 s tick.
+func TestReportAndHeartbeatAtStart(t *testing.T) {
+	keyring.MockInit()
+	a := newApp(t)
+	p := paths(t)
+	pa := project(a.url, "A")
+	writeConfig(t, p, pa)
+	setToken(t, p, pa)
+	start(t, p)
+	waitFor(t, "a report and a heartbeat", func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return len(a.reports) == 1 && len(a.heartbeats) == 1
+	})
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if want := `Bearer tok-A {"runner_version":"1.2.3","clients":[],"environments":["default"]}`; strings.TrimSpace(a.reports[0]) != want {
+		t.Errorf("report = %s, want %s", a.reports[0], want)
+	}
+	if a.heartbeats[0] != "Bearer tok-A" {
+		t.Errorf("heartbeat sent with %q", a.heartbeats[0])
 	}
 }
 
