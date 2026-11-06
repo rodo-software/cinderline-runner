@@ -1,5 +1,8 @@
 // Package forge defines Forge, the git host of a project's repository
-// (pull requests and merges), and Fake, its in-memory stand-in for tests.
+// (pull requests and merges), its implementations GitHub (GitHub and
+// GitHub Enterprise), GitLab (gitlab.com and self-managed) and Forgejo
+// (Forgejo and Gitea), Bitbucket (Bitbucket Cloud), and Fake, its in-memory
+// stand-in for tests.
 package forge
 
 import "context"

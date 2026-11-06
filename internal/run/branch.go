@@ -116,6 +116,7 @@ func (p Project) UpdateBranch(ctx context.Context, c *cinderstack.Client, client
 		MaxTurns:   u.MaxTurns,
 		MaxMinutes: u.Team.MaxMinutes,
 		Model:      deref(resolver.Model),
+		Ponytail:   u.Team.Ponytail,
 	})
 	if ctx.Err() != nil {
 		return conflicts, ctx.Err()

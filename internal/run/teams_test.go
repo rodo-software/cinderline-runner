@@ -388,6 +388,7 @@ func TestAFreshTeamRunPlansRunsAndReviews(t *testing.T) {
 	p := project(t)
 	tr := newTree("in_progress")
 	r := newTeamRun(tr)
+	r.job.Team.Ponytail = true // every turn of a ponytail team carries it
 	r.claude.Runs = []client.RunReply{ok("s1", "Planned."), ok("s1", "Done.")}
 	r.claude.during = func(t client.Turn) {
 		if t.SessionID == "" {
@@ -408,10 +409,10 @@ func TestAFreshTeamRunPlansRunsAndReviews(t *testing.T) {
 		t.Errorf("Prepare calls = %+v", got)
 	}
 	plan := turns(&r.claude.Fake)[0]
-	if want := (client.Turn{Dir: "/fresh", Prompt: "plan CSR-1", MaxTurns: 30, MaxMinutes: 45, Model: "m", Token: "orchestrator-CSR-1"}); plan != want {
+	if want := (client.Turn{Dir: "/fresh", Prompt: "plan CSR-1", MaxTurns: 30, MaxMinutes: 45, Model: "m", Token: "orchestrator-CSR-1", Ponytail: true}); plan != want {
 		t.Errorf("planning turn = %+v, want %+v", plan, want)
 	}
-	if w := turns(&r.opencode.Fake)[0]; w.Dir != "/fresh" || w.Token != "" || w.MaxMinutes != 45 {
+	if w := turns(&r.opencode.Fake)[0]; w.Dir != "/fresh" || w.Token != "" || w.MaxMinutes != 45 || !w.Ponytail {
 		t.Errorf("worker turn = %+v", w)
 	}
 	if want := (Paused{Dir: "/fresh", Session: "s1", Client: "claude"}); noteDuringWorker != want {

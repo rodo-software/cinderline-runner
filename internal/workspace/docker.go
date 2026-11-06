@@ -135,8 +135,12 @@ func (d *Docker) output(ctx context.Context, env []string, argv ...string) (stri
 }
 
 // volume is the name of the project's volume of the given kind.
-func (d *Docker) volume(kind string) string {
-	return name.Name + "-" + d.Project + "-" + kind
+func (d *Docker) volume(kind string) string { return Volume(d.Project, kind) }
+
+// Volume is the name of a project's volume of the given kind: repo, runs,
+// or state for the clients' sessions and config dirs.
+func Volume(project, kind string) string {
+	return name.Name + "-" + project + "-" + kind
 }
 
 func (d *Docker) labels(issue string) []string { return Labels(d.Project, issue) }

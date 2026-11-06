@@ -192,7 +192,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		}
 		cursor := newestCommentID(cs)
 
-		turn := client.Turn{Dir: dir, SessionID: session, MaxTurns: j.MaxTurns, MaxMinutes: j.Team.MaxMinutes, Model: deref(orch.Model)}
+		turn := client.Turn{Dir: dir, SessionID: session, MaxTurns: j.MaxTurns, MaxMinutes: j.Team.MaxMinutes, Model: deref(orch.Model), Ponytail: j.Team.Ponytail}
 		switch {
 		case session == "":
 			turn.Prompt = j.Prompt
@@ -338,6 +338,7 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients
 		MaxTurns:   j.MaxTurns,
 		MaxMinutes: j.Team.MaxMinutes,
 		Model:      deref(agent.Model),
+		Ponytail:   j.Team.Ponytail,
 	}
 	if self {
 		// On the sub-issue: a reader token for the parent would replace the orchestrator's.

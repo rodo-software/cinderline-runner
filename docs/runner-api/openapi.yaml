@@ -808,7 +808,7 @@ components:
           enum: [default, docker, existing]
     Team:
       type: object
-      required: [id, name, max_minutes, trusted, max_sub_issues, agents]
+      required: [id, name, max_minutes, trusted, max_sub_issues, ponytail, agents]
       properties:
         id:
           type: integer
@@ -825,6 +825,9 @@ components:
           description: The most sub-issues one issue may get, for the orchestrator's prompt (decision 0122).
           type: integer
           minimum: 0
+        ponytail:
+          description: Whether the team's Claude Code runs load the ponytail plugin (2026-11-03-per-team-ponytail-plugin).
+          type: boolean
         agents:
           type: array
           items:
