@@ -41,6 +41,7 @@ func commands() []command {
 		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
 		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
 		{"stop", "", "stop the running " + name.Name + " at once", (*CLI).stopDaemon},
+		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

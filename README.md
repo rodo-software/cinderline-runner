@@ -2,7 +2,7 @@
 
 The CinderStack runner is a native Go program on a developer's machine that takes To do issues from a CinderStack instance, runs an agent team on each in its own Docker container, pushes a branch and opens a pull request.
 
-Status: milestone M0, the repository skeleton only.
+Status: milestone M5, distribution and life cycle.
 
 ## Install
 
@@ -23,6 +23,10 @@ irm https://raw.githubusercontent.com/rodo-software/cinderstack-runner/main/scri
 ```
 
 Installs to `%LocalAppData%\Programs\cinderstack\cinderstack.exe`. If that directory is not on your user `PATH`, the script prints a command to add it.
+
+### Run as a service
+
+`cinderstack service install` registers a user-level service (a launchd LaunchAgent on macOS, a systemd user unit on Linux, a logon scheduled task on Windows) that runs `cinderstack run` at login and starts it now; `cinderstack status`, `cinderstack logs` and `cinderstack stop` talk to it; `cinderstack service uninstall` stops and removes it. On Linux it needs systemd. `cinderstack stop` stops it until the next login. Linux and Windows restart it after a crash; macOS does not, so check `cinderstack status` there.
 
 To pin a specific version, set `CINDERSTACK_DOWNLOAD_URL` before running (e.g.
 `https://github.com/rodo-software/cinderstack-runner/releases/download/v0.1.0`).
