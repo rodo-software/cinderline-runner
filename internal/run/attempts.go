@@ -48,8 +48,9 @@ type Job struct {
 // Outcome is how Attempts ended without an error.
 type Outcome struct {
 	client.Result
-	Paused bool // the issue waits for a person; the note is written and the clone stays
-	Unread bool // reading a person's comments failed twice: publish with UnreadComments
+	Dir    string // the issue's clone dir
+	Paused bool   // the issue waits for a person; the note is written and the clone stays
+	Unread bool   // reading a person's comments failed twice: publish with UnreadComments
 }
 
 // newestCommentID is the comment cursor: IDs, not timestamps, so the

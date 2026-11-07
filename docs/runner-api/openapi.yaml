@@ -818,6 +818,10 @@ components:
           description: The longest an agent run of this team may take.
           type: integer
           minimum: 1
+        max_turns:
+          description: The most turns an agent run of this team may take (Claude Code's --max-turns, OpenCode's steps). The runner uses 50 when it is missing (decision 2026-11-07-team-max-turns).
+          type: integer
+          minimum: 1
         trusted:
           description: Whether the runner requests the merge after the pull request (2026-11-04-runner-waits-for-merge).
           type: boolean

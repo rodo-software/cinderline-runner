@@ -121,7 +121,7 @@ var operations = []operation{
 		"POST", "/api/runner/v1/issues/CSR-9/progress", "", `{"body":"step 2"}`, 204, ""},
 	{"getTeam", func(ctx context.Context, c *Client) (any, error) { return c.GetTeam(ctx, 2) },
 		"GET", "/api/runner/v1/teams/2", "", "", 200,
-		`{"id":2,"name":"Dev","max_minutes":30,"trusted":true,"max_sub_issues":7,"ponytail":true,"agents":[{"name":"Ada","role":"orchestrator","client":"claude","model":null,"instructions":"be brief","description":null,"price":{"input":5,"output":25}},{"name":"Qwen","role":"worker","client":"opencode","model":"q","instructions":null,"description":"Cheap.","price":null}]}`},
+		`{"id":2,"name":"Dev","max_minutes":30,"max_turns":0,"trusted":true,"max_sub_issues":7,"ponytail":true,"agents":[{"name":"Ada","role":"orchestrator","client":"claude","model":null,"instructions":"be brief","description":null,"price":{"input":5,"output":25}},{"name":"Qwen","role":"worker","client":"opencode","model":"q","instructions":null,"description":"Cheap.","price":null}]}`},
 	{"putReport", func(ctx context.Context, c *Client) (any, error) {
 		v := "2.0.1"
 		return nil, c.PutReport(ctx, Report{RunnerVersion: version, Clients: []ReportClient{

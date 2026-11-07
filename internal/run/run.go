@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,24 +16,7 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
 )
-
-// Project is what the steps of one configured project need.
-type Project struct {
-	Config  config.Project
-	Secrets *secrets.Secrets
-	State   string                  // the host state folder (config.Paths.State)
-	Env     environment.Environment // where the project's turns run
-	Log     *slog.Logger
-}
-
-// Hooks returns the project's steps for its scheduler slot.
-func (p Project) Hooks() scheduler.Hooks {
-	return scheduler.Hooks{Recover: p.Recover, Pin: p.Pin, Check: p.Check}
-}
 
 // PausedDir is the folder of a project's paused notes, one <REF>.json per
 // paused issue, in the host state folder. The URL is part of the name because
@@ -117,9 +99,6 @@ func (p Project) Pin(ctx context.Context, c *cinderstack.Client) error {
 	}
 	return nil
 }
-
-// keys are the clients this runner runs, with the model credential each needs.
-var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "opencode": secrets.OpenRouterKey}
 
 // Check refuses, before the claim, an issue whose team has an agent this
 // runner cannot run: an unsupported client, or a client without its key, so

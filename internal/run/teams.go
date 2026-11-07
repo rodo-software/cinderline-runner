@@ -148,6 +148,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		return Outcome{}, fmt.Errorf("agent %s runs on %s, which this runner does not run", orch.Name, orch.Client)
 	}
 
+	var dir string
 	defer func() {
 		if ctx.Err() != nil {
 			return // a stop: the note resumes the run after the restart
@@ -155,13 +156,17 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		if !out.Paused {
 			p.dropPaused(j.Ref)
 		}
+		if err == nil {
+			out.Dir = dir
+		}
 		if err := c.DeleteAgentTokens(ctx, j.Ref); err != nil {
 			log.Warn("agent tokens not deleted", "err", err)
 		}
 	}()
 
 	note, resumed := p.resumable(j.Ref, orch.Client)
-	dir, session := note.Dir, note.Session
+	dir = note.Dir
+	session := note.Session
 	if !resumed {
 		if dir, err = ws.Prepare(ctx, j.Branch, j.Base); err != nil {
 			return Outcome{}, err

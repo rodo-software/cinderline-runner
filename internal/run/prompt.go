@@ -95,8 +95,8 @@ How the team works:
 }
 
 // Started is the first progress line of a claimed issue, as legacy
-// runner.mjs reports after the claim. The run hook calls it right after the
-// claim; that hook is not wired yet.
+// runner.mjs reports after the claim. The Run hook calls it right after the
+// claim.
 func (p Project) Started(ctx context.Context, c *cinderstack.Client, ref string, team cinderstack.Team) {
 	p.progress(ctx, c, ref, "Started "+team.Name+" / "+team.Agents[0].Name)
 }
