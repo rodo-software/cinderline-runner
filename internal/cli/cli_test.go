@@ -15,6 +15,7 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/rodo-software/cinderstack-runner/internal/config"
+	"github.com/rodo-software/cinderstack-runner/internal/forge"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
 )
@@ -71,6 +72,9 @@ func newCLI(t *testing.T, stdin string) (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		Stdin:   strings.NewReader(stdin),
 		Stdout:  &out,
 		Stderr:  &errb,
+		Forge: func(string, string, string) (forge.Forge, error) {
+			return &forge.Fake{CISecretsReplies: []forge.CISecretsReply{{}}}, nil
+		},
 	}, &out, &errb
 }
 

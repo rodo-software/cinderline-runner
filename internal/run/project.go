@@ -90,18 +90,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		}
 	}
 	p.Forge = func(kind string) (forge.Forge, error) {
-		switch kind {
-		case "github":
-			return forge.NewGitHub(cfg.Repository, gitToken)
-		case "gitlab":
-			return forge.NewGitLab(cfg.Repository, gitToken)
-		case "forgejo":
-			return forge.NewForgejo(cfg.Repository, gitToken)
-		case "bitbucket":
-			return forge.NewBitbucket(cfg.Repository, gitToken)
-		default:
-			return nil, fmt.Errorf("unsupported forge kind %q", kind)
-		}
+		return forge.New(kind, cfg.Repository, gitToken)
 	}
 	p.prepare = func(ctx context.Context) error {
 		image, err := env.Image(ctx)

@@ -43,15 +43,22 @@ type MergeStateReply struct {
 	Err   error
 }
 
+// CISecretsReply is one scripted reply to CISecrets.
+type CISecretsReply struct {
+	Exposed []string
+	Err     error
+}
+
 // Fake is a scripted Forge. Fill the queues before use; each call pops the
 // next reply in order and is recorded. An empty queue returns the zero value
 // and ErrNotScripted.
 type Fake struct {
-	DefaultBranches []DefaultBranchReply
-	PullRequests    []PullRequestReply
-	Finds           []FindReply
-	Merges          []error // replies to RequestMerge
-	MergeStates     []MergeStateReply
+	DefaultBranches  []DefaultBranchReply
+	PullRequests     []PullRequestReply
+	Finds            []FindReply
+	Merges           []error // replies to RequestMerge
+	MergeStates      []MergeStateReply
+	CISecretsReplies []CISecretsReply
 
 	mu    sync.Mutex
 	calls []Call
@@ -126,4 +133,16 @@ func (f *Fake) MergeState(_ context.Context, branch string) (MergeState, error) 
 	r := f.MergeStates[0]
 	f.MergeStates = f.MergeStates[1:]
 	return r.State, r.Err
+}
+
+func (f *Fake) CISecrets(_ context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("CISecrets")
+	if len(f.CISecretsReplies) == 0 {
+		return nil, fmt.Errorf("%w for CISecrets", ErrNotScripted)
+	}
+	r := f.CISecretsReplies[0]
+	f.CISecretsReplies = f.CISecretsReplies[1:]
+	return r.Exposed, r.Err
 }

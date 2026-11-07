@@ -12,6 +12,7 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/config"
+	"github.com/rodo-software/cinderstack-runner/internal/forge"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
 )
@@ -113,7 +114,7 @@ func (c *CLI) add(args []string) int {
 		p.Repository = v
 	}
 
-	// Stored, not checked against the forge: no forge implementation exists yet (assumption of CSR-72).
+	// Stored, not validated against the forge.
 	var gitToken string
 	for gitToken == "" {
 		if gitToken, err = ask("Git token: "); err != nil {
@@ -145,6 +146,26 @@ func (c *CLI) add(args []string) int {
 			return code
 		}
 	}
+
+	build := c.Forge
+	if build == nil {
+		build = forge.New
+	}
+	// CI secrets check (EMBER-56): a warning, never fatal.
+	var exposed []string
+	fg, err := build(proj.Forge, p.Repository, gitToken)
+	if err == nil {
+		exposed, err = fg.CISecrets(context.Background())
+	}
+	if err != nil {
+		say("Warning: could not check whether CI on the runner's branches can read secrets: %v.", err)
+	} else if len(exposed) > 0 {
+		say("Warning: CI on any branch, including the runner's %s/ branches, can read: %s.", name.Name, strings.Join(exposed, ", "))
+	}
+	if err != nil || len(exposed) > 0 {
+		say(`Move them to a protected environment or protected branches: see "CI secrets" in the README.`)
+	}
+
 	say("Added %s at %s", p.Key, p.URL)
 	return 0
 }

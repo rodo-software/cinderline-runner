@@ -52,6 +52,26 @@ govulncheck ./...
 
 See [AGENTS.md](AGENTS.md) and [docs/runner-rewrite-plan.md](docs/runner-rewrite-plan.md).
 
+## CI secrets
+
+The runner's agents push to `cinderstack/<REF>` branches. Any CI secret that is available to every branch can be read by code an agent wrote and committed. `cinderstack add` warns when it detects such secrets.
+
+### GitHub
+
+Move secrets from repository or organisation secrets to an environment (Settings → Environments) whose "Deployment branches and tags" is set to protected branches or selected branches, or has required reviewers enabled. Reference the environment with `environment:` in the workflow.
+
+### GitLab
+
+Mark CI/CD variables as "Protected" (Settings → CI/CD → Variables), for both project and group variables, so that only protected branches and tags receive them. Ensure `cinderstack/*` is not a protected branch pattern.
+
+### Forgejo / Gitea
+
+Actions secrets have no branch protection: every workflow on every branch can read the repository's and its organisation's secrets, whatever its trigger. Keep deploy secrets out of both, for example by deploying from a separate repository the runner does not push to.
+
+### Bitbucket Cloud
+
+Repository and workspace variables reach every branch. Move them to deployment environments and restrict which branches or users can deploy (deployment permissions, Premium tier). The check cannot read those permissions via the API, so it warns when deployment variables exist.
+
 ## A CinderStack on the same machine
 
 Agent containers reach the host as `host.docker.internal`, so a CinderStack running on the same machine is configured as `http://host.docker.internal:<port>`. On Linux that name points at the Docker bridge address, not at `127.0.0.1`: a backend that listens only on `127.0.0.1` (for example `php artisan serve`) is not reachable from the agents. Let it listen on the bridge address or on all addresses, for example `php artisan serve --host=0.0.0.0`. Docker Desktop on macOS and Windows forwards to the host's loopback, so there it works either way.

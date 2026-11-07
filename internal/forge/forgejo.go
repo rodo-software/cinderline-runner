@@ -25,6 +25,8 @@ type Forgejo struct {
 	HTTP *http.Client // set by NewForgejo; replace it before first use, e.g. in tests
 
 	repo  string // REST base of the repository: https://<host>/api/v1/repos/<owner>/<repo>
+	owner string // repository owner
+	host  string // API base: https://<host>/api/v1
 	token string
 	sleep func(context.Context, time.Duration) error // between merge attempts; replaced in tests
 }
@@ -53,6 +55,8 @@ func NewForgejo(repository, token string) (*Forgejo, error) {
 	return &Forgejo{
 		HTTP:  &http.Client{Timeout: 30 * time.Second},
 		repo:  "https://" + host + "/api/v1/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo),
+		owner: owner,
+		host:  "https://" + host + "/api/v1",
 		token: token,
 		sleep: sleep,
 	}, nil
@@ -156,6 +160,40 @@ func (f *Forgejo) MergeState(ctx context.Context, branch string) (MergeState, er
 		return MergeFailed, nil
 	}
 	return MergePending, nil
+}
+
+func (f *Forgejo) CISecrets(ctx context.Context) ([]string, error) {
+	var exposed []string
+
+	var repoSecrets []struct {
+		Name string `json:"name"`
+	}
+	err := f.do(ctx, http.MethodGet, f.repo+"/actions/secrets?limit=50", nil, &repoSecrets)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range repoSecrets {
+		exposed = append(exposed, "repository secret "+s.Name)
+	}
+
+	var orgSecrets []struct {
+		Name string `json:"name"`
+	}
+	err = f.do(ctx, http.MethodGet, f.host+"/orgs/"+url.PathEscape(f.owner)+"/actions/secrets?limit=50", nil, &orgSecrets)
+	if err != nil {
+		var e *forgejoError
+		if errors.As(err, &e) && e.status == http.StatusNotFound {
+			// owner is a user, not an org
+		} else {
+			return nil, err
+		}
+	} else {
+		for _, s := range orgSecrets {
+			exposed = append(exposed, "organization secret "+s.Name)
+		}
+	}
+	// shortcut: first page only (50 entries), upgrade when a repository has more
+	return exposed, nil
 }
 
 // forgejoPageSize is the page size used when listing pull requests.

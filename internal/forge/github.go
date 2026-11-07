@@ -197,6 +197,79 @@ func (g *GitHub) MergeState(ctx context.Context, branch string) (MergeState, err
 	return MergePending, nil
 }
 
+func (g *GitHub) CISecrets(ctx context.Context) ([]string, error) {
+	var exposed []string
+
+	var repoSecrets struct {
+		Secrets []struct {
+			Name string `json:"name"`
+		} `json:"secrets"`
+	}
+	err := g.do(ctx, http.MethodGet, g.repo+"/actions/secrets?per_page=100", nil, &repoSecrets)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range repoSecrets.Secrets {
+		exposed = append(exposed, "repository secret "+s.Name)
+	}
+
+	var orgSecrets struct {
+		Secrets []struct {
+			Name string `json:"name"`
+		} `json:"secrets"`
+	}
+	err = g.do(ctx, http.MethodGet, g.repo+"/actions/organization-secrets?per_page=100", nil, &orgSecrets)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range orgSecrets.Secrets {
+		exposed = append(exposed, "organization secret "+s.Name)
+	}
+
+	var envs struct {
+		Environments []struct {
+			Name                   string    `json:"name"`
+			DeploymentBranchPolicy *struct{} `json:"deployment_branch_policy"` // nil: any branch may deploy
+			ProtectionRules        []struct {
+				Type string `json:"type"`
+			} `json:"protection_rules"`
+		} `json:"environments"`
+	}
+	err = g.do(ctx, http.MethodGet, g.repo+"/environments?per_page=100", nil, &envs)
+	if err != nil {
+		return nil, err
+	}
+	for _, env := range envs.Environments {
+		if env.DeploymentBranchPolicy != nil {
+			continue
+		}
+		hasReviewer := false
+		for _, rule := range env.ProtectionRules {
+			if rule.Type == "required_reviewers" {
+				hasReviewer = true
+				break
+			}
+		}
+		if hasReviewer {
+			continue
+		}
+		var envSecrets struct {
+			Secrets []struct {
+				Name string `json:"name"`
+			} `json:"secrets"`
+		}
+		err = g.do(ctx, http.MethodGet, g.repo+"/environments/"+url.PathEscape(env.Name)+"/secrets?per_page=100", nil, &envSecrets)
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range envSecrets.Secrets {
+			exposed = append(exposed, "environment "+env.Name+" secret "+s.Name)
+		}
+	}
+	// shortcut: first page only (100 entries), upgrade when a repository has more
+	return exposed, nil
+}
+
 // pulls is the list of the branch's pull requests in state, by head
 // owner:branch, which only matches branches in the repository itself.
 func (g *GitHub) pulls(state, branch string) string {

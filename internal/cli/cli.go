@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderstack-runner/internal/config"
+	"github.com/rodo-software/cinderstack-runner/internal/forge"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
 	"github.com/rodo-software/cinderstack-runner/internal/workspace"
@@ -24,9 +25,10 @@ type CLI struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 
-	exec          workspace.Exec         // nil means workspace.RunCommand
-	removeService func(exe string) error // nil means uninstallService
-	pathsErr      error                  // from config.DefaultPaths; only commands that need the paths fail on it
+	exec          workspace.Exec                                            // nil means workspace.RunCommand
+	removeService func(exe string) error                                    // nil means uninstallService
+	Forge         func(kind, repository, token string) (forge.Forge, error) // nil: forge.New
+	pathsErr      error                                                     // from config.DefaultPaths; only commands that need the paths fail on it
 }
 
 // command is one subcommand. A new command is one function and one entry in commands.
