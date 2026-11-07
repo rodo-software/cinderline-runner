@@ -3,8 +3,8 @@ info:
   title: CinderStack runner API
   version: 1.0.0
   license:
-    name: MIT
-    identifier: MIT
+    name: Functional Source License, Version 1.1, MIT Future License
+    identifier: FSL-1.1-MIT
   description: |
     The REST API a runner uses to take issues from a CinderStack instance, run
     agent teams on them and report back (plan M1, decision 2026-11-05-runner-rewrite-details).

@@ -29,4 +29,4 @@ Agent containers reach the host as `host.docker.internal`, so a CinderStack runn
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+The runner is fair source, not open source: it is licensed under the [Functional Source License, Version 1.1, MIT Future License](https://fsl.software) (FSL-1.1-MIT); see [LICENSE](LICENSE) and [NOTICE](NOTICE). You may read, modify and run it, also against your own backend for internal use, but not ship or host it as part of a commercial product or service that competes with CinderStack. Each version becomes available under the MIT licence two years after its release. Commercial licences are available from Rodo Software.

@@ -23,7 +23,7 @@ Made by Willem on 2026-11-04; recorded in decision 2026-11-04-runner-rewrite-hos
 | --- | --- |
 | Shape | A native program on the host, a container per agent run |
 | Language | Go |
-| Repository | `github.com/rodo-software/cinderstack-runner`, public, MIT. Runner issues get their own project in CinderStack |
+| Repository | `github.com/rodo-software/cinderstack-runner`, public, FSL-1.1-MIT (decision 2026-11-07-fsl-licence). Runner issues get their own project in CinderStack |
 | Concurrency | One run at a time per project, projects in parallel. A scheduler with one slot per project, so more slots per project is a setting later (0091 allows different issues in parallel) |
 | Environments | The default image (PHP and Node, like today), a per-project image (`docker`, EMBER-28) and an existing setup (`existing`, EMBER-29). `host` and `devcontainer.json` are not in this plan |
 | Agent CLIs | A read-only **tools volume** of pinned CLI binaries, which the runner downloads on the user's machine and mounts into any image |
@@ -64,7 +64,7 @@ Each milestone ends with Pest, Pint and Larastan passing on the app side, and wi
 - **Willem:** creates the GitHub repository `rodo-software/cinderstack-runner` (done: it exists), the runner project in CinderStack with that repository URL, a team for it, and its runner token.
 - **App repository:** add a pinned Go toolchain to `runner/Dockerfile` so teams can build and test Go. Agents in today's container have no Docker, so tests that need Docker run in the new repository's CI, not in the agent's run.
 - **Second runner:** today's runner serves one project per folder (R5). Copy `runner/` to its own folder with its own `.env` for the runner project; the folder name gives it its own compose project.
-- **Repository skeleton:** `LICENSE` (MIT, Rodo Software, decision 2026-11-04-licences-before-publishing), `NOTICE`, `README.md`, `AGENTS.md` (already adapted, in the root), `docs/decisions/` (already started), `go.mod` with the module path above and the latest stable Go, `cmd/cinderstack/main.go` with `cinderstack version`, `internal/name` with the one name constant, and a GitHub Actions CI that runs the checks above on Linux, macOS and Windows plus a GoReleaser snapshot build of every target, and a test that listens and dials on a Unix socket on each platform (for M2's local API).
+- **Repository skeleton:** `LICENSE` (FSL-1.1-MIT, Rodo Software, decision 2026-11-07-fsl-licence; MIT until then, decision 2026-11-04-licences-before-publishing), `NOTICE`, `README.md`, `AGENTS.md` (already adapted, in the root), `docs/decisions/` (already started), `go.mod` with the module path above and the latest stable Go, `cmd/cinderstack/main.go` with `cinderstack version`, `internal/name` with the one name constant, and a GitHub Actions CI that runs the checks above on Linux, macOS and Windows plus a GoReleaser snapshot build of every target, and a test that listens and dials on a Unix socket on each platform (for M2's local API).
 - **Done when:** a team on the runner project can build and test `cinderstack version` in its run, and CI is green on the three platforms.
 
 ### M1. CinderStack: runner API and scoped agent tokens (app repository)
