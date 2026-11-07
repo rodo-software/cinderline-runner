@@ -4,6 +4,29 @@ The CinderStack runner is a native Go program on a developer's machine that take
 
 Status: milestone M0, the repository skeleton only.
 
+## Install
+
+Install the latest `cinderstack` binary with one line — no sudo or elevation required. Each script downloads the archive for your OS and architecture, verifies its SHA-256 checksum against the release's `checksums.txt` (refusing on mismatch), and installs the binary.
+
+**macOS / Linux:**
+
+```
+curl -fsSL https://raw.githubusercontent.com/rodo-software/cinderstack-runner/main/scripts/install.sh | sh
+```
+
+Installs to `~/.local/bin/cinderstack`. If that directory is not on your `PATH`, the script prints a line to add to your shell profile.
+
+**Windows (PowerShell 5.1+):**
+
+```
+irm https://raw.githubusercontent.com/rodo-software/cinderstack-runner/main/scripts/install.ps1 | iex
+```
+
+Installs to `%LocalAppData%\Programs\cinderstack\cinderstack.exe`. If that directory is not on your user `PATH`, the script prints a command to add it.
+
+To pin a specific version, set `CINDERSTACK_DOWNLOAD_URL` before running (e.g.
+`https://github.com/rodo-software/cinderstack-runner/releases/download/v0.1.0`).
+
 ## Build
 
 ```
