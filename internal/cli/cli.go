@@ -12,6 +12,7 @@ import (
 	"github.com/rodo-software/cinderstack-runner/internal/config"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderstack-runner/internal/workspace"
 )
 
 // CLI is what a command runs with. Tests set Paths and Secrets to temp ones.
@@ -23,7 +24,9 @@ type CLI struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 
-	pathsErr error // from config.DefaultPaths; only commands that need the paths fail on it
+	exec          workspace.Exec         // nil means workspace.RunCommand
+	removeService func(exe string) error // nil means uninstallService
+	pathsErr      error                  // from config.DefaultPaths; only commands that need the paths fail on it
 }
 
 // command is one subcommand. A new command is one function and one entry in commands.
@@ -42,6 +45,7 @@ func commands() []command {
 		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
 		{"stop", "", "stop the running " + name.Name + " at once", (*CLI).stopDaemon},
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
+		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

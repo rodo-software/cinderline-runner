@@ -28,6 +28,8 @@ Installs to `%LocalAppData%\Programs\cinderstack\cinderstack.exe`. If that direc
 
 `cinderstack service install` registers a user-level service (a launchd LaunchAgent on macOS, a systemd user unit on Linux, a logon scheduled task on Windows) that runs `cinderstack run` at login and starts it now; `cinderstack status`, `cinderstack logs` and `cinderstack stop` talk to it; `cinderstack service uninstall` stops and removes it. On Linux it needs systemd. `cinderstack stop` stops it until the next login. Linux and Windows restart it after a crash; macOS does not, so check `cinderstack status` there.
 
+`cinderstack uninstall` asks for confirmation (`-yes` skips it), then removes the service, the runner's containers, networks, volumes and its own image, the config and state folders and every project's secrets. It lists each project's CinderStack URL and key: revoke that runner token in CinderStack yourself. It leaves the binary and prints its path for you to delete.
+
 To pin a specific version, set `CINDERSTACK_DOWNLOAD_URL` before running (e.g.
 `https://github.com/rodo-software/cinderstack-runner/releases/download/v0.1.0`).
 
