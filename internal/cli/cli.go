@@ -29,6 +29,7 @@ type CLI struct {
 	removeService func(exe string) error                                    // nil means uninstallService
 	Forge         func(kind, repository, token string) (forge.Forge, error) // nil: forge.New
 	pathsErr      error                                                     // from config.DefaultPaths; only commands that need the paths fail on it
+	WindowsBuild  uint32                                                    // OS build on Windows, 0 elsewhere; Main sets it
 }
 
 // command is one subcommand. A new command is one function and one entry in commands.
@@ -55,6 +56,7 @@ func commands() []command {
 // Main runs the command in args with this machine's paths and secrets and returns the exit code.
 func Main(version string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	c := &CLI{Version: version, Stdin: stdin, Stdout: stdout, Stderr: stderr}
+	c.WindowsBuild = windowsBuild()
 	c.Paths, c.pathsErr = config.DefaultPaths()
 	if c.pathsErr == nil {
 		c.Secrets = secrets.New(c.Paths.State)
@@ -67,6 +69,11 @@ func (c *CLI) Run(args []string) int {
 	if len(args) > 0 {
 		for _, cmd := range commands() {
 			if cmd.name == args[0] {
+				if cmd.name != "version" {
+					if err := checkWindowsBuild(c.WindowsBuild); err != nil {
+						return c.fail(err)
+					}
+				}
 				return cmd.run(c, args[1:])
 			}
 		}

@@ -4,6 +4,20 @@ The CinderStack runner is a native Go program on a developer's machine that take
 
 Status: milestone M5, distribution and life cycle.
 
+## Supported platforms
+
+`cinderstack` is one binary for x86-64 and ARM64. It needs Docker and nothing else on the machine: git runs in a container. Agent containers are Linux on every system; Windows containers are not supported.
+
+| System | Versions | Docker |
+|---|---|---|
+| macOS | The current and two previous major releases, as Docker Desktop supports them; Apple silicon and Intel | Docker Desktop |
+| Linux | Any distribution that runs Docker Engine 20.10 or later; `cinderstack service` needs systemd | Docker Engine 20.10 or later, or Docker Desktop |
+| Windows | Windows 10 22H2 (build 19045) or Windows 11 23H2 or later, 64-bit; ARM64 only as far as Docker Desktop's ARM build (early access) runs | Docker Desktop with the WSL2 backend |
+
+- Docker Engine 20.10 is the first with `host-gateway`, which agent containers use to reach a CinderStack on the same machine (see below).
+- On a Windows build below 19045 every command except `cinderstack version` stops with an error naming the build it found. Windows Server is not supported: Docker Desktop does not run on it.
+- CI runs the checks on macOS and Windows on GitHub and on Linux on Forgejo; [docs/ci/platforms.yml](docs/ci/platforms.yml) widens that to the oldest and newest images per system and architecture.
+
 ## Install
 
 Install the latest `cinderstack` binary with one line — no sudo or elevation required. Each script downloads the archive for your OS and architecture, verifies its SHA-256 checksum against the release's `checksums.txt` (refusing on mismatch), and installs the binary.
