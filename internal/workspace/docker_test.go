@@ -81,6 +81,10 @@ func TestDockerPush(t *testing.T) {
 			"/runs/CSR-29", "+refs/heads/cinderstack/CSR-29:refs/push/cinderstack/CSR-29")},
 		{tokenVar, helperArgv(issueLabels, tokenEnv, repoMount,
 			"-C", "/repo", "push", "--quiet", "https://git.example.com/o/r.git", "refs/push/cinderstack/CSR-29:refs/heads/cinderstack/CSR-29")},
+		// After the push, the clone's remote-tracking ref is updated so "ahead of
+		// the remote" is exact without a fetch (decision 2026-11-07-publish-resilience).
+		{nil, agentArgvGit("/runs/CSR-29", "CSR-29",
+			"update-ref", "refs/remotes/origin/cinderstack/CSR-29", "refs/heads/cinderstack/CSR-29")},
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
@@ -185,6 +189,18 @@ const dir = "/runs/CSR-30"
 // git in the clone at dir as the agent's user.
 func agentArgv(git ...string) []string {
 	argv := []string{"docker", "run", "--rm", "--label", "cinderstack.project=CSR", "--label", "cinderstack.issue=CSR-30",
+		"--network", "none", "--user", "1000:1000",
+		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
+		"-v", "cinderstack-CSR-repo:/repo:ro", "-v", "cinderstack-CSR-runs:/runs",
+		"-w", dir, "--entrypoint", "git", GitImage,
+		"-c", "safe.directory=/repo", "-c", "core.autocrlf=false", "-c", "core.fileMode=true",
+		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderstack runner", "-c", "user.email=runner@cinderstack.invalid"}
+	return append(argv, git...)
+}
+
+// agentArgvGit is like agentArgv but parameterised by dir and the issue label.
+func agentArgvGit(dir, issue string, git ...string) []string {
+	argv := []string{"docker", "run", "--rm", "--label", "cinderstack.project=CSR", "--label", "cinderstack.issue=" + issue,
 		"--network", "none", "--user", "1000:1000",
 		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
 		"-v", "cinderstack-CSR-repo:/repo:ro", "-v", "cinderstack-CSR-runs:/runs",
@@ -415,6 +431,111 @@ func TestDockerResetHeadLog(t *testing.T) {
 		t.Errorf("Log = %q, %v", got, err)
 	}
 	checkCalls(t, *calls, []execCall{{nil, agentArgv("log", "--oneline", "refs/remotes/origin/main..HEAD")}})
+}
+
+func TestDockerStranded(t *testing.T) {
+	// Clones with unpushed commits are listed.
+	d, calls := scripted([]string{"", "/runs/CSR-5\tcinderstack/CSR-5\n/runs/CSR-8\tcinderstack/CSR-8\n"}, nil)
+	clones, err := d.Stranded(context.Background())
+	if err != nil || !reflect.DeepEqual(clones, []Clone{
+		{Dir: "/runs/CSR-5", Branch: "cinderstack/CSR-5"},
+		{Dir: "/runs/CSR-8", Branch: "cinderstack/CSR-8"},
+	}) {
+		t.Fatalf("Stranded = %v, %v", clones, err)
+	}
+	if len(*calls) != 2 {
+		t.Fatalf("calls = %d, want 2", len(*calls))
+	}
+	// First call: create the runs volume.
+	wantVolume := execCall{nil, []string{"docker", "volume", "create", "--label", "cinderstack.project=CSR", "cinderstack-CSR-runs"}}
+	if !reflect.DeepEqual((*calls)[0], wantVolume) {
+		t.Errorf("volume create =\n%q\nwant\n%q", (*calls)[0], wantVolume)
+	}
+	// Second call: the container with the shell script.
+	run := (*calls)[1]
+	if run.Env != nil {
+		t.Errorf("env = %q, want nil", run.Env)
+	}
+	if len(run.Argv) < 3 {
+		t.Fatalf("argv too short")
+	}
+	if run.Argv[0] != "docker" || run.Argv[1] != "run" || run.Argv[2] != "--rm" {
+		t.Errorf("argv starts with %q, want docker run --rm", run.Argv[0:3])
+	}
+	// Check key docker flags.
+	joined := strings.Join(run.Argv, " ")
+	if !strings.Contains(joined, "--network none") {
+		t.Error("missing --network none")
+	}
+	if !strings.Contains(joined, "--user 1000:1000") {
+		t.Error("missing --user")
+	}
+	if !strings.Contains(joined, "GIT_CONFIG_NOSYSTEM=1") {
+		t.Error("missing GIT_CONFIG_NOSYSTEM")
+	}
+	if !strings.Contains(joined, "GIT_CONFIG_COUNT=6") {
+		t.Error("missing GIT_CONFIG_COUNT")
+	}
+	if !strings.Contains(joined, "GIT_CONFIG_KEY_0=safe.directory") {
+		t.Error("missing safe.directory config key")
+	}
+	if !strings.Contains(joined, "GIT_CONFIG_VALUE_0=/repo") {
+		t.Error("missing safe.directory=/repo")
+	}
+	if !strings.Contains(joined, "GIT_CONFIG_KEY_3=core.hooksPath") {
+		t.Error("missing core.hooksPath config key")
+	}
+	if !strings.Contains(joined, "GIT_CONFIG_VALUE_3=/dev/null") {
+		t.Error("missing core.hooksPath=/dev/null")
+	}
+	if !strings.Contains(joined, "cinderstack-CSR-repo:/repo:ro") {
+		t.Error("missing repo volume")
+	}
+	if !strings.Contains(joined, "cinderstack-CSR-runs:/runs") {
+		t.Error("missing runs volume")
+	}
+	if !strings.Contains(joined, "--entrypoint sh") {
+		t.Error("missing --entrypoint sh")
+	}
+	// Check the script contains expected patterns.
+	if !strings.Contains(joined, "/runs/*/") {
+		t.Error("script missing /runs/*/ loop")
+	}
+	if !strings.Contains(joined, "symbolic-ref") {
+		t.Error("script missing symbolic-ref")
+	}
+	if !strings.Contains(joined, "branch -r --contains") {
+		t.Error("script missing branch -r --contains")
+	}
+	if !strings.Contains(joined, "cinderstack/*)") {
+		t.Error("script missing cinderstack/* pattern")
+	}
+	if !strings.Contains(joined, "printf") {
+		t.Error("script missing printf")
+	}
+	if !strings.Contains(joined, "${d%/}") {
+		t.Error("script missing ${d%/}")
+	}
+
+	// Empty output returns nil, nil.
+	d, _ = scripted([]string{"", ""}, nil)
+	clones, err = d.Stranded(context.Background())
+	if err != nil || clones != nil {
+		t.Errorf("Stranded on empty output = %v, %v; want nil, nil", clones, err)
+	}
+
+	// Volume create failure is an error.
+	boom := errors.New("volume boom")
+	d, _ = scripted(nil, map[int]error{0: boom})
+	if _, err := d.Stranded(context.Background()); !errors.Is(err, boom) {
+		t.Errorf("Stranded on volume create failure = %v, want boom", err)
+	}
+
+	// Docker run failure is an error.
+	d, _ = scripted(nil, map[int]error{1: boom})
+	if _, err := d.Stranded(context.Background()); !errors.Is(err, boom) {
+		t.Errorf("Stranded on docker run failure = %v, want boom", err)
+	}
 }
 
 func TestDockerAgentRefusesDirOutsideRuns(t *testing.T) {

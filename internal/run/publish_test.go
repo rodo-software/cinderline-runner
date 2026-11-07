@@ -258,24 +258,32 @@ const toReview = `{"status":"review","expected_status":"in_progress"}`
 // the progress line "Opening the pull request". As in the legacy test, the
 // forge fails here, so the run ends in the error after the push.
 func TestPublishPushesTheIssueBranch(t *testing.T) {
+	noSleep(t)
 	for _, conflicts := range [][]string{nil, {"work.txt"}} {
 		r := newPubRun(false)
-		r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: conflicts}}
-		r.forge.PullRequests = []forge.PullRequestReply{{Err: errors.New("forge unreachable")}}
+		// The forge failing is tried five times (CSR-81), each from the base merge.
+		down := forge.PullRequestReply{Err: errors.New("forge unreachable")}
+		r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: conflicts}, {Conflicts: conflicts}, {Conflicts: conflicts}, {Conflicts: conflicts}, {Conflicts: conflicts}}
+		r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}, {}, {}}
+		r.ws.Pushes = []error{nil, nil, nil, nil, nil}
+		r.ws.Heads = []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}}
+		r.forge.PullRequests = []forge.PullRequestReply{down, down, down, down, down}
 		if err := r.run(t); err == nil || !strings.Contains(err.Error(), "forge unreachable") {
 			t.Fatalf("Publish = %v, want the forge's error", err)
 		}
-		want := []workspace.Call{
-			{Method: "Commit", Args: []any{"/clone", "CSR-1: T"}},
-			{Method: "MergeBase", Args: []any{"/clone", "main"}},
-			{Method: "IsAncestor", Args: []any{"/clone", "HEAD", "main"}},
-			{Method: "Push", Args: []any{"/clone", "cinderstack/CSR-1"}},
+		want := []workspace.Call{{Method: "Commit", Args: []any{"/clone", "CSR-1: T"}}}
+		for range 5 {
+			want = append(want,
+				workspace.Call{Method: "MergeBase", Args: []any{"/clone", "main"}},
+				workspace.Call{Method: "IsAncestor", Args: []any{"/clone", "HEAD", "main"}},
+				workspace.Call{Method: "Push", Args: []any{"/clone", "cinderstack/CSR-1"}})
 		}
+		want = append(want, workspace.Call{Method: "Head", Args: []any{"/clone"}})
 		if got := r.ws.Calls(); !reflect.DeepEqual(got, want) {
 			t.Errorf("conflicts %v: workspace calls =\n%+v, want\n%+v", conflicts, got, want)
 		}
-		if w := r.api.writes(); len(w) != 1 || w[0] != `POST /issues/CSR-1/progress {"body":"Opening the pull request"}` {
-			t.Errorf("CinderStack writes = %v, want only the progress line", w)
+		if w := r.api.writes(); len(w) != 5 || w[0] != `POST /issues/CSR-1/progress {"body":"Opening the pull request"}` || w[4] != w[0] {
+			t.Errorf("CinderStack writes = %v, want only the progress line, once per attempt", w)
 		}
 	}
 }
@@ -427,6 +435,7 @@ func TestPublishNothingChanged(t *testing.T) {
 // after a question (0116), only logs; so does a failed merge_status write.
 // A failed commit, push or comment is the run's error.
 func TestPublishFailures(t *testing.T) {
+	noSleep(t)
 	r := newPubRun(false)
 	r.api.routes["PATCH /issues/CSR-1"] = reply{409, `{"message":"Conflict.","status":"blocked"}`}
 	if err := r.run(t); err != nil {
@@ -447,8 +456,13 @@ func TestPublishFailures(t *testing.T) {
 	}
 
 	for name, set := range map[string]func(*pubRun){
-		"commit":  func(r *pubRun) { r.ws.Commits = []workspace.CommitReply{{Err: errors.New("boom")}} },
-		"push":    func(r *pubRun) { r.ws.Pushes = []error{errors.New("boom")} },
+		"commit": func(r *pubRun) { r.ws.Commits = []workspace.CommitReply{{Err: errors.New("boom")}} },
+		"push": func(r *pubRun) { // five attempts (CSR-81)
+			r.ws.MergeBases = []workspace.MergeBaseReply{{}, {}, {}, {}, {}}
+			r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}, {}, {}}
+			r.ws.Pushes = []error{errors.New("boom"), errors.New("boom"), errors.New("boom"), errors.New("boom"), errors.New("boom")}
+			r.ws.Heads = []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}}
+		},
 		"comment": func(r *pubRun) { r.api.routes["POST /issues/CSR-1/comments"] = reply{500, `{"message":"boom"}`} },
 	} {
 		r := newPubRun(false)
@@ -640,5 +654,75 @@ func TestPublishSoloOrchestratorAttempt(t *testing.T) {
 				t.Errorf("PATCHes = %v, want %v", got, tt.patches)
 			}
 		})
+	}
+}
+
+// CSR-81 point 2: once the agent has finished, a failure in the fetch, base
+// merge, push or pull request steps is tried again with backoff, in memory
+// inside the run (decision 0091): the issue's status does not change until
+// it reaches Review once, with a pull request and no error comment. Every
+// attempt starts again at the base merge, so a base that moved during the
+// wait is merged in (decision 0121).
+func TestPublishRetriesTransientFailures(t *testing.T) {
+	slept := noSleep(t)
+	r := newPubRun(false)
+	r.ws.MergeBases = []workspace.MergeBaseReply{{}, {}, {}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}}
+	r.ws.Pushes = []error{errors.New("Forgejo unreachable"), errors.New("Forgejo unreachable"), nil}
+	if err := r.run(t); err != nil {
+		t.Fatalf("Publish = %v", err)
+	}
+	want := []string{"Commit", "MergeBase", "IsAncestor", "Push", "MergeBase", "IsAncestor", "Push", "MergeBase", "IsAncestor", "Push"}
+	if got := r.wsMethods(); !reflect.DeepEqual(got, want) {
+		t.Errorf("workspace calls = %v, want %v", got, want)
+	}
+	if got := r.forgeMethods(); !reflect.DeepEqual(got, []string{"OpenPullRequest"}) {
+		t.Errorf("forge calls = %v, want the pull request once", got)
+	}
+	if got := r.patches(); !reflect.DeepEqual(got, []string{toReview}) {
+		t.Errorf("PATCHes = %v, want Review once", got)
+	}
+	if c := r.comment(); !strings.HasPrefix(c, "Opened "+testPR.URL) {
+		t.Errorf("comment = %q, want the opened pull request, no error", c)
+	}
+	if len(*slept) != 2 || (*slept)[0] <= 0 || (*slept)[1] <= (*slept)[0] {
+		t.Errorf("waits = %v, want two, growing", *slept)
+	}
+}
+
+// CSR-81 point 2: after the last of five attempts the error names the
+// unpushed commit, so a person can recover it; nothing is commented or
+// moved here (the scheduler does that), and the five waits stay within ten
+// minutes.
+func TestPublishGivesUpAfterFiveAttempts(t *testing.T) {
+	slept := noSleep(t)
+	r := newPubRun(false)
+	boom := errors.New("Forgejo unreachable")
+	r.ws.MergeBases = []workspace.MergeBaseReply{{}, {}, {}, {}, {}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}, {}, {}}
+	r.ws.Pushes = []error{boom, boom, boom, boom, boom}
+	r.ws.Heads = []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}}
+	err := r.run(t)
+	if err == nil || !strings.Contains(err.Error(), "Forgejo unreachable") || !strings.Contains(err.Error(), "0123456789abcdef0123456789abcdef01234567") || !strings.Contains(err.Error(), "cinderstack/CSR-1") {
+		t.Fatalf("Publish = %v, want the last error with the unpushed commit and branch", err)
+	}
+	if n := strings.Count(strings.Join(r.wsMethods(), " "), "Push"); n != 5 {
+		t.Errorf("pushed %d times, want 5", n)
+	}
+	if got := r.patches(); len(got) != 0 {
+		t.Errorf("PATCHes = %v, want none", got)
+	}
+	if c := r.comment(); c != "" {
+		t.Errorf("comment = %q, want none", c)
+	}
+	var total time.Duration
+	for i, d := range *slept {
+		total += d
+		if d <= 0 || (i > 0 && d <= (*slept)[i-1]) {
+			t.Errorf("waits = %v, want growing", *slept)
+		}
+	}
+	if len(*slept) != 4 || total > 10*time.Minute {
+		t.Errorf("waits = %v (total %v), want four within ten minutes", *slept, total)
 	}
 }

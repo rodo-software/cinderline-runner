@@ -229,3 +229,16 @@ func TestGitLabMergeStateError(t *testing.T) {
 		t.Errorf("MergeState = %v, want the 502", err)
 	}
 }
+
+// CSR-81 point 1: GitLab keeps a merged request's source_branch after the
+// branch is removed, and the list by source_branch still answers it, so the
+// merge status poll sees the merge.
+func TestGitLabMergeStateAfterBranchDeletion(t *testing.T) {
+	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
+		reply{200, `[{"iid":53,"source_branch":"cinderstack/EMBER-1","state":"merged"}]`})
+	s, err := g.MergeState(context.Background(), "cinderstack/EMBER-1")
+	if s != MergeMerged || err != nil {
+		t.Errorf("MergeState = %q, %v; want merged", s, err)
+	}
+	wantURLs(t, *reqs, "GET "+mrs+"?source_branch=cinderstack%2FEMBER-1&state=all")
+}

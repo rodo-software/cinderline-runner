@@ -65,8 +65,9 @@ type forgejoPull struct {
 	State   string `json:"state"`
 	Merged  bool   `json:"merged"`
 	Head    struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
+		Ref   string `json:"ref"`
+		SHA   string `json:"sha"`
+		Label string `json:"label"`
 	} `json:"head"`
 }
 
@@ -108,9 +109,8 @@ func (f *Forgejo) OpenPullRequest(ctx context.Context, in PullRequestInput) (Pul
 }
 
 func (f *Forgejo) FindPullRequest(ctx context.Context, branch string) (PullRequest, bool, error) {
-	// shortcut: the 50 newest open pull requests only, as legacy; page if a repository has more open at once.
-	pr, err := f.find(ctx, "?state=open&limit=50", branch)
-	return PullRequest{Number: pr.Number, URL: pr.HTMLURL}, pr.Head.Ref != "", err
+	pr, err := f.find(ctx, "?state=open&limit="+strconv.Itoa(forgejoPageSize), branch)
+	return PullRequest{Number: pr.Number, URL: pr.HTMLURL}, pr.Head.Label != "", err
 }
 
 // RequestMerge asks Forgejo to squash-merge the pull request and delete
@@ -135,12 +135,11 @@ func (f *Forgejo) RequestMerge(ctx context.Context, pr PullRequest) error {
 }
 
 func (f *Forgejo) MergeState(ctx context.Context, branch string) (MergeState, error) {
-	// shortcut: the 50 most recently updated pull requests only, as legacy; page if a repository has more at once.
-	pr, err := f.find(ctx, "?state=all&sort=recentupdate&limit=50", branch)
+	pr, err := f.find(ctx, "?state=all&sort=recentupdate&limit="+strconv.Itoa(forgejoPageSize), branch)
 	switch {
 	case err != nil:
 		return "", err
-	case pr.Head.Ref == "": // none found
+	case pr.Head.Label == "": // none found
 		return "", nil
 	case pr.Merged:
 		return MergeMerged, nil
@@ -159,19 +158,33 @@ func (f *Forgejo) MergeState(ctx context.Context, branch string) (MergeState, er
 	return MergePending, nil
 }
 
+// forgejoPageSize is the page size used when listing pull requests.
+const forgejoPageSize = 50
+
 // find is the first pull request of branch in the list query names,
-// matched by head ref as legacy, or the zero pull request (empty Head.Ref).
+// matched by head.label, which survives branch deletion (decision
+// 2026-11-07-publish-resilience), or the zero pull request (empty Head.Label).
 func (f *Forgejo) find(ctx context.Context, query, branch string) (forgejoPull, error) {
-	var prs []forgejoPull
-	if err := f.do(ctx, http.MethodGet, f.repo+"/pulls"+query, nil, &prs); err != nil {
-		return forgejoPull{}, err
-	}
-	for _, pr := range prs {
-		if pr.Head.Ref == branch {
-			return pr, nil
+	for page := 1; ; page++ {
+		var u string
+		if page == 1 {
+			u = f.repo + "/pulls" + query
+		} else {
+			u = f.repo + "/pulls" + query + "&page=" + strconv.Itoa(page)
+		}
+		var prs []forgejoPull
+		if err := f.do(ctx, http.MethodGet, u, nil, &prs); err != nil {
+			return forgejoPull{}, err
+		}
+		for _, pr := range prs {
+			if pr.Head.Label == branch {
+				return pr, nil
+			}
+		}
+		if len(prs) < forgejoPageSize {
+			return forgejoPull{}, nil
 		}
 	}
-	return forgejoPull{}, nil
 }
 
 // do sends one API request with in as its JSON body, when not nil, and

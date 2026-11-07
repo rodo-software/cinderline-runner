@@ -16,6 +16,8 @@ import (
 
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/config"
+	"github.com/rodo-software/cinderstack-runner/internal/forge"
+	"github.com/rodo-software/cinderstack-runner/internal/name"
 )
 
 // PausedDir is the folder of a project's paused notes, one <REF>.json per
@@ -80,6 +82,106 @@ func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
 			return err
 		}
 		p.Log.Info("back to To do after a restart", "project", p.Config.Key, "issue", issue.Ref)
+	}
+
+	// Stranded branch recovery (decision 2026-11-07-publish-resilience point 3).
+	return p.pushStranded(ctx, c)
+}
+
+// pushStranded pushes any stranded branches and opens pull requests for
+// Review issues (decision 2026-11-07-publish-resilience point 3).
+func (p Project) pushStranded(ctx context.Context, c *cinderstack.Client) error {
+	if p.Workspace == nil || p.Forge == nil {
+		return nil
+	}
+	proj, err := c.GetProject(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded branches not checked", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	fg, err := p.Forge(proj.Forge)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded branches not checked", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	base, err := BaseBranch(ctx, c, fg)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded branches not checked", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	clones, err := p.Workspace.Stranded(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded listing failed", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	for _, clone := range clones {
+		ref, ok := strings.CutPrefix(clone.Branch, name.Name+"/")
+		if !ok {
+			p.Log.Warn("stranded branch not checked", "project", p.Config.Key, "branch", clone.Branch, "err", "not a "+name.Name+" branch")
+			continue
+		}
+		log := p.Log.With("project", p.Config.Key, "issue", ref)
+		issue, err := c.GetIssue(ctx, ref)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Warn("stranded branch not checked", "err", err)
+			continue
+		}
+		switch issue.Status.Value {
+		case "done", "cancelled":
+			log.Info("stranded branch of a closed issue left alone")
+			continue
+		}
+		state, err := fg.MergeState(ctx, clone.Branch)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Warn("stranded branch not checked", "err", err)
+			continue
+		}
+		switch state {
+		case forge.MergeMerged, forge.MergeClosed:
+			log.Info("stranded branch left alone", "pull_request_state", state)
+			continue
+		}
+		err = p.Workspace.Push(ctx, clone.Dir, clone.Branch)
+		if err != nil {
+			log.Warn("stranded branch not pushed", "err", err)
+			continue
+		}
+		log.Info("stranded branch pushed", "branch", clone.Branch)
+		if issue.Status.Value != "review" {
+			continue
+		}
+		pr, err := fg.OpenPullRequest(ctx, forge.PullRequestInput{
+			Branch: clone.Branch,
+			Base:   base,
+			Title:  ref + ": " + issue.Title,
+			Body:   pullRequestBody(ref, deref(issue.Body)),
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Warn("pull request not opened for a stranded branch", "err", err)
+			continue
+		}
+		log.Info("pull request opened for a stranded branch", "pull_request", pr.URL)
 	}
 	return nil
 }

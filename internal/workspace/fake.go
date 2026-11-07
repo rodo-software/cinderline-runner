@@ -48,6 +48,12 @@ type HeadReply struct {
 	Err    error
 }
 
+// StrandedReply is one scripted reply to Stranded.
+type StrandedReply struct {
+	Clones []Clone
+	Err    error
+}
+
 // BoolReply is one scripted reply to Clean or ConflictMarkers.
 type BoolReply struct {
 	Yes bool
@@ -74,6 +80,7 @@ type Fake struct {
 	Markers    []BoolReply // replies to ConflictMarkers
 	Resets     []error
 	Logs       []LogReply
+	Strandeds  []StrandedReply
 
 	mu    sync.Mutex
 	calls []Call
@@ -208,4 +215,16 @@ func (f *Fake) Log(_ context.Context, dir, base string) (string, error) {
 	r := f.Logs[0]
 	f.Logs = f.Logs[1:]
 	return r.Log, r.Err
+}
+
+func (f *Fake) Stranded(_ context.Context) ([]Clone, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Stranded")
+	if len(f.Strandeds) == 0 {
+		return nil, fmt.Errorf("%w for Stranded", ErrNotScripted)
+	}
+	r := f.Strandeds[0]
+	f.Strandeds = f.Strandeds[1:]
+	return r.Clones, r.Err
 }

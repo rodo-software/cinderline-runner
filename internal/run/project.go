@@ -141,6 +141,10 @@ func (p *Project) Hooks() scheduler.Hooks {
 	}
 }
 
+// notStarted wraps an error that happened before the first agent turn, so the
+// scheduler can tell it apart from a run that started (decision 2026-11-07-publish-resilience).
+func notStarted(err error) error { return fmt.Errorf("%w: %w", scheduler.ErrNotStarted, err) }
+
 // hookRun is the Run hook that the scheduler calls.
 func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error {
 	log := p.Log.With("project", p.Config.Key, "issue", issue.Ref)
@@ -151,7 +155,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cind
 		if !p.run.ready {
 			if err := p.prepare(ctx); err != nil {
 				p.run.mu.Unlock()
-				return err
+				return notStarted(err)
 			}
 			p.run.ready = true
 		}
@@ -160,25 +164,25 @@ func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cind
 
 	team, err := c.GetTeam(ctx, issue.Team.ID)
 	if err != nil {
-		return err
+		return notStarted(err)
 	}
 	full, err := c.GetIssue(ctx, ref)
 	if err != nil {
-		return err
+		return notStarted(err)
 	}
 	p.Started(ctx, c, ref, team)
 
 	proj, err := c.GetProject(ctx)
 	if err != nil {
-		return err
+		return notStarted(err)
 	}
 	fg, err := p.Forge(proj.Forge)
 	if err != nil {
-		return err
+		return notStarted(err)
 	}
 	base, err := BaseBranch(ctx, c, fg)
 	if err != nil {
-		return err
+		return notStarted(err)
 	}
 	branch := name.Name + "/" + ref
 
@@ -210,7 +214,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cind
 	agent := &team.Agents[0]
 	cl := p.Clients[agent.Client]
 	if cl == nil {
-		return fmt.Errorf("agent %s runs on %s, which this runner does not run", agent.Name, agent.Client)
+		return notStarted(fmt.Errorf("agent %s runs on %s, which this runner does not run", agent.Name, agent.Client))
 	}
 
 	dir := ""
@@ -223,13 +227,13 @@ func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cind
 		var err error
 		dir, err = p.Workspace.Prepare(ctx, branch, base)
 		if err != nil {
-			return err
+			return notStarted(err)
 		}
 	}
 
 	tok, err := c.CreateAgentToken(ctx, ref, cinderstack.KindOrchestrator, agent.Name)
 	if err != nil {
-		return err
+		return notStarted(err)
 	}
 	token := tok.Token
 

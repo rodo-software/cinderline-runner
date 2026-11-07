@@ -140,12 +140,12 @@ func waiting(ctx context.Context, c *cinderstack.Client, ref string) (bool, erro
 func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob) (out Outcome, err error) {
 	log := p.Log.With("project", p.Config.Key, "issue", j.Ref)
 	if len(j.Team.Agents) == 0 {
-		return Outcome{}, fmt.Errorf("team %s has no agents", j.Team.Name)
+		return Outcome{}, notStarted(fmt.Errorf("team %s has no agents", j.Team.Name))
 	}
 	orch := j.Team.Agents[0]
 	cl := clients[orch.Client]
 	if cl == nil {
-		return Outcome{}, fmt.Errorf("agent %s runs on %s, which this runner does not run", orch.Name, orch.Client)
+		return Outcome{}, notStarted(fmt.Errorf("agent %s runs on %s, which this runner does not run", orch.Name, orch.Client))
 	}
 
 	var dir string
@@ -169,12 +169,12 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 	session := note.Session
 	if !resumed {
 		if dir, err = ws.Prepare(ctx, j.Branch, j.Base); err != nil {
-			return Outcome{}, err
+			return Outcome{}, notStarted(err)
 		}
 	}
 	parent, err := c.GetIssue(ctx, j.Ref)
 	if err != nil {
-		return Outcome{}, err
+		return Outcome{}, notStarted(err)
 	}
 	// Also on a clone fresh from the base, where the merge changes nothing,
 	// as Prepare does not say whether it continued the remote branch.

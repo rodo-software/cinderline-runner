@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -21,7 +22,9 @@ import (
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 	"github.com/rodo-software/cinderstack-runner/internal/config"
 	"github.com/rodo-software/cinderstack-runner/internal/environment"
+	"github.com/rodo-software/cinderstack-runner/internal/forge"
 	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderstack-runner/internal/workspace"
 )
 
 // fakeAPI answers "METHOD path" with handle, when it is set and answers, or
@@ -277,5 +280,87 @@ func TestCheck(t *testing.T) {
 				t.Errorf("error %q carries a secret", err)
 			}
 		})
+	}
+}
+
+// CSR-81 point 3: at start, a clone whose branch has commits the remote
+// lacks is pushed, and if its issue is in Review its pull request is found
+// or opened; one log line per branch. A clone of a closed issue, or one
+// whose pull request is already merged or closed, is left alone; a refused
+// push is logged and skipped, never forced. None of it writes to the issue.
+func TestRecoverPushesStrandedBranches(t *testing.T) {
+	p := project(t)
+	var log bytes.Buffer
+	p.Log = slog.New(slog.NewTextHandler(&log, nil))
+	ws := &workspace.Fake{
+		Strandeds: []workspace.StrandedReply{{Clones: []workspace.Clone{
+			{Dir: "/runs/CSR-5", Branch: "cinderstack/CSR-5"}, // Review, no pull request: push, open
+			{Dir: "/runs/CSR-6", Branch: "cinderstack/CSR-6"}, // Done: left alone
+			{Dir: "/runs/CSR-7", Branch: "cinderstack/CSR-7"}, // To do, merged: left alone
+			{Dir: "/runs/CSR-8", Branch: "cinderstack/CSR-8"}, // Review, push refused: no pull request
+		}}},
+		Pushes: []error{nil, errors.New("rejected: non-fast-forward")},
+	}
+	fg := &forge.Fake{
+		MergeStates:  []forge.MergeStateReply{{State: ""}, {State: forge.MergeMerged}, {State: ""}},
+		PullRequests: []forge.PullRequestReply{{PullRequest: forge.PullRequest{Number: 53, URL: "https://git.example/o/r/pulls/53"}}},
+	}
+	p.Workspace = ws
+	p.Forge = func(string) (forge.Forge, error) { return fg, nil }
+	api := &fakeAPI{routes: map[string]reply{
+		"GET /project":                   {200, `{"key":"CSR","forge":"forgejo","base_branch":"main","repository_url":"https://git.example/o/r"}`},
+		"GET /issues?status=in_progress": {200, `{"issues":[]}`},
+		"GET /issues/CSR-5":              {200, issueJSON("CSR-5", "review")},
+		"GET /issues/CSR-6":              {200, issueJSON("CSR-6", "done")},
+		"GET /issues/CSR-7":              {200, issueJSON("CSR-7", "todo")},
+		"GET /issues/CSR-8":              {200, issueJSON("CSR-8", "review")},
+	}}
+	if err := p.Recover(context.Background(), api.client(t)); err != nil {
+		t.Fatal(err)
+	}
+	wantWS := []workspace.Call{
+		{Method: "Stranded"},
+		{Method: "Push", Args: []any{"/runs/CSR-5", "cinderstack/CSR-5"}},
+		{Method: "Push", Args: []any{"/runs/CSR-8", "cinderstack/CSR-8"}},
+	}
+	if got := ws.Calls(); !reflect.DeepEqual(got, wantWS) {
+		t.Errorf("workspace calls =\n%+v, want\n%+v", got, wantWS)
+	}
+	wantForge := []forge.Call{
+		{Method: "MergeState", Args: []any{"cinderstack/CSR-5"}},
+		{Method: "OpenPullRequest", Args: []any{forge.PullRequestInput{Branch: "cinderstack/CSR-5", Base: "main", Title: "CSR-5: T", Body: "Resolves CSR-5 in CinderStack."}}},
+		{Method: "MergeState", Args: []any{"cinderstack/CSR-7"}},
+		{Method: "MergeState", Args: []any{"cinderstack/CSR-8"}},
+	}
+	if got := fg.Calls(); !reflect.DeepEqual(got, wantForge) {
+		t.Errorf("forge calls =\n%+v, want\n%+v", got, wantForge)
+	}
+	if w := api.writes(); len(w) != 0 {
+		t.Errorf("writes = %v, want none", w)
+	}
+	for _, want := range []string{"issue=CSR-5", "pulls/53", "issue=CSR-7", "issue=CSR-8", "non-fast-forward"} {
+		if !strings.Contains(log.String(), want) {
+			t.Errorf("log lacks %q:\n%s", want, log.String())
+		}
+	}
+}
+
+// CSR-81 point 3: a stranded branch the runner cannot push, because the
+// clones cannot be listed, only logs; recovery goes on.
+func TestRecoverStrandedListingFailureOnlyLogs(t *testing.T) {
+	p := project(t)
+	var log bytes.Buffer
+	p.Log = slog.New(slog.NewTextHandler(&log, nil))
+	p.Workspace = &workspace.Fake{Strandeds: []workspace.StrandedReply{{Err: errors.New("docker down")}}}
+	p.Forge = func(string) (forge.Forge, error) { return &forge.Fake{}, nil }
+	api := &fakeAPI{routes: map[string]reply{
+		"GET /project":                   {200, `{"key":"CSR","forge":"forgejo","base_branch":"main"}`},
+		"GET /issues?status=in_progress": {200, `{"issues":[]}`},
+	}}
+	if err := p.Recover(context.Background(), api.client(t)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log.String(), "docker down") {
+		t.Errorf("log = %s", log.String())
 	}
 }

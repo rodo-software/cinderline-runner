@@ -358,3 +358,16 @@ func TestGitHubMergeStateError(t *testing.T) {
 		t.Errorf("MergeState = %v, want the 502", err)
 	}
 }
+
+// CSR-81 point 1: GitHub keeps a merged pull request's head ref after the
+// branch is deleted, and the list by head owner:branch still answers it, so
+// the merge status poll sees the merge.
+func TestGitHubMergeStateAfterBranchDeletion(t *testing.T) {
+	g, reqs := recorded(t, "https://github.com/willem/ember.git",
+		reply{200, `[{"number":53,"head":{"ref":"cinderstack/EMBER-1","sha":"abc"},"merged_at":"2026-11-07T09:47:00Z","state":"closed"}]`})
+	s, err := g.MergeState(context.Background(), "cinderstack/EMBER-1")
+	if s != MergeMerged || err != nil {
+		t.Errorf("MergeState = %q, %v; want merged", s, err)
+	}
+	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/ember/pulls?state=all&head=willem%3Acinderstack%2FEMBER-1")
+}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/rodo-software/cinderstack-runner/internal/name"
@@ -99,7 +100,13 @@ func (d *Docker) Push(ctx context.Context, dir, branch string) error {
 	if err := d.helper(ctx, labels, false, true, "-c", "safe.directory="+dir, "-C", RepoPath, "fetch", "--quiet", "--no-tags", dir, "+refs/heads/"+branch+":"+scratch); err != nil {
 		return err
 	}
-	return d.helper(ctx, labels, true, false, "-C", RepoPath, "push", "--quiet", d.Repository, scratch+":refs/heads/"+branch)
+	if err := d.helper(ctx, labels, true, false, "-C", RepoPath, "push", "--quiet", d.Repository, scratch+":refs/heads/"+branch); err != nil {
+		return err
+	}
+	// Record what was pushed in the clone so "ahead of the remote" is exact
+	// without a fetch (decision 2026-11-07-publish-resilience).
+	_, err := d.git(ctx, dir, "update-ref", "refs/remotes/origin/"+branch, "refs/heads/"+branch)
+	return err
 }
 
 // helper runs git with args in a throwaway helper container with the repo
@@ -170,6 +177,18 @@ var _ Workspace = (*Docker)(nil)
 // so the agent can write everything git writes in its clone (as uid 1000
 // in today's runner image).
 const AgentUser = "1000:1000"
+
+// gitConfig is the runner's own git configuration passed to every agent-side
+// git invocation, on the command line or through GIT_CONFIG_KEY_* env vars.
+// The list stays here, so both forms derive from the same source.
+var gitConfig = [][2]string{
+	{"safe.directory", RepoPath},
+	{"core.autocrlf", "false"},
+	{"core.fileMode", "true"},
+	{"core.hooksPath", "/dev/null"},
+	{"user.name", name.Name + " runner"},
+	{"user.email", "runner@" + name.Name + ".invalid"},
+}
 
 var (
 	issueRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
@@ -344,9 +363,57 @@ func (d *Docker) git(ctx context.Context, dir string, args ...string) (string, e
 	argv = append(argv, "--network", "none", "--user", AgentUser,
 		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
 		"-v", d.volume("repo")+":"+RepoPath+":ro", "-v", d.volume("runs")+":"+RunsPath,
-		"-w", dir, "--entrypoint", "git", GitImage,
-		// The repo volume belongs to the helper's root, so git must be told it is safe.
-		"-c", "safe.directory="+RepoPath, "-c", "core.autocrlf=false", "-c", "core.fileMode=true",
-		"-c", "core.hooksPath=/dev/null", "-c", "user.name="+name.Name+" runner", "-c", "user.email=runner@"+name.Name+".invalid")
+		"-w", dir, "--entrypoint", "git", GitImage)
+	for _, kv := range gitConfig {
+		argv = append(argv, "-c", kv[0]+"="+kv[1])
+	}
 	return d.output(ctx, nil, append(argv, args...)...)
+}
+
+// Stranded lists clones whose branch has commits that no remote branch has
+// (decision 2026-11-07-publish-resilience). One docker run loops over every
+// directory under /runs, checking with git symbolic-ref and branch -r.
+func (d *Docker) Stranded(ctx context.Context) ([]Clone, error) {
+	labels := d.labels("")
+	if err := d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, labels...), d.volume("runs"))...); err != nil {
+		return nil, err
+	}
+	script := `for d in /runs/*/; do
+  [ -d "$d" ] || continue
+  branch=$(git -C "$d" symbolic-ref --quiet --short HEAD 2>/dev/null) || continue
+  case $branch in
+  ` + name.Name + `/*) ;;
+  *) continue ;;
+  esac
+  if git -C "$d" branch -r --contains HEAD 2>/dev/null | grep -q .; then
+    continue
+  fi
+  printf '%s\t%s\n' "${d%/}" "$branch"
+done`
+	argv := append([]string{"docker", "run", "--rm"}, labels...)
+	argv = append(argv, "--network", "none", "--user", AgentUser,
+		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
+		"-e", "GIT_CONFIG_COUNT="+strconv.Itoa(len(gitConfig)))
+	for i, kv := range gitConfig {
+		argv = append(argv, "-e", "GIT_CONFIG_KEY_"+strconv.Itoa(i)+"="+kv[0], "-e", "GIT_CONFIG_VALUE_"+strconv.Itoa(i)+"="+kv[1])
+	}
+	argv = append(argv,
+		"-v", d.volume("repo")+":"+RepoPath+":ro", "-v", d.volume("runs")+":"+RunsPath,
+		"--entrypoint", "sh", GitImage, "-c", script)
+	out, err := d.output(ctx, nil, argv...)
+	if err != nil {
+		return nil, err
+	}
+	if out == "" {
+		return nil, nil
+	}
+	var clones []Clone
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		dir, branch, ok := strings.Cut(line, "\t")
+		if !ok {
+			return nil, fmt.Errorf("stranded: cannot parse %q", line)
+		}
+		clones = append(clones, Clone{Dir: dir, Branch: branch})
+	}
+	return clones, nil
 }

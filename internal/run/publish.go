@@ -21,6 +21,13 @@ const (
 	mergeLimit = 15 * time.Minute
 )
 
+// Publish retries the base merge, push and pull request five times with
+// backoff (decision 2026-11-07-publish-resilience).
+const (
+	publishAttempts = 5
+	publishBackoff  = 30 * time.Second
+)
+
 // sleep waits d or until ctx is done; a variable so tests need not wait.
 var sleep = func(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
@@ -86,6 +93,13 @@ type Published struct {
 	Merge     forge.MergeState // a trusted team's wait; MergePending: the limit passed
 }
 
+// pullRequestBody builds the body of a pull request from the issue reference
+// and body text, shared by Publish and the stranded branch recovery
+// (decision 2026-11-07-publish-resilience).
+func pullRequestBody(ref, body string) string {
+	return strings.TrimSpace("Resolves " + ref + " in CinderStack.\n\n" + body)
+}
+
 // Publish ends a finished run, as legacy publish() and runIssue(): commit
 // what was left, merge the base in with UpdateBranch, push cinderstack/<REF>
 // (never the base), open or find the pull request and, for a trusted team
@@ -103,20 +117,52 @@ func (p Project) Publish(ctx context.Context, c *cinderstack.Client, clients map
 	if _, err := ws.Commit(ctx, pub.Dir, title); err != nil {
 		return err
 	}
-	// The branch protection blocks outdated pull requests (decision 0121).
-	conflicts, err := p.UpdateBranch(ctx, c, clients, ws, Upkeep{
-		Ref: pub.Ref, Branch: branch, Base: pub.Base, Dir: pub.Dir, MaxTurns: pub.MaxTurns, Team: pub.Team, Session: pub.Session, Token: pub.Token,
-	})
-	if err != nil {
-		return err
+
+	var pr forge.PullRequest
+	var published *Published
+	var conflicts []string
+	for attempt, wait := 1, publishBackoff; ; attempt, wait = attempt+1, wait*2 {
+		var nothing bool
+		var err error
+		if conflicts, nothing, pr, err = p.attempt(ctx, c, clients, ws, fg, pub, branch, title); err == nil {
+			if !nothing {
+				published = &Published{URL: pr.URL, Base: pub.Base, Conflicts: conflicts}
+			}
+			break
+		}
+		if ctx.Err() != nil {
+			return err
+		}
+		if attempt == publishAttempts {
+			head, herr := ws.Head(ctx, pub.Dir)
+			if herr != nil {
+				head = "an unpushed commit"
+			}
+			return fmt.Errorf("publishing %s failed %d times, last: %w; commit %s on branch %s in the run's clone is not pushed", pub.Ref, publishAttempts, err, head, branch)
+		}
+		log.Warn("publish failed, trying again", "attempt", attempt, "retry_in", wait, "err", err)
+		if err := sleep(ctx, wait); err != nil {
+			return err
+		}
 	}
 
-	var published *Published
-	if nothing, err := ws.IsAncestor(ctx, pub.Dir, "HEAD", pub.Base); err != nil {
-		return err
-	} else if !nothing {
-		if published, err = p.open(ctx, c, ws, fg, pub, branch, title, conflicts); err != nil {
-			return err
+	// Only a trusted team merges without a person (0114).
+	if published != nil && pub.Team.Trusted {
+		if len(conflicts) > 0 {
+			p.setMergeStatus(ctx, c, pub.Ref, "issue")
+		} else {
+			if err := fg.RequestMerge(ctx, pr); err != nil {
+				p.setMergeStatus(ctx, c, pub.Ref, "issue")
+				return fmt.Errorf("pull request %s is open, but asking %s to merge it failed: %w", pr.URL, forgeName(pub.Forge), err)
+			}
+			// In memory only: a restart does not wait (decision 0091).
+			p.Log.Info("waiting for the merge", "project", p.Config.Key, "issue", pub.Ref, "pull_request", pr.URL)
+			merge, err := p.awaitMerge(ctx, fg, branch)
+			if err != nil {
+				return err
+			}
+			published.Merge = merge
+			p.setMergeStatus(ctx, c, pub.Ref, mergeStatusOf[published.Merge])
 		}
 	}
 
@@ -134,42 +180,44 @@ func (p Project) Publish(ctx context.Context, c *cinderstack.Client, clients map
 	return nil
 }
 
-// open pushes the branch, opens or finds its pull request and, for a
-// trusted team without conflicts, requests the merge and waits for it.
-func (p Project) open(ctx context.Context, c *cinderstack.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string, conflicts []string) (*Published, error) {
+// attempt does one attempt of the publish loop: UpdateBranch, IsAncestor,
+// push and OpenPullRequest. It returns the conflicts, whether nothing was
+// pushed (HEAD already in the base), the pull request, and any error.
+func (p Project) attempt(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (conflicts []string, nothing bool, pr forge.PullRequest, err error) {
+	// The branch protection blocks outdated pull requests (decision 0121).
+	conflicts, err = p.UpdateBranch(ctx, c, clients, ws, Upkeep{
+		Ref: pub.Ref, Branch: branch, Base: pub.Base, Dir: pub.Dir, MaxTurns: pub.MaxTurns, Team: pub.Team, Session: pub.Session, Token: pub.Token,
+	})
+	if err != nil {
+		return nil, false, forge.PullRequest{}, err
+	}
+	nothing, err = ws.IsAncestor(ctx, pub.Dir, "HEAD", pub.Base)
+	if err != nil {
+		return nil, false, forge.PullRequest{}, err
+	}
+	if nothing {
+		return conflicts, true, forge.PullRequest{}, nil
+	}
+	pr, err = p.open(ctx, c, ws, fg, pub, branch, title)
+	if err != nil {
+		return nil, false, forge.PullRequest{}, err
+	}
+	return conflicts, false, pr, nil
+}
+
+// open pushes the branch, posts the progress line and opens the pull request.
+// It is the retried part of Publish (decision 2026-11-07-publish-resilience).
+func (p Project) open(ctx context.Context, c *cinderstack.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (forge.PullRequest, error) {
 	if err := ws.Push(ctx, pub.Dir, branch); err != nil {
-		return nil, err
+		return forge.PullRequest{}, err
 	}
 	p.progress(ctx, c, pub.Ref, "Opening the pull request")
-	pr, err := fg.OpenPullRequest(ctx, forge.PullRequestInput{
+	return fg.OpenPullRequest(ctx, forge.PullRequestInput{
 		Branch: branch,
 		Base:   pub.Base,
 		Title:  title,
-		Body:   strings.TrimSpace("Resolves " + pub.Ref + " in CinderStack.\n\n" + pub.Body),
+		Body:   pullRequestBody(pub.Ref, pub.Body),
 	})
-	if err != nil {
-		return nil, err
-	}
-	out := &Published{URL: pr.URL, Base: pub.Base, Conflicts: conflicts}
-	// Only a trusted team merges without a person (0114).
-	if !pub.Team.Trusted {
-		return out, nil
-	}
-	if len(conflicts) > 0 {
-		p.setMergeStatus(ctx, c, pub.Ref, "issue")
-		return out, nil
-	}
-	if err := fg.RequestMerge(ctx, pr); err != nil {
-		p.setMergeStatus(ctx, c, pub.Ref, "issue")
-		return nil, fmt.Errorf("pull request %s is open, but asking %s to merge it failed: %w", pr.URL, forgeName(pub.Forge), err)
-	}
-	// In memory only: a restart does not wait (decision 0091).
-	p.Log.Info("waiting for the merge", "project", p.Config.Key, "issue", pub.Ref, "pull_request", pr.URL)
-	if out.Merge, err = p.awaitMerge(ctx, fg, branch); err != nil {
-		return nil, err
-	}
-	p.setMergeStatus(ctx, c, pub.Ref, mergeStatusOf[out.Merge])
-	return out, nil
 }
 
 // awaitMerge polls the branch's pull request every mergeEvery until it is

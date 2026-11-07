@@ -18,6 +18,17 @@ import (
 	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
 )
 
+// ErrNotStarted marks a Run error from before the first agent turn (tools,
+// team, issue, project, base branch, worktree, token): the issue goes back
+// to To do without a comment and the slot waits StartBackoff before its
+// next claim (decision 2026-11-07-publish-resilience). Run hooks wrap such
+// errors with it.
+var ErrNotStarted = errors.New("the run did not start")
+
+// maxStartBackoff is the ceiling for the exponential backoff between
+// re-claims of an issue whose run did not start.
+const maxStartBackoff = 10 * time.Minute
+
 // Hooks are the steps M3 fills. A nil hook is skipped.
 type Hooks struct {
 	Recover        func(ctx context.Context, c *cinderstack.Client) error                          // once at slot start, before the first Work
@@ -43,6 +54,7 @@ type Scheduler struct {
 	ReviewInterval time.Duration // default 5 minutes; a placeholder M3 settles
 	MergeInterval  time.Duration // default 60 seconds; the daemon sets config.json's merge_poll_seconds (legacy MERGE_POLL_SECONDS)
 	MaxBackoff     time.Duration // default 60 seconds; the first wait after a failure is 1s or this, if less
+	StartBackoff   time.Duration // default 60 seconds: the wait before the next claim after a run that did not start (ErrNotStarted); doubles per failure in a row, up to 10 minutes
 
 	status map[string]*ProjectStatus // by project key; shared with Run's copy, guarded by statusMu
 }
@@ -94,6 +106,9 @@ func (s *Scheduler) Run(ctx context.Context, slots []Slot) {
 	}
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 60 * time.Second
+	}
+	if cfg.StartBackoff <= 0 {
+		cfg.StartBackoff = 60 * time.Second
 	}
 	statusMu.Lock()
 	if s.status == nil {
@@ -156,6 +171,12 @@ func (s *Scheduler) cycle(ctx context.Context, slot Slot) (polled bool, err erro
 	// Work names only the first To do issue, so while that one is skipped
 	// every poll, changed or not, walks the board again (legacy parity).
 	stuck := false
+	var strikes struct {
+		issue string
+		n     int
+		wait  time.Duration
+	}
+	strikes.wait = s.StartBackoff
 	for ctx.Err() == nil {
 		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 		issue, err := c.Work(ctx)
@@ -186,7 +207,21 @@ func (s *Scheduler) cycle(ctx context.Context, slot Slot) (polled bool, err erro
 			continue
 		}
 		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = claimed.Ref })
-		s.finish(ctx, slot, *claimed)
+		if strikes.issue != claimed.Ref {
+			strikes.issue, strikes.n = claimed.Ref, 0
+		}
+		if s.finish(ctx, slot, *claimed, strikes.n+1, strikes.wait) {
+			strikes.n++
+			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
+			select {
+			case <-ctx.Done():
+				return polled, ctx.Err()
+			case <-time.After(strikes.wait):
+			}
+			strikes.wait = min(strikes.wait*2, maxStartBackoff)
+		} else {
+			strikes.issue, strikes.n, strikes.wait = "", 0, s.StartBackoff
+		}
 	}
 	return polled, ctx.Err()
 }
@@ -254,7 +289,15 @@ func (s *Scheduler) claimNext(ctx context.Context, slot Slot, first *cinderstack
 // ends in a comment and Review (plan M3), so an issue never stays In progress
 // with nobody working on it. A stop leaves it In progress: the next start's
 // recovery puts it back in To do.
-func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Issue) {
+//
+// A Run error wrapping ErrNotStarted (a failure before the first agent turn)
+// puts the issue back in To do without a comment, logs it, and tells the
+// caller to wait before the next claim. It is not a slot failure (decision
+// 2026-11-07-publish-resilience).
+// strike is how many times in a row this issue has then failed to start;
+// wait is the wait the caller will take next, logged as retry_in.
+// Returns whether cycle should wait (ErrNotStarted was handled).
+func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Issue, strike int, wait time.Duration) (notStarted bool) {
 	c, h := slot.Client, slot.Hooks
 	err := s.step(slot, issue, func() error { return h.Run(ctx, c, issue) })
 	// Phase 9's gate goes here, between run and publish (plan section 5); nothing yet.
@@ -262,17 +305,36 @@ func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Iss
 		err = s.step(slot, issue, func() error { return h.Publish(ctx, c, issue) })
 	}
 	if err == nil || ctx.Err() != nil {
-		return
+		return false
+	}
+	if errors.Is(err, ErrNotStarted) {
+		ref := issue.Ref
+		s.Log.Warn("not started, back in To do",
+			"project", slot.Project,
+			"issue", ref,
+			"err", err,
+			"retry_in", wait)
+		if strike == 3 {
+			if _, cerr := c.AddComment(ctx, ref, "The run could not start three times in a row; the last error: "+err.Error()+". The issue stays in To do and the runner tries again."); cerr != nil {
+				s.Log.Error("failure comment not added", "project", slot.Project, "issue", ref, "err", cerr)
+			}
+		}
+		todo := cinderstack.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"}
+		if _, cerr := c.UpdateIssue(ctx, ref, todo); cerr != nil {
+			s.Log.Error("not moved to To do", "project", slot.Project, "issue", ref, "err", cerr)
+		}
+		return true
 	}
 	s.Log.Error("run failed", "project", slot.Project, "issue", issue.Ref, "err", err)
-	if _, err := c.AddComment(ctx, issue.Ref, "The run stopped with an error: "+err.Error()); err != nil {
-		s.Log.Error("failure comment not added", "project", slot.Project, "issue", issue.Ref, "err", err)
+	if _, cerr := c.AddComment(ctx, issue.Ref, "The run stopped with an error: "+err.Error()); cerr != nil {
+		s.Log.Error("failure comment not added", "project", slot.Project, "issue", issue.Ref, "err", cerr)
 	}
 	// Refused when the issue is no longer In progress, for example after a question (decision 0116).
 	review := cinderstack.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}
-	if _, err := c.UpdateIssue(ctx, issue.Ref, review); err != nil {
-		s.Log.Error("not moved to Review", "project", slot.Project, "issue", issue.Ref, "err", err)
+	if _, cerr := c.UpdateIssue(ctx, issue.Ref, review); cerr != nil {
+		s.Log.Error("not moved to Review", "project", slot.Project, "issue", issue.Ref, "err", cerr)
 	}
+	return false
 }
 
 // step calls f and turns a panic into an error, logging its stack, so a

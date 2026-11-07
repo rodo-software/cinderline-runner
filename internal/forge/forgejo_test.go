@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -110,7 +111,7 @@ func TestForgejoOpenPullRequest(t *testing.T) {
 func TestForgejoOpenPullRequestFindsEarlier(t *testing.T) {
 	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/ember.git",
 		reply{409, `{"message":"exists"}`},
-		reply{200, `[{"number":1,"head":{"ref":"cinderstack/EMB-1"}},{"number":2,"html_url":"u","head":{"ref":"cinderstack/EMB-3"}}]`})
+		reply{200, `[{"number":1,"head":{"label":"cinderstack/EMB-1","ref":"cinderstack/EMB-1"}},{"number":2,"html_url":"u","head":{"label":"cinderstack/EMB-3","ref":"cinderstack/EMB-3"}}]`})
 
 	pr, err := f.OpenPullRequest(context.Background(), input)
 	if err != nil || pr != (PullRequest{Number: 2, URL: "u"}) {
@@ -143,8 +144,8 @@ func TestForgejoOpenPullRequestRefused(t *testing.T) {
 
 func TestForgejoFindPullRequest(t *testing.T) {
 	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/ember.git",
-		reply{200, `[{"number":2,"html_url":"u","head":{"ref":"cinderstack/EMB-3"}}]`},
-		reply{200, `[{"number":1,"head":{"ref":"cinderstack/EMB-1"}}]`})
+		reply{200, `[{"number":2,"html_url":"u","head":{"label":"cinderstack/EMB-3","ref":"cinderstack/EMB-3"}}]`},
+		reply{200, `[{"number":1,"head":{"label":"cinderstack/EMB-1","ref":"cinderstack/EMB-1"}}]`})
 	ctx := context.Background()
 
 	if pr, found, err := f.FindPullRequest(ctx, "cinderstack/EMB-3"); pr != (PullRequest{2, "u"}) || !found || err != nil {
@@ -232,7 +233,7 @@ func TestForgejoMergeState(t *testing.T) {
 	const list = "GET " + pulls + "?state=all&sort=recentupdate&limit=50"
 	const status = "GET https://git.rodo.nl/api/v1/repos/willem/ember/commits/abc/status"
 	pr := func(fields string) reply {
-		return reply{200, `[{"head":{"ref":"cinderstack/OTHER","sha":"x"}},{"head":{"ref":"cinderstack/EMBER-1","sha":"abc"},` + fields + `}]`}
+		return reply{200, `[{"head":{"label":"cinderstack/OTHER","ref":"cinderstack/OTHER","sha":"x"}},{"head":{"label":"cinderstack/EMBER-1","ref":"cinderstack/EMBER-1","sha":"abc"},` + fields + `}]`}
 	}
 	for _, tt := range []struct {
 		name    string
@@ -272,4 +273,72 @@ func TestForgejoMergeStateError(t *testing.T) {
 	if _, err := f.MergeState(context.Background(), "cinderstack/EMBER-1"); err == nil || !strings.Contains(err.Error(), "502: <html>Bad Gateway</html>") || strings.Contains(err.Error(), testToken) {
 		t.Errorf("MergeState = %v, want the 502", err)
 	}
+}
+
+// CSR-81 point 1 (decision 2026-11-07-publish-resilience): Forgejo keeps
+// the pull request's own head branch in head.label; head.ref is rewritten
+// to refs/pull/N/head once the branch is deleted after the merge (seen on
+// git.rodo.nl, PR 53, and on codeberg.org). Matching on the label finds the
+// merged pull request, so the merge status poll turns an earlier "issue"
+// into "success".
+func TestForgejoMergeStateAfterBranchDeletion(t *testing.T) {
+	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/ember.git",
+		reply{200, `[{"number":54,"head":{"label":"cinderstack/EMBER-116","ref":"cinderstack/EMBER-116","sha":"y"},"state":"open"},` +
+			`{"number":53,"head":{"label":"cinderstack/EMBER-115","ref":"refs/pull/53/head","sha":"x"},"merged":true,"state":"closed"}]`})
+	s, err := f.MergeState(context.Background(), "cinderstack/EMBER-115")
+	if s != MergeMerged || err != nil {
+		t.Errorf("MergeState = %q, %v; want merged", s, err)
+	}
+	wantURLs(t, *reqs, "GET "+pulls+"?state=all&sort=recentupdate&limit=50")
+}
+
+// CSR-81 point 1: the list is walked page by page, most recently updated
+// first, until the branch's pull request is found or the list ends, so the
+// lookup does not depend on how many other pull requests were touched
+// since. A page shorter than 50 is the last one.
+func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
+	others := make([]string, 50)
+	for i := range others {
+		others[i] = `{"number":` + strconv.Itoa(100+i) + `,"head":{"label":"other-` + strconv.Itoa(i) + `","ref":"other-` + strconv.Itoa(i) + `","sha":"o"},"state":"open"}`
+	}
+	full := reply{200, `[` + strings.Join(others, ",") + `]`}
+	const page1 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50"
+	const page2 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=2"
+	const page3 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=3"
+	for _, tt := range []struct {
+		name    string
+		replies []reply
+		want    MergeState
+		urls    []string
+	}{
+		{"on page 2", []reply{full, {200, `[{"number":7,"head":{"label":"cinderstack/EMBER-1","ref":"refs/pull/7/head","sha":"x"},"merged":true,"state":"closed"}]`}}, MergeMerged, []string{page1, page2}},
+		{"on page 3", []reply{full, full, {200, `[{"number":7,"head":{"label":"cinderstack/EMBER-1","ref":"cinderstack/EMBER-1","sha":"x"},"merged":false,"state":"closed"}]`}}, MergeClosed, []string{page1, page2, page3}},
+		{"none, list ends with an empty page", []reply{full, {200, `[]`}}, "", []string{page1, page2}},
+		{"none, list ends with a short page", []reply{{200, `[{"number":1,"head":{"label":"other","ref":"other","sha":"o"},"state":"open"}]`}}, "", []string{page1}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/ember.git", tt.replies...)
+			s, err := f.MergeState(context.Background(), "cinderstack/EMBER-1")
+			if s != tt.want || err != nil {
+				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
+			}
+			wantURLs(t, *reqs, tt.urls...)
+		})
+	}
+}
+
+// CSR-81 point 1: the open pull request of a branch is matched on its label
+// too, and the open list is paged the same way.
+func TestForgejoFindPullRequestByLabel(t *testing.T) {
+	others := make([]string, 50)
+	for i := range others {
+		others[i] = `{"number":` + strconv.Itoa(100+i) + `,"head":{"label":"other-` + strconv.Itoa(i) + `","ref":"other-` + strconv.Itoa(i) + `"}}`
+	}
+	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/ember.git",
+		reply{200, `[` + strings.Join(others, ",") + `]`},
+		reply{200, `[{"number":2,"html_url":"u","head":{"label":"cinderstack/EMB-3","ref":"cinderstack/EMB-3"}}]`})
+	if pr, found, err := f.FindPullRequest(context.Background(), "cinderstack/EMB-3"); pr != (PullRequest{2, "u"}) || !found || err != nil {
+		t.Errorf("FindPullRequest = %+v, %v, %v", pr, found, err)
+	}
+	wantURLs(t, *reqs, "GET "+pulls+"?state=open&limit=50", "GET "+pulls+"?state=open&limit=50&page=2")
 }

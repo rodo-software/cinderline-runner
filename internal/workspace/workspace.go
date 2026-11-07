@@ -37,4 +37,13 @@ type Workspace interface {
 	Push(ctx context.Context, dir, branch string) error
 	// Head returns the commit the clone's branch is on.
 	Head(ctx context.Context, dir string) (string, error)
+	// Stranded lists the clones whose branch has commits that no remote
+	// branch has: work never pushed, or not since its last commit
+	// (decision 2026-11-07-publish-resilience).
+	Stranded(ctx context.Context) ([]Clone, error)
+}
+
+// Clone is one per-issue clone and the branch it is on.
+type Clone struct {
+	Dir, Branch string
 }

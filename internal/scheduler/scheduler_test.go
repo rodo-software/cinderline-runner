@@ -5,12 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -55,6 +58,7 @@ type app struct {
 	claimStatus int
 	hold        time.Duration
 	ev          *events
+	rewind      bool // a PATCH to To do changes the ETag, so the next /work answers the issue again (CSR-81)
 }
 
 func (a app) start(t *testing.T) *cinderstack.Client {
@@ -62,12 +66,14 @@ func (a app) start(t *testing.T) *cinderstack.Client {
 	if a.ev == nil {
 		t.Fatal("app needs events")
 	}
+	var version atomic.Int32
+	etag := func() string { return fmt.Sprintf(`"v%d"`, version.Load()+1) }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/runner/v1")
 		var in map[string]string // the request body, if any
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		switch {
-		case r.Method == "GET" && path == "/work" && r.Header.Get("If-None-Match") == `"v1"`:
+		case r.Method == "GET" && path == "/work" && r.Header.Get("If-None-Match") == etag():
 			a.ev.add("GET /work cached")
 			select {
 			case <-r.Context().Done():
@@ -76,7 +82,7 @@ func (a app) start(t *testing.T) *cinderstack.Client {
 			w.WriteHeader(http.StatusNotModified)
 		case r.Method == "GET" && path == "/work":
 			a.ev.add("GET /work")
-			w.Header().Set("ETag", `"v1"`)
+			w.Header().Set("ETag", etag())
 			_, _ = io.WriteString(w, `{"issue":`+a.issue+`}`)
 		case r.Method == "GET" && path == "/issues" && r.URL.Query().Get("status") == "todo":
 			a.ev.add("GET /issues todo")
@@ -95,6 +101,9 @@ func (a app) start(t *testing.T) *cinderstack.Client {
 			_, _ = io.WriteString(w, `{}`)
 		case r.Method == "PATCH" && strings.HasPrefix(path, "/issues/"):
 			a.ev.add("PATCH " + path + " " + in["status"] + " from " + in["expected_status"])
+			if a.rewind && in["status"] == "todo" {
+				version.Add(1)
+			}
 			_, _ = io.WriteString(w, issue)
 		default:
 			a.ev.add("unexpected " + r.Method + " " + path)
@@ -561,5 +570,79 @@ func TestFailingClaimWaitsForNextPoll(t *testing.T) {
 	}
 	if st := s.Status()["CSR"]; st.LastError != "" {
 		t.Errorf("a refused claim became a slot failure: %+v", st)
+	}
+}
+
+// writes are the POSTs and PATCHes the app saw, in order.
+func writes(ev *events) []string {
+	var got []string
+	for _, e := range ev.all() {
+		if strings.HasPrefix(e, "POST") || strings.HasPrefix(e, "PATCH") {
+			got = append(got, e)
+		}
+	}
+	return got
+}
+
+// CSR-81 point 4: a Run error wrapping ErrNotStarted (a failure before the
+// first agent turn: fetch, worktree, token) puts the issue back in To do
+// with no comment, logs it, and the slot waits StartBackoff before its next
+// claim; the next poll claims and runs it. It is not a slot failure.
+func TestNotStartedGoesBackToTodoWithoutComment(t *testing.T) {
+	s, buf := sched()
+	s.StartBackoff = time.Millisecond
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev, rewind: true}.start(t)
+	var runs atomic.Int32
+	run := func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+		if runs.Add(1) == 1 {
+			return fmt.Errorf("%w: git fetch: Forgejo unreachable", ErrNotStarted)
+		}
+		ev.add("run " + i.Ref)
+		return nil
+	}
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{Run: run, Publish: recordIssue(ev, "publish")}}})
+	waitFor(t, "the second run", func() bool { return ev.count("publish CSR-9") == 1 })
+	want := []string{
+		"POST /issues/CSR-9/claim todo",
+		"PATCH /issues/CSR-9 todo from in_progress",
+		"POST /issues/CSR-9/claim todo",
+	}
+	if got := writes(ev); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("writes = %q, want %q", got, want)
+	}
+	if l := buf.String(); !strings.Contains(l, `"level":"WARN","msg":"not started, back in To do","project":"CSR","issue":"CSR-9","err":"the run did not start: git fetch: Forgejo unreachable","retry_in":`) {
+		t.Errorf("no warning with project, issue and wait:\n%s", l)
+	}
+	if st := s.Status()["CSR"]; st.LastError != "" {
+		t.Errorf("a run that did not start became a slot failure: %+v", st)
+	}
+}
+
+// CSR-81 point 4: the same issue failing to start three times in a row gets
+// one comment, so a persistent misconfiguration is visible; it still goes
+// back to To do, and later failures add no comment.
+func TestNotStartedThriceComments(t *testing.T) {
+	s, _ := sched()
+	s.StartBackoff = time.Millisecond
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev, rewind: true}.start(t)
+	run := func(context.Context, *cinderstack.Client, cinderstack.Issue) error {
+		return fmt.Errorf("%w: no git token", ErrNotStarted)
+	}
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{Run: run}}})
+	waitFor(t, "five failures", func() bool { return ev.count("PATCH /issues/CSR-9 todo from in_progress") >= 5 })
+	var comments []string
+	for _, w := range writes(ev) {
+		if strings.HasPrefix(w, "POST /issues/CSR-9/comments ") {
+			comments = append(comments, w)
+		}
+	}
+	if len(comments) != 1 || !strings.Contains(comments[0], "three times") || !strings.Contains(comments[0], "no git token") {
+		t.Fatalf("comments = %q, want one after the third failure naming the error", comments)
+	}
+	got := writes(ev)
+	if i := slices.Index(got, comments[0]); i < 5 || got[i-1] != "POST /issues/CSR-9/claim todo" || !strings.HasPrefix(got[i+1], "PATCH /issues/CSR-9 todo") {
+		t.Errorf("the comment is not between the third claim and its move back:\n%s", strings.Join(got, "\n"))
 	}
 }
