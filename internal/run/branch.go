@@ -18,6 +18,10 @@ type Upkeep struct {
 	Dir               string
 	MaxTurns          int
 	Team              cinderstack.Team
+	// Session and Token are the solo orchestrator's session it just worked in
+	// and its scoped CinderStack token, for the merge attempt before the push
+	// (decision 2026-11-07-solo-team-resolves-merge-conflicts); never logged.
+	Session, Token string
 }
 
 // MergePrompt is what the team's Merge Resolver gets, the text of legacy
@@ -73,7 +77,10 @@ func reportsBlocked(msg string) bool { return blocked.MatchString(msg) }
 // UpdateBranch merges the base into the clone, which must be committed. A
 // merge, not a rebase: the branch is pushed and continued across runs. On a
 // conflict the team's Merge Resolver, if it has one, gets one run, without a
-// CinderStack token (0122), to merge and commit it. The runner checks the
+// CinderStack token (0122), to merge and commit it. If the team has no Merge
+// Resolver but is a solo team with a session, the orchestrator takes the
+// attempt in its own session with its token (decision
+// 2026-11-07-solo-team-resolves-merge-conflicts). The runner checks the
 // result itself and undoes it unless the clone is clean, the base and the
 // old head are both in it, no conflict marker is left and the report does
 // not say Blocked. Never a retry (decision
@@ -85,18 +92,24 @@ func (p Project) UpdateBranch(ctx context.Context, c *cinderstack.Client, client
 	if err != nil || len(conflicts) == 0 {
 		return nil, err
 	}
-	var resolver *cinderstack.TeamAgent
+	var agent *cinderstack.TeamAgent
+	var solo bool
 	for i, a := range u.Team.Agents {
 		if strings.EqualFold(a.Role, "merge resolver") {
-			resolver = &u.Team.Agents[i]
+			agent = &u.Team.Agents[i]
 		}
 	}
-	if resolver == nil {
-		return conflicts, nil
+	if agent == nil {
+		if len(u.Team.Agents) == 1 && u.Session != "" {
+			agent = &u.Team.Agents[0]
+			solo = true
+		} else {
+			return conflicts, nil
+		}
 	}
-	cl := clients[resolver.Client]
+	cl := clients[agent.Client]
 	if cl == nil {
-		log.Warn("merge resolver not run", "client", resolver.Client)
+		log.Warn("merge resolver not run", "client", agent.Client)
 		return conflicts, nil
 	}
 
@@ -110,14 +123,19 @@ func (p Project) UpdateBranch(ctx context.Context, c *cinderstack.Client, client
 		return conflicts, err
 	}
 	p.progress(ctx, c, u.Ref, "Resolving the merge with "+u.Base)
-	res, runErr := cl.Run(ctx, client.Turn{
+	turn := client.Turn{
 		Dir:        u.Dir,
-		Prompt:     MergePrompt(deref(resolver.Instructions), u.Ref, u.Base, u.Branch, conflicts, commits),
+		Prompt:     MergePrompt(deref(agent.Instructions), u.Ref, u.Base, u.Branch, conflicts, commits),
 		MaxTurns:   u.MaxTurns,
 		MaxMinutes: u.Team.MaxMinutes,
-		Model:      deref(resolver.Model),
+		Model:      deref(agent.Model),
 		Ponytail:   u.Team.Ponytail,
-	})
+	}
+	if solo {
+		turn.SessionID = u.Session
+		turn.Token = u.Token
+	}
+	res, runErr := cl.Run(ctx, turn)
 	if ctx.Err() != nil {
 		return conflicts, ctx.Err()
 	}

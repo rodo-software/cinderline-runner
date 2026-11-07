@@ -73,6 +73,10 @@ type Pub struct {
 	Team       cinderstack.Team
 	Forge      string // the project's forge, as GET project names it, for the report
 	Unread     bool   // reading a person's comments failed twice: add UnreadComments
+	// Session and Token are the solo orchestrator's session it just worked in
+	// and its scoped CinderStack token, for the merge attempt before the push
+	// (decision 2026-11-07-solo-team-resolves-merge-conflicts); never logged.
+	Session, Token string
 }
 
 // Published is what a publish opened, for FinishReport.
@@ -101,7 +105,7 @@ func (p Project) Publish(ctx context.Context, c *cinderstack.Client, clients map
 	}
 	// The branch protection blocks outdated pull requests (decision 0121).
 	conflicts, err := p.UpdateBranch(ctx, c, clients, ws, Upkeep{
-		Ref: pub.Ref, Branch: branch, Base: pub.Base, Dir: pub.Dir, MaxTurns: pub.MaxTurns, Team: pub.Team,
+		Ref: pub.Ref, Branch: branch, Base: pub.Base, Dir: pub.Dir, MaxTurns: pub.MaxTurns, Team: pub.Team, Session: pub.Session, Token: pub.Token,
 	})
 	if err != nil {
 		return err

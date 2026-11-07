@@ -574,3 +574,135 @@ func TestReviewBranchesFailures(t *testing.T) {
 		t.Error("a failed list is no error")
 	}
 }
+
+// soloRun is an UpdateBranch on CSR-1 by a solo team (only the
+// orchestrator, on claude) that has just worked in session "s1" with its
+// scoped token "tok" (decision 2026-11-07-solo-team-resolves-merge-conflicts).
+func soloRun(t *testing.T, team cinderstack.Team, run client.RunReply, verified bool) (*upkeepRun, *client.Fake, []string, error) {
+	t.Helper()
+	r := newUpkeepRun(team)
+	r.u.Session, r.u.Token = "s1", "tok"
+	r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+	r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
+	r.ws.Logs = []workspace.LogReply{{Log: "abc CSR-1: T"}}
+	r.ws.Cleans = []workspace.BoolReply{{Yes: verified}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}, {Yes: true}}
+	r.ws.Markers = []workspace.BoolReply{{}}
+	r.ws.Resets = []error{nil}
+	claude := &client.Fake{Runs: []client.RunReply{run}}
+	conflicts, err := r.project(t).UpdateBranch(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude, "opencode": r.opencode}, r.ws, r.u)
+	return r, claude, conflicts, err
+}
+
+var soloDev = cinderstack.Team{Name: "Solo", MaxMinutes: 45, Agents: devTeam.Agents[:1]}
+
+// A solo team's conflict gets one attempt by its orchestrator, in the
+// session it just worked in, with its scoped token and the resolver prompt;
+// a verified attempt leaves no conflict.
+func TestUpdateBranchSoloOrchestratorResolves(t *testing.T) {
+	r, claude, conflicts, err := soloRun(t, soloDev, client.RunReply{Result: client.Result{SessionID: "s1", Report: "Resolved."}}, true)
+	if conflicts != nil || err != nil {
+		t.Fatalf("UpdateBranch = %v, %v, want resolved", conflicts, err)
+	}
+	runs := claude.Calls()
+	if len(runs) != 1 {
+		t.Fatalf("orchestrator runs = %d, want 1 (never a retry)", len(runs))
+	}
+	turn := runs[0].Args[0].(client.Turn)
+	if turn.SessionID != "s1" || turn.Token != "tok" || turn.Dir != "/clone" || turn.Model != "m" || turn.MaxTurns != 30 || turn.MaxMinutes != 45 {
+		t.Errorf("orchestrator turn = %+v, want session s1 with token tok in the clone", turn)
+	}
+	if !strings.Contains(turn.Prompt, "# Your task: merge main into cinderstack/CSR-1") || !strings.Contains(turn.Prompt, "- `work.txt`") || !strings.Contains(turn.Prompt, "abc CSR-1: T") {
+		t.Errorf("orchestrator prompt is not the resolver prompt:\n%s", turn.Prompt)
+	}
+	if len(r.opencode.Calls()) != 0 {
+		t.Error("another agent ran")
+	}
+	if got := r.methods(); !reflect.DeepEqual(got, []string{"MergeBase", "Head", "Log", "Clean", "IsAncestor", "IsAncestor", "ConflictMarkers"}) {
+		t.Errorf("workspace calls = %v, want the merge, the attempt's checks and no reset", got)
+	}
+	if got := r.body("POST /issues/CSR-1/comments"); !reflect.DeepEqual(got, []string{"Resolved."}) {
+		t.Errorf("comments = %v, want the report", got)
+	}
+}
+
+// A solo orchestrator's attempt that fails a check, or reports Blocked, is
+// undone and the conflict returned, as for the Merge Resolver.
+func TestUpdateBranchSoloOrchestratorFails(t *testing.T) {
+	for _, tt := range []struct {
+		way      string
+		run      client.RunReply
+		verified bool
+	}{
+		{"leaves the worktree unclean", client.RunReply{Result: client.Result{Report: "Done."}}, false},
+		{"reports Blocked", client.RunReply{Result: client.Result{Report: "Blocked: unsure."}}, true},
+	} {
+		t.Run(tt.way, func(t *testing.T) {
+			r, claude, conflicts, err := soloRun(t, soloDev, tt.run, tt.verified)
+			if !reflect.DeepEqual(conflicts, []string{"work.txt"}) || err != nil {
+				t.Fatalf("UpdateBranch = %v, %v, want work.txt", conflicts, err)
+			}
+			if len(claude.Calls()) != 1 {
+				t.Errorf("orchestrator runs = %d, want 1", len(claude.Calls()))
+			}
+			ms := r.methods()
+			if ms[len(ms)-1] != "Reset" || r.ws.Calls()[len(ms)-1].Args[1] != "old" {
+				t.Errorf("workspace calls = %v, want a reset to the old head last", ms)
+			}
+			if cs := r.body("POST /issues/CSR-1/comments"); len(cs) != 1 || !strings.HasPrefix(cs[0], "**Failed**: the merge with main was not resolved") {
+				t.Errorf("comments = %v", cs)
+			}
+		})
+	}
+}
+
+// Without the session it just worked in (CatchUp before a solo team's first
+// turn), or for a team with workers but no Merge Resolver, nobody runs.
+func TestUpdateBranchNoAttemptWithoutSoloSession(t *testing.T) {
+	for _, tt := range []struct {
+		way     string
+		team    cinderstack.Team
+		session string
+	}{
+		{"solo without a session", soloDev, ""},
+		{"workers without a resolver", devTeam, "s1"},
+	} {
+		t.Run(tt.way, func(t *testing.T) {
+			r := newUpkeepRun(tt.team)
+			r.u.Session, r.u.Token = tt.session, "tok"
+			r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+			claude := &client.Fake{}
+			conflicts, err := r.project(t).UpdateBranch(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude}, r.ws, r.u)
+			if !reflect.DeepEqual(conflicts, []string{"work.txt"}) || err != nil {
+				t.Fatalf("UpdateBranch = %v, %v", conflicts, err)
+			}
+			if len(claude.Calls()) != 0 || !reflect.DeepEqual(r.methods(), []string{"MergeBase"}) {
+				t.Errorf("an agent ran: %v", r.methods())
+			}
+		})
+	}
+}
+
+// A team with a Merge Resolver is unchanged: the resolver runs in a fresh
+// session without a token, even when the orchestrator's session is known.
+func TestUpdateBranchResolverIgnoresSession(t *testing.T) {
+	r := newUpkeepRun(cinderstack.Team{Agents: []cinderstack.TeamAgent{devTeam.Agents[0], resolverAgent}})
+	r.u.Session, r.u.Token = "s1", "tok"
+	r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+	r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
+	r.ws.Logs = []workspace.LogReply{{}}
+	r.ws.Cleans = []workspace.BoolReply{{Yes: true}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}, {Yes: true}}
+	r.ws.Markers = []workspace.BoolReply{{}}
+	r.opencode.Runs = []client.RunReply{{Result: client.Result{Report: "Resolved."}}}
+	claude := &client.Fake{}
+	if _, err := r.project(t).UpdateBranch(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude, "opencode": r.opencode}, r.ws, r.u); err != nil {
+		t.Fatal(err)
+	}
+	if len(claude.Calls()) != 0 || len(r.opencode.Calls()) != 1 {
+		t.Fatalf("orchestrator runs %d, resolver runs %d, want 0 and 1", len(claude.Calls()), len(r.opencode.Calls()))
+	}
+	if turn := r.opencode.Calls()[0].Args[0].(client.Turn); turn.SessionID != "" || turn.Token != "" {
+		t.Errorf("resolver turn = %+v, want a fresh session without a token (0122)", turn)
+	}
+}
