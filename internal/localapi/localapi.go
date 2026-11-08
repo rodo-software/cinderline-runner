@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 )
 
 var (
@@ -53,6 +53,8 @@ type Handlers struct {
 	Status  func() []scheduler.ProjectStatus
 	Reload  func() error
 	Stop    func()
+	// Drain makes the daemon finish its runs in flight, take no new work, and exit.
+	Drain func()
 	// Follow returns the last n lines of the log file and a channel of every
 	// line logged after them, closed when the subscriber is dropped; cancel ends it.
 	Follow func(n int) (tail []byte, lines <-chan []byte, cancel func(), err error)
@@ -104,6 +106,11 @@ func Handler(h Handlers) http.Handler {
 		http.NewResponseController(w).Flush() // answer before the server closes
 		h.Stop()
 	})
+	mux.HandleFunc("POST /drain", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+		http.NewResponseController(w).Flush()
+		h.Drain()
+	})
 	mux.HandleFunc("POST /reload", func(w http.ResponseWriter, r *http.Request) {
 		if err := h.Reload(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -146,6 +153,9 @@ func (c Client) Logs(ctx context.Context, tail int, w io.Writer) error {
 
 // Stop stops the daemon at once.
 func (c Client) Stop(ctx context.Context) error { return c.post(ctx, "/stop") }
+
+// Drain makes the daemon finish its runs in flight, take no new work, and exit.
+func (c Client) Drain(ctx context.Context) error { return c.post(ctx, "/drain") }
 
 // Reload makes the daemon re-read its config and restart its slots.
 func (c Client) Reload(ctx context.Context) error { return c.post(ctx, "/reload") }

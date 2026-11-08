@@ -1,4 +1,5 @@
 version: 2
+project_name: cinderline
 builds:
   - main: ./cmd/...
     env:
@@ -12,5 +13,15 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 checksum:
   name_template: checksums.txt
+
+# The release notes start with the pinned agent CLIs (R14). GoReleaser OSS
+# cannot load a header from a file in its config, so the release workflow
+# (docs/ci/release.yml) runs `go run ./internal/tools/releasenotes` and
+# passes the result as --release-header.
+release:
+  prerelease: auto
+changelog:
+  sort: asc

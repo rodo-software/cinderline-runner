@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // Version is the config file version this build reads and writes.
@@ -40,7 +40,7 @@ func (c *Config) MergePoll() time.Duration {
 	return 60 * time.Second
 }
 
-// Project is one CinderStack project, identified by the pair (URL, Key).
+// Project is one Cinderline project, identified by the pair (URL, Key).
 type Project struct {
 	URL           string `json:"url"`
 	Key           string `json:"key"`

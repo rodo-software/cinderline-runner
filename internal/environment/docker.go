@@ -17,9 +17,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	defaultimage "github.com/rodo-software/cinderstack-runner/images/default"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	defaultimage "github.com/rodo-software/cinderline-runner/images/default"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // MySQLImage is the run's database, MySQL 8 as today's compose file, pinned

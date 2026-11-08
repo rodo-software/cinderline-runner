@@ -23,7 +23,7 @@ type Turn struct {
 	// Environment stops it; 0: none.
 	MaxMinutes int
 	Model      string // the agent's model; empty: the client's default
-	// Token is the run's scoped CinderStack token for the MCP server; empty
+	// Token is the run's scoped Cinderline token for the MCP server; empty
 	// gives the agent none, as workers and the Merge Resolver (0122). Never log it.
 	Token string
 	// Ponytail loads the ponytail plugin, for teams that enable it
@@ -44,5 +44,5 @@ type Result struct {
 type Usage struct {
 	InputTokens, OutputTokens         int
 	CacheReadTokens, CacheWriteTokens int
-	CostUSD                           *float64 // nil: the CLI printed none, so CinderStack estimates it
+	CostUSD                           *float64 // nil: the CLI printed none, so Cinderline estimates it
 }

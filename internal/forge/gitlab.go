@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 var _ Forge = (*GitLab)(nil)
@@ -26,6 +26,7 @@ type GitLab struct {
 	HTTP *http.Client // set by NewGitLab; replace it before first use, e.g. in tests
 
 	project string // REST base of the project: <host>/api/v4/projects/<group%2F...%2Frepo>
+	host    string // API base: https://<host>/api/v4
 	token   string
 }
 
@@ -61,6 +62,7 @@ func NewGitLab(repository, token string) (*GitLab, error) {
 		HTTP: &http.Client{Timeout: 30 * time.Second},
 		// PathEscape also escapes the slashes: GitLab takes the project's full path as one segment.
 		project: "https://" + host + "/api/v4/projects/" + url.PathEscape(path),
+		host:    "https://" + host + "/api/v4",
 		token:   token,
 	}, nil
 }
@@ -165,6 +167,52 @@ func (g *GitLab) MergeState(ctx context.Context, branch string) (MergeState, err
 		return MergeFailed, nil
 	}
 	return MergePending, nil
+}
+
+func (g *GitLab) CISecrets(ctx context.Context) ([]string, error) {
+	var exposed []string
+
+	var projectVars []struct {
+		Key       string `json:"key"`
+		Protected bool   `json:"protected"`
+	}
+	err := g.do(ctx, http.MethodGet, g.project+"/variables?per_page=100", nil, &projectVars)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range projectVars {
+		if !v.Protected {
+			exposed = append(exposed, "project variable "+v.Key)
+		}
+	}
+
+	var projInfo struct {
+		Namespace struct {
+			ID   int    `json:"id"`
+			Kind string `json:"kind"`
+		} `json:"namespace"`
+	}
+	err = g.do(ctx, http.MethodGet, g.project, nil, &projInfo)
+	if err != nil {
+		return nil, err
+	}
+	if projInfo.Namespace.Kind == "group" {
+		var groupVars []struct {
+			Key       string `json:"key"`
+			Protected bool   `json:"protected"`
+		}
+		err = g.do(ctx, http.MethodGet, g.host+"/groups/"+strconv.Itoa(projInfo.Namespace.ID)+"/variables?per_page=100", nil, &groupVars)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range groupVars {
+			if !v.Protected {
+				exposed = append(exposed, "group variable "+v.Key)
+			}
+		}
+	}
+	// shortcut: first page only (100 entries), upgrade when a repository has more
+	return exposed, nil
 }
 
 // do sends one API request with in as its JSON body, when not nil, and

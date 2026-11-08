@@ -8,10 +8,10 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // TeamJob is one issue's run by a team with workers, for Rounds.
@@ -20,8 +20,8 @@ type TeamJob struct {
 	Branch   string
 	Base     string // for a fresh clone
 	MaxTurns int
-	Team     cinderstack.Team // the API lists its orchestrator first
-	Prompt   string           // the orchestrator's fresh prompt
+	Team     cinderline.Team // the API lists its orchestrator first
+	Prompt   string          // the orchestrator's fresh prompt
 }
 
 // Ran is a sub-issue a round ran, for the orchestrator's next prompt.
@@ -51,13 +51,13 @@ func RoundPrompt(ref string, ran []Ran) string {
 }
 
 // WorkerPrompt is the prompt of one run on a sub-issue, the text of legacy
-// lib.mjs workerPrompt with the CinderStack renames. A worker has no
-// CinderStack access, so the sub-issue is all it knows; the orchestrator's
+// lib.mjs workerPrompt with the Cinderline renames. A worker has no
+// Cinderline access, so the sub-issue is all it knows; the orchestrator's
 // own sub-issue (reader) may read. The untrusted texts come last as data.
 func WorkerPrompt(instructions, ref, parentRef, title, body, branch string, reader bool) string {
-	access := "- You have no access to CinderStack or to people. If you have a question for a person, or something blocks you, say so in your report and do what you can."
+	access := "- You have no access to Cinderline or to people. If you have a question for a person, or something blocks you, say so in your report and do what you can."
 	if reader {
-		access = `- CinderStack is available as the MCP server "` + name.Name + `", for reading only, such as get_issue and list_comments on ` + parentRef + " and " + ref + ". Do not add comments, change statuses or ask a person: put questions in your report."
+		access = `- Cinderline is available as the MCP server "` + name.Name + `", for reading only, such as get_issue and list_comments on ` + parentRef + " and " + ref + ". Do not add comments, change statuses or ask a person: put questions in your report."
 	}
 	body = strings.TrimSpace(body)
 	if body == "" {
@@ -87,8 +87,8 @@ Rules from the runner:
 
 // subIssuesToRun are the sub-issues to run, in creation order: those in To
 // do and, after a restart, those a run left In progress (0091, 0122).
-func subIssuesToRun(subs []cinderstack.SubIssue, afterRestart bool) []cinderstack.SubIssue {
-	var out []cinderstack.SubIssue
+func subIssuesToRun(subs []cinderline.SubIssue, afterRestart bool) []cinderline.SubIssue {
+	var out []cinderline.SubIssue
 	for _, s := range subs {
 		if v := s.Status.Value; v == "todo" || afterRestart && v == "in_progress" {
 			out = append(out, s)
@@ -106,9 +106,9 @@ func deref(s *string) string {
 
 // progress reports a step on the issue a person watches (decision
 // 2026-11-04-run-progress-updates). A failure only logs: progress never stops
-// a run. Cut to CinderStack's 200 characters, as a sub-issue title alone may
+// a run. Cut to Cinderline's 200 characters, as a sub-issue title alone may
 // be that long.
-func (p Project) progress(ctx context.Context, c *cinderstack.Client, ref, msg string) {
+func (p Project) progress(ctx context.Context, c *cinderline.Client, ref, msg string) {
 	if r := []rune(msg); len(r) > 200 {
 		msg = string(r[:200])
 	}
@@ -119,7 +119,7 @@ func (p Project) progress(ctx context.Context, c *cinderstack.Client, ref, msg s
 
 // waiting reports whether the issue waits for a person: a subagent may have
 // asked, and a quick answer can have moved it back to To do already (0116).
-func waiting(ctx context.Context, c *cinderstack.Client, ref string) (bool, error) {
+func waiting(ctx context.Context, c *cinderline.Client, ref string) (bool, error) {
 	issue, err := c.GetIssue(ctx, ref)
 	s := issue.Status.Value
 	return s == "blocked" || s == "todo", err
@@ -137,17 +137,18 @@ func waiting(ctx context.Context, c *cinderstack.Client, ref string) (bool, erro
 // more; if that fails twice, the finished work is published with
 // UnreadComments (decision 2026-11-03-comments-during-a-run). The outcome
 // and errors mean what they mean for Attempts.
-func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob) (out Outcome, err error) {
+func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob) (out Outcome, err error) {
 	log := p.Log.With("project", p.Config.Key, "issue", j.Ref)
 	if len(j.Team.Agents) == 0 {
-		return Outcome{}, fmt.Errorf("team %s has no agents", j.Team.Name)
+		return Outcome{}, notStarted(fmt.Errorf("team %s has no agents", j.Team.Name))
 	}
 	orch := j.Team.Agents[0]
 	cl := clients[orch.Client]
 	if cl == nil {
-		return Outcome{}, fmt.Errorf("agent %s runs on %s, which this runner does not run", orch.Name, orch.Client)
+		return Outcome{}, notStarted(fmt.Errorf("agent %s runs on %s, which this runner does not run", orch.Name, orch.Client))
 	}
 
+	var dir string
 	defer func() {
 		if ctx.Err() != nil {
 			return // a stop: the note resumes the run after the restart
@@ -155,21 +156,25 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 		if !out.Paused {
 			p.dropPaused(j.Ref)
 		}
+		if err == nil {
+			out.Dir = dir
+		}
 		if err := c.DeleteAgentTokens(ctx, j.Ref); err != nil {
 			log.Warn("agent tokens not deleted", "err", err)
 		}
 	}()
 
 	note, resumed := p.resumable(j.Ref, orch.Client)
-	dir, session := note.Dir, note.Session
+	dir = note.Dir
+	session := note.Session
 	if !resumed {
 		if dir, err = ws.Prepare(ctx, j.Branch, j.Base); err != nil {
-			return Outcome{}, err
+			return Outcome{}, notStarted(err)
 		}
 	}
 	parent, err := c.GetIssue(ctx, j.Ref)
 	if err != nil {
-		return Outcome{}, err
+		return Outcome{}, notStarted(err)
 	}
 	// Also on a clone fresh from the base, where the merge changes nothing,
 	// as Prepare does not say whether it continued the remote branch.
@@ -204,7 +209,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 			turn.Prompt = RoundPrompt(j.Ref, ran)
 			p.progress(ctx, c, j.Ref, orch.Name+" is reviewing the sub-issues")
 		}
-		tok, err := c.CreateAgentToken(ctx, j.Ref, cinderstack.KindOrchestrator, orch.Name)
+		tok, err := c.CreateAgentToken(ctx, j.Ref, cinderline.KindOrchestrator, orch.Name)
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -264,12 +269,12 @@ func (p Project) Rounds(ctx context.Context, c *cinderstack.Client, clients map[
 // runSubIssues runs the parent's open sub-issues one at a time, in creation
 // order, and returns those that ran. Its only error is a stop; a sub-issue
 // it cannot claim is skipped, as legacy does.
-func (p Project) runSubIssues(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob, dir string, subs []cinderstack.SubIssue, afterRestart bool) ([]Ran, error) {
+func (p Project) runSubIssues(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob, dir string, subs []cinderline.SubIssue, afterRestart bool) ([]Ran, error) {
 	var ran []Ran
 	for _, s := range subIssuesToRun(subs, afterRestart) {
 		log := p.Log.With("project", p.Config.Key, "issue", s.Ref, "parent", j.Ref)
 		if s.Status.Value == "todo" {
-			if _, err := c.UpdateIssue(ctx, s.Ref, cinderstack.UpdateIssueRequest{Status: "in_progress", ExpectedStatus: "todo"}); err != nil {
+			if _, err := c.UpdateIssue(ctx, s.Ref, cinderline.UpdateIssueRequest{Status: "in_progress", ExpectedStatus: "todo"}); err != nil {
 				if ctx.Err() != nil {
 					return ran, ctx.Err()
 				}
@@ -296,7 +301,7 @@ func (p Project) runSubIssues(ctx context.Context, c *cinderstack.Client, client
 		if _, err := c.AddComment(ctx, s.Ref, report); err != nil {
 			log.Warn("report not commented", "err", err)
 		}
-		if _, err := c.UpdateIssue(ctx, s.Ref, cinderstack.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}); err != nil {
+		if _, err := c.UpdateIssue(ctx, s.Ref, cinderline.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}); err != nil {
 			log.Warn("sub-issue not moved to review", "err", err)
 		}
 		ran = append(ran, r)
@@ -309,7 +314,7 @@ func (p Project) runSubIssues(ctx context.Context, c *cinderstack.Client, client
 // The orchestrator's own sub-issue runs in a fresh session with a reader
 // token, so its main session's context stays its own; a worker gets no
 // token (decision 2026-11-05-runner-rewrite-details point 6, 0122).
-func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob, dir string, r *Ran, log *slog.Logger) (string, error) {
+func (p Project) runSubIssue(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob, dir string, r *Ran, log *slog.Logger) (string, error) {
 	sub, err := c.GetIssue(ctx, r.Ref)
 	if err != nil {
 		return "", err
@@ -317,7 +322,7 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients
 	if sub.Agent != nil {
 		r.Agent = sub.Agent.Name
 	}
-	var agent *cinderstack.TeamAgent
+	var agent *cinderline.TeamAgent
 	for i, a := range j.Team.Agents {
 		if a.Name == r.Agent {
 			agent = &j.Team.Agents[i]
@@ -342,7 +347,7 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderstack.Client, clients
 	}
 	if self {
 		// On the sub-issue: a reader token for the parent would replace the orchestrator's.
-		tok, err := c.CreateAgentToken(ctx, r.Ref, cinderstack.KindReader, agent.Name)
+		tok, err := c.CreateAgentToken(ctx, r.Ref, cinderline.KindReader, agent.Name)
 		if err != nil {
 			return "", err
 		}

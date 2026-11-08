@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // The cases of legacy lib.forge.test.mjs, lib.prompt.test.mjs and
@@ -51,7 +51,7 @@ func TestBaseBranch(t *testing.T) {
 		{"the project's base branch", "release", nil, "release", "", 0},
 		{"the remote's default branch", "", []forge.DefaultBranchReply{{Branch: "develop"}}, "develop", "", 1},
 		{"no default branch", "", []forge.DefaultBranchReply{{Err: errors.New("404")}}, "",
-			"could not find the repository's default branch; set a base branch on the project in CinderStack (404)", 1},
+			"could not find the repository's default branch; set a base branch on the project in Cinderline (404)", 1},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			api := &fakeAPI{routes: map[string]reply{"GET /project": {200, `{"key":"CSR","base_branch":"` + tt.project + `"}`}}}
@@ -97,12 +97,12 @@ func TestAwaitMerge(t *testing.T) {
 			var log bytes.Buffer
 			p := project(t)
 			p.Log = slog.New(slog.NewTextHandler(&log, nil))
-			got, err := p.awaitMerge(context.Background(), fg, "cinderstack/CSR-1")
+			got, err := p.awaitMerge(context.Background(), fg, "cinderline/CSR-1")
 			if got != tt.want || err != nil {
 				t.Errorf("awaitMerge = %q, %v; want %q", got, err, tt.want)
 			}
 			calls := fg.Calls()
-			if len(calls) != tt.polls || calls[0].Args[0] != "cinderstack/CSR-1" {
+			if len(calls) != tt.polls || calls[0].Args[0] != "cinderline/CSR-1" {
 				t.Errorf("polls = %d (%+v), want %d of the branch", len(calls), calls[0], tt.polls)
 			}
 			if len(*slept) != tt.polls-1 || len(*slept) > 0 && (*slept)[0] != 15*time.Second {
@@ -120,7 +120,7 @@ func TestAwaitMergeStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	fg := &forge.Fake{MergeStates: []forge.MergeStateReply{{State: forge.MergePending}}}
-	if _, err := project(t).awaitMerge(ctx, fg, "cinderstack/CSR-1"); !errors.Is(err, context.Canceled) {
+	if _, err := project(t).awaitMerge(ctx, fg, "cinderline/CSR-1"); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
@@ -254,28 +254,36 @@ const toReview = `{"status":"review","expected_status":"in_progress"}`
 // it is merged in before the push" and "... with a conflict: the branch is
 // pushed as it is", the publish part: what was left is committed as
 // "<REF>: <title>", the base merged in, and the branch pushed as
-// cinderstack/<REF>, never the base, before the pull request is opened, with
+// cinderline/<REF>, never the base, before the pull request is opened, with
 // the progress line "Opening the pull request". As in the legacy test, the
 // forge fails here, so the run ends in the error after the push.
 func TestPublishPushesTheIssueBranch(t *testing.T) {
+	noSleep(t)
 	for _, conflicts := range [][]string{nil, {"work.txt"}} {
 		r := newPubRun(false)
-		r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: conflicts}}
-		r.forge.PullRequests = []forge.PullRequestReply{{Err: errors.New("forge unreachable")}}
+		// The forge failing is tried five times (CSR-81), each from the base merge.
+		down := forge.PullRequestReply{Err: errors.New("forge unreachable")}
+		r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: conflicts}, {Conflicts: conflicts}, {Conflicts: conflicts}, {Conflicts: conflicts}, {Conflicts: conflicts}}
+		r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}, {}, {}}
+		r.ws.Pushes = []error{nil, nil, nil, nil, nil}
+		r.ws.Heads = []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}}
+		r.forge.PullRequests = []forge.PullRequestReply{down, down, down, down, down}
 		if err := r.run(t); err == nil || !strings.Contains(err.Error(), "forge unreachable") {
 			t.Fatalf("Publish = %v, want the forge's error", err)
 		}
-		want := []workspace.Call{
-			{Method: "Commit", Args: []any{"/clone", "CSR-1: T"}},
-			{Method: "MergeBase", Args: []any{"/clone", "main"}},
-			{Method: "IsAncestor", Args: []any{"/clone", "HEAD", "main"}},
-			{Method: "Push", Args: []any{"/clone", "cinderstack/CSR-1"}},
+		want := []workspace.Call{{Method: "Commit", Args: []any{"/clone", "CSR-1: T"}}}
+		for range 5 {
+			want = append(want,
+				workspace.Call{Method: "MergeBase", Args: []any{"/clone", "main"}},
+				workspace.Call{Method: "IsAncestor", Args: []any{"/clone", "HEAD", "main"}},
+				workspace.Call{Method: "Push", Args: []any{"/clone", "cinderline/CSR-1"}})
 		}
+		want = append(want, workspace.Call{Method: "Head", Args: []any{"/clone"}})
 		if got := r.ws.Calls(); !reflect.DeepEqual(got, want) {
 			t.Errorf("conflicts %v: workspace calls =\n%+v, want\n%+v", conflicts, got, want)
 		}
-		if w := r.api.writes(); len(w) != 1 || w[0] != `POST /issues/CSR-1/progress {"body":"Opening the pull request"}` {
-			t.Errorf("CinderStack writes = %v, want only the progress line", w)
+		if w := r.api.writes(); len(w) != 5 || w[0] != `POST /issues/CSR-1/progress {"body":"Opening the pull request"}` || w[4] != w[0] {
+			t.Errorf("Cinderline writes = %v, want only the progress line, once per attempt", w)
 		}
 	}
 }
@@ -291,7 +299,7 @@ func TestPublishUntrusted(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []forge.Call{{Method: "OpenPullRequest", Args: []any{forge.PullRequestInput{
-		Branch: "cinderstack/CSR-1", Base: "main", Title: "CSR-1: T", Body: "Resolves CSR-1 in CinderStack.\n\nDo it.",
+		Branch: "cinderline/CSR-1", Base: "main", Title: "CSR-1: T", Body: "Resolves CSR-1 in Cinderline.\n\nDo it.",
 	}}}}
 	if got := r.forge.Calls(); !reflect.DeepEqual(got, want) {
 		t.Errorf("forge calls = %+v, want %+v", got, want)
@@ -318,7 +326,7 @@ func TestPublishTrustedMerges(t *testing.T) {
 	if got := r.forgeMethods(); !reflect.DeepEqual(got, []string{"OpenPullRequest", "RequestMerge", "MergeState", "MergeState"}) {
 		t.Errorf("forge calls = %v", got)
 	}
-	if c := r.forge.Calls(); c[1].Args[0] != testPR || c[2].Args[0] != "cinderstack/CSR-1" {
+	if c := r.forge.Calls(); c[1].Args[0] != testPR || c[2].Args[0] != "cinderline/CSR-1" {
 		t.Errorf("merge of %v, waited on %v", c[1].Args, c[2].Args)
 	}
 	if len(*slept) != 1 {
@@ -427,6 +435,7 @@ func TestPublishNothingChanged(t *testing.T) {
 // after a question (0116), only logs; so does a failed merge_status write.
 // A failed commit, push or comment is the run's error.
 func TestPublishFailures(t *testing.T) {
+	noSleep(t)
 	r := newPubRun(false)
 	r.api.routes["PATCH /issues/CSR-1"] = reply{409, `{"message":"Conflict.","status":"blocked"}`}
 	if err := r.run(t); err != nil {
@@ -447,8 +456,13 @@ func TestPublishFailures(t *testing.T) {
 	}
 
 	for name, set := range map[string]func(*pubRun){
-		"commit":  func(r *pubRun) { r.ws.Commits = []workspace.CommitReply{{Err: errors.New("boom")}} },
-		"push":    func(r *pubRun) { r.ws.Pushes = []error{errors.New("boom")} },
+		"commit": func(r *pubRun) { r.ws.Commits = []workspace.CommitReply{{Err: errors.New("boom")}} },
+		"push": func(r *pubRun) { // five attempts (CSR-81)
+			r.ws.MergeBases = []workspace.MergeBaseReply{{}, {}, {}, {}, {}}
+			r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}, {}, {}}
+			r.ws.Pushes = []error{errors.New("boom"), errors.New("boom"), errors.New("boom"), errors.New("boom"), errors.New("boom")}
+			r.ws.Heads = []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}}
+		},
 		"comment": func(r *pubRun) { r.api.routes["POST /issues/CSR-1/comments"] = reply{500, `{"message":"boom"}`} },
 	} {
 		r := newPubRun(false)
@@ -466,8 +480,8 @@ func TestPublishFailures(t *testing.T) {
 // with the forge's states in order.
 func mergeCheck(t *testing.T, issues []string, states []forge.MergeStateReply) (*fakeAPI, *forge.Fake, string) {
 	t.Helper()
-	trusted, _ := json.Marshal(cinderstack.Team{ID: 1, Name: "Trusted", Trusted: true})
-	untrusted, _ := json.Marshal(cinderstack.Team{ID: 2, Name: "Untrusted"})
+	trusted, _ := json.Marshal(cinderline.Team{ID: 1, Name: "Trusted", Trusted: true})
+	untrusted, _ := json.Marshal(cinderline.Team{ID: 2, Name: "Untrusted"})
 	api := &fakeAPI{routes: map[string]reply{
 		"GET /issues?status=review": {200, `{"issues":[` + strings.Join(issues, ",") + `]}`},
 		"GET /teams/1":              {200, string(trusted)},
@@ -565,7 +579,7 @@ func TestCheckMergesSkips(t *testing.T) {
 }
 
 // Ported from lib.forge.test.mjs "checkMerges logs a failing issue and
-// checks the next"; the branch is cinderstack/<REF>. A failed list is the
+// checks the next"; the branch is cinderline/<REF>. A failed list is the
 // hook's error.
 func TestCheckMergesFailures(t *testing.T) {
 	api, fg, log := mergeCheck(t, []string{reviewJSON("CSR-1", 1, false, ""), reviewJSON("CSR-2", 1, false, "")},
@@ -573,7 +587,7 @@ func TestCheckMergesFailures(t *testing.T) {
 	if !strings.Contains(log, "merge status not checked") || !strings.Contains(log, "CSR-1") || !strings.Contains(log, "forge down") {
 		t.Errorf("log = %s", log)
 	}
-	if got := branches(fg); !reflect.DeepEqual(got, []any{"cinderstack/CSR-1", "cinderstack/CSR-2"}) {
+	if got := branches(fg); !reflect.DeepEqual(got, []any{"cinderline/CSR-1", "cinderline/CSR-2"}) {
 		t.Errorf("asked %v", got)
 	}
 	if w := api.writes(); !reflect.DeepEqual(w, []string{`PATCH /issues/CSR-2 {"merge_status":"success"}`}) {
@@ -583,5 +597,132 @@ func TestCheckMergesFailures(t *testing.T) {
 	api = &fakeAPI{routes: map[string]reply{"GET /issues?status=review": {500, `{"message":"down"}`}}}
 	if err := project(t).CheckMerges(context.Background(), api.client(t), &forge.Fake{}); err == nil {
 		t.Error("a failed list is no error")
+	}
+}
+
+// A trusted solo team's conflict at publish: the orchestrator's verified
+// attempt is pushed and the merge requested; a failed one is undone and the
+// branch pushed with the conflict as today, merge_status issue
+// (decision 2026-11-07-solo-team-resolves-merge-conflicts).
+func TestPublishSoloOrchestratorAttempt(t *testing.T) {
+	for _, tt := range []struct {
+		way     string
+		report  string
+		forge   []string
+		patches []string
+		ancs    []workspace.IsAncestorReply // the checks of the attempt, then HEAD not in the base
+	}{
+		{"resolved", "Resolved.", []string{"OpenPullRequest", "RequestMerge", "MergeState"}, []string{`{"merge_status":"success"}`, toReview}, []workspace.IsAncestorReply{{Yes: true}, {Yes: true}, {}}},
+		{"blocked", "Blocked: unsure.", []string{"OpenPullRequest"}, []string{`{"merge_status":"issue"}`, toReview}, []workspace.IsAncestorReply{{}}},
+	} {
+		t.Run(tt.way, func(t *testing.T) {
+			noSleep(t)
+			r := newPubRun(true)
+			r.pub.Team = cinderline.Team{Name: "Solo", Trusted: true, Agents: devTeam.Agents[:1]}
+			r.pub.Session, r.pub.Token = "s1", "tok"
+			r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+			r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
+			r.ws.Logs = []workspace.LogReply{{}}
+			r.ws.Cleans = []workspace.BoolReply{{Yes: true}}
+			r.ws.Ancestors = tt.ancs
+			r.ws.Markers = []workspace.BoolReply{{}}
+			r.ws.Resets = []error{nil}
+			r.forge.MergeStates = []forge.MergeStateReply{{State: forge.MergeMerged}}
+			claude := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: tt.report}}}}
+			p := project(t)
+			p.Log = slog.New(slog.NewTextHandler(&r.log, nil))
+			if err := p.Publish(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude}, r.ws, r.forge, r.pub); err != nil {
+				t.Fatal(err)
+			}
+			if n := len(claude.Calls()); n != 1 {
+				t.Fatalf("orchestrator runs = %d, want 1", n)
+			}
+			if turn := claude.Calls()[0].Args[0].(client.Turn); turn.SessionID != "s1" || turn.Token != "tok" {
+				t.Errorf("turn = %+v, want session s1 with token tok", turn)
+			}
+			ms := r.wsMethods()
+			if !reflect.DeepEqual(ms[len(ms)-1:], []string{"Push"}) {
+				t.Errorf("workspace calls = %v, want the push last", ms)
+			}
+			if reset := reflect.DeepEqual(ms[len(ms)-3:len(ms)-2], []string{"Reset"}); reset != (tt.report != "Resolved.") {
+				t.Errorf("workspace calls = %v: reset %v", ms, reset)
+			}
+			if got := r.forgeMethods(); !reflect.DeepEqual(got, tt.forge) {
+				t.Errorf("forge calls = %v, want %v", got, tt.forge)
+			}
+			if got := r.patches(); !reflect.DeepEqual(got, tt.patches) {
+				t.Errorf("PATCHes = %v, want %v", got, tt.patches)
+			}
+		})
+	}
+}
+
+// CSR-81 point 2: once the agent has finished, a failure in the fetch, base
+// merge, push or pull request steps is tried again with backoff, in memory
+// inside the run (decision 0091): the issue's status does not change until
+// it reaches Review once, with a pull request and no error comment. Every
+// attempt starts again at the base merge, so a base that moved during the
+// wait is merged in (decision 0121).
+func TestPublishRetriesTransientFailures(t *testing.T) {
+	slept := noSleep(t)
+	r := newPubRun(false)
+	r.ws.MergeBases = []workspace.MergeBaseReply{{}, {}, {}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}}
+	r.ws.Pushes = []error{errors.New("Forgejo unreachable"), errors.New("Forgejo unreachable"), nil}
+	if err := r.run(t); err != nil {
+		t.Fatalf("Publish = %v", err)
+	}
+	want := []string{"Commit", "MergeBase", "IsAncestor", "Push", "MergeBase", "IsAncestor", "Push", "MergeBase", "IsAncestor", "Push"}
+	if got := r.wsMethods(); !reflect.DeepEqual(got, want) {
+		t.Errorf("workspace calls = %v, want %v", got, want)
+	}
+	if got := r.forgeMethods(); !reflect.DeepEqual(got, []string{"OpenPullRequest"}) {
+		t.Errorf("forge calls = %v, want the pull request once", got)
+	}
+	if got := r.patches(); !reflect.DeepEqual(got, []string{toReview}) {
+		t.Errorf("PATCHes = %v, want Review once", got)
+	}
+	if c := r.comment(); !strings.HasPrefix(c, "Opened "+testPR.URL) {
+		t.Errorf("comment = %q, want the opened pull request, no error", c)
+	}
+	if len(*slept) != 2 || (*slept)[0] <= 0 || (*slept)[1] <= (*slept)[0] {
+		t.Errorf("waits = %v, want two, growing", *slept)
+	}
+}
+
+// CSR-81 point 2: after the last of five attempts the error names the
+// unpushed commit, so a person can recover it; nothing is commented or
+// moved here (the scheduler does that), and the five waits stay within ten
+// minutes.
+func TestPublishGivesUpAfterFiveAttempts(t *testing.T) {
+	slept := noSleep(t)
+	r := newPubRun(false)
+	boom := errors.New("Forgejo unreachable")
+	r.ws.MergeBases = []workspace.MergeBaseReply{{}, {}, {}, {}, {}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{}, {}, {}, {}, {}}
+	r.ws.Pushes = []error{boom, boom, boom, boom, boom}
+	r.ws.Heads = []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}}
+	err := r.run(t)
+	if err == nil || !strings.Contains(err.Error(), "Forgejo unreachable") || !strings.Contains(err.Error(), "0123456789abcdef0123456789abcdef01234567") || !strings.Contains(err.Error(), "cinderline/CSR-1") {
+		t.Fatalf("Publish = %v, want the last error with the unpushed commit and branch", err)
+	}
+	if n := strings.Count(strings.Join(r.wsMethods(), " "), "Push"); n != 5 {
+		t.Errorf("pushed %d times, want 5", n)
+	}
+	if got := r.patches(); len(got) != 0 {
+		t.Errorf("PATCHes = %v, want none", got)
+	}
+	if c := r.comment(); c != "" {
+		t.Errorf("comment = %q, want none", c)
+	}
+	var total time.Duration
+	for i, d := range *slept {
+		total += d
+		if d <= 0 || (i > 0 && d <= (*slept)[i-1]) {
+			t.Errorf("waits = %v, want growing", *slept)
+		}
+	}
+	if len(*slept) != 4 || total > 10*time.Minute {
+		t.Errorf("waits = %v (total %v), want four within ten minutes", *slept, total)
 	}
 }

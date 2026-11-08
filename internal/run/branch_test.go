@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // The cases of legacy runner.test.mjs, lib.test.mjs and lib.prompt.test.mjs
@@ -25,7 +25,7 @@ import (
 // and fake CLIs; these drive UpdateBranch, CatchUp and ReviewBranches
 // against the fakes, so a "conflict" is what the Workspace fake reports.
 
-var resolverAgent = cinderstack.TeamAgent{Name: "Merge Resolver", Role: "merge resolver", Client: "opencode", Model: ptr("openrouter/qwen"), Instructions: ptr("Resolve merges.")}
+var resolverAgent = cinderline.TeamAgent{Name: "Merge Resolver", Role: "merge resolver", Client: "opencode", Model: ptr("openrouter/qwen"), Instructions: ptr("Resolve merges.")}
 
 // Ported from lib.test.mjs "reportsBlocked finds a line that starts with
 // Blocked, after markdown".
@@ -43,9 +43,9 @@ func TestReportsBlocked(t *testing.T) {
 }
 
 // Ported from lib.prompt.test.mjs "mergePrompt has the resolver merge and
-// commit, with the conflicts as data last", with the CinderStack renames.
+// commit, with the conflicts as data last", with the Cinderline renames.
 func TestMergePrompt(t *testing.T) {
-	got := MergePrompt("Resolve well.", "CSR-3", "main", "cinderstack/CSR-3", []string{"app/a.php", "b.md"}, "abc1234 CSR-4: Part\n")
+	got := MergePrompt("Resolve well.", "CSR-3", "main", "cinderline/CSR-3", []string{"app/a.php", "b.md"}, "abc1234 CSR-4: Part\n")
 	if !strings.HasPrefix(got, "Resolve well.\n\n---\n") {
 		t.Errorf("prompt does not start with the instructions:\n%s", got)
 	}
@@ -53,14 +53,14 @@ func TestMergePrompt(t *testing.T) {
 		"Run `git merge origin/main`",
 		"run the project's checks as the repository's own instructions describe",
 		"`git commit --no-edit`, and leave the worktree clean",
-		"no access to CinderStack",
+		"no access to Cinderline",
 		`start your final message with "Blocked:"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt lacks %q", want)
 		}
 	}
-	end := "## Merge main into cinderstack/CSR-3\n\nBase branch: `main`\n\nConflicting files:\n\n- `app/a.php`\n- `b.md`\n\nCommits on this branch that are not on main (`git log --oneline origin/main..HEAD`):\n\n```\nabc1234 CSR-4: Part\n```\n"
+	end := "## Merge main into cinderline/CSR-3\n\nBase branch: `main`\n\nConflicting files:\n\n- `app/a.php`\n- `b.md`\n\nCommits on this branch that are not on main (`git log --oneline origin/main..HEAD`):\n\n```\nabc1234 CSR-4: Part\n```\n"
 	if !strings.HasSuffix(got, end) {
 		t.Errorf("prompt does not end with the data:\n%s", got)
 	}
@@ -78,13 +78,13 @@ type upkeepRun struct {
 	log      bytes.Buffer
 }
 
-func newUpkeepRun(team cinderstack.Team) *upkeepRun {
+func newUpkeepRun(team cinderline.Team) *upkeepRun {
 	tr := newTree("in_progress")
 	return &upkeepRun{
 		api:      tr.api(),
 		opencode: &client.Fake{},
 		ws:       &workspace.Fake{},
-		u:        Upkeep{Ref: "CSR-1", Branch: "cinderstack/CSR-1", Base: "main", Dir: "/clone", MaxTurns: 30, Team: team},
+		u:        Upkeep{Ref: "CSR-1", Branch: "cinderline/CSR-1", Base: "main", Dir: "/clone", MaxTurns: 30, Team: team},
 	}
 }
 
@@ -123,7 +123,7 @@ func (r *upkeepRun) body(prefix string) []string {
 // it is merged in before the push": the merge part; the push is publish's
 // (CSR-26).
 func TestUpdateBranchMergesCleanly(t *testing.T) {
-	r := newUpkeepRun(cinderstack.Team{Agents: []cinderstack.TeamAgent{devTeam.Agents[0], resolverAgent}})
+	r := newUpkeepRun(cinderline.Team{Agents: []cinderline.TeamAgent{devTeam.Agents[0], resolverAgent}})
 	r.ws.MergeBases = []workspace.MergeBaseReply{{}}
 	conflicts, err := r.update(t)
 	if conflicts != nil || err != nil {
@@ -133,7 +133,7 @@ func TestUpdateBranchMergesCleanly(t *testing.T) {
 		t.Errorf("workspace calls = %+v", got)
 	}
 	if len(r.opencode.Calls()) != 0 || len(r.api.writes()) != 0 {
-		t.Errorf("the resolver ran or CinderStack was written: %v", r.api.writes())
+		t.Errorf("the resolver ran or Cinderline was written: %v", r.api.writes())
 	}
 }
 
@@ -151,7 +151,7 @@ func TestUpdateBranchConflictWithoutResolver(t *testing.T) {
 		t.Errorf("workspace calls = %v, want only the merge", got)
 	}
 	if len(r.api.writes()) != 0 {
-		t.Errorf("CinderStack written: %v", r.api.writes())
+		t.Errorf("Cinderline written: %v", r.api.writes())
 	}
 }
 
@@ -204,7 +204,7 @@ func TestUpdateBranchResolver(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.way, func(t *testing.T) {
-			r := newUpkeepRun(cinderstack.Team{Name: "Dev", MaxMinutes: 45, Ponytail: true, Agents: []cinderstack.TeamAgent{devTeam.Agents[0], devTeam.Agents[1], resolverAgent}})
+			r := newUpkeepRun(cinderline.Team{Name: "Dev", MaxMinutes: 45, Ponytail: true, Agents: []cinderline.TeamAgent{devTeam.Agents[0], devTeam.Agents[1], resolverAgent}})
 			r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
 			r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
 			r.ws.Logs = []workspace.LogReply{{Log: "abc CSR-1: T"}}
@@ -255,7 +255,7 @@ func TestUpdateBranchResolver(t *testing.T) {
 			if turn.Token != "" || turn.SessionID != "" || turn.Dir != "/clone" || turn.Model != "openrouter/qwen" || turn.MaxTurns != 30 || turn.MaxMinutes != 45 || !turn.Ponytail {
 				t.Errorf("resolver turn = %+v, want a fresh session in the clone without a token (0122)", turn)
 			}
-			if !strings.HasPrefix(turn.Prompt, "Resolve merges.") || !strings.Contains(turn.Prompt, "# Your task: merge main into cinderstack/CSR-1") ||
+			if !strings.HasPrefix(turn.Prompt, "Resolve merges.") || !strings.Contains(turn.Prompt, "# Your task: merge main into cinderline/CSR-1") ||
 				!strings.Contains(turn.Prompt, "- `work.txt`") || !strings.Contains(turn.Prompt, "abc CSR-1: T") {
 				t.Errorf("resolver prompt:\n%s", turn.Prompt)
 			}
@@ -286,7 +286,7 @@ func TestUpdateBranchResolver(t *testing.T) {
 // A reset that fails after a failed attempt is an error: the clone may still
 // hold the resolver's half merge, so it must not be pushed.
 func TestUpdateBranchResetFails(t *testing.T) {
-	r := newUpkeepRun(cinderstack.Team{Agents: []cinderstack.TeamAgent{devTeam.Agents[0], resolverAgent}})
+	r := newUpkeepRun(cinderline.Team{Agents: []cinderline.TeamAgent{devTeam.Agents[0], resolverAgent}})
 	r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
 	r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
 	r.ws.Logs = []workspace.LogReply{{}}
@@ -392,7 +392,7 @@ func newReviewRun(trusted bool, mergeStatus string) *reviewRun {
 		`{"ref":"CSR-1","title":"T","status":{"value":"review","label":"x"},"merge_status":` + ms + `,"team":{"id":1,"name":"Dev"}},` +
 		`{"ref":"CSR-2","title":"S","status":{"value":"review","label":"x"},"team":{"id":1,"name":"Dev"},"parent":{"ref":"CSR-1","title":"T"}},` +
 		`{"ref":"CSR-3","title":"N","status":{"value":"review","label":"x"},"team":null}]}`
-	team, _ := json.Marshal(cinderstack.Team{ID: 1, Name: "Dev", Trusted: trusted, Agents: devTeam.Agents})
+	team, _ := json.Marshal(cinderline.Team{ID: 1, Name: "Dev", Trusted: trusted, Agents: devTeam.Agents})
 	return &reviewRun{
 		api: &fakeAPI{routes: map[string]reply{
 			"GET /issues?status=review": {200, issues},
@@ -471,11 +471,11 @@ func TestReviewBranches(t *testing.T) {
 			for _, c := range r.ws.Calls() {
 				switch c.Method {
 				case "Prepare":
-					if !reflect.DeepEqual(c.Args, []any{"cinderstack/CSR-1", "main"}) {
+					if !reflect.DeepEqual(c.Args, []any{"cinderline/CSR-1", "main"}) {
 						t.Errorf("Prepare %v", c.Args)
 					}
 				case "Push":
-					if !reflect.DeepEqual(c.Args, []any{"/review", "cinderstack/CSR-1"}) {
+					if !reflect.DeepEqual(c.Args, []any{"/review", "cinderline/CSR-1"}) {
 						t.Errorf("Push %v: never the base", c.Args)
 					}
 				}
@@ -485,7 +485,7 @@ func TestReviewBranches(t *testing.T) {
 			}
 			if tt.forge != nil {
 				calls := r.forge.Calls()
-				if calls[0].Args[0] != "cinderstack/CSR-1" || calls[1].Args[0] != pr {
+				if calls[0].Args[0] != "cinderline/CSR-1" || calls[1].Args[0] != pr {
 					t.Errorf("forge calls = %+v", calls)
 				}
 			}
@@ -495,7 +495,7 @@ func TestReviewBranches(t *testing.T) {
 				want = []string{`PATCH /issues/CSR-1 {"merge_status":"issue"}`}
 			}
 			if !reflect.DeepEqual(writes, want) {
-				t.Errorf("CinderStack writes = %v, want %v", writes, want)
+				t.Errorf("Cinderline writes = %v, want %v", writes, want)
 			}
 			if !strings.Contains(r.log.String(), tt.log) {
 				t.Errorf("log lacks %q:\n%s", tt.log, r.log.String())
@@ -514,7 +514,7 @@ func TestReviewBranchesKeepsAnIssueStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if w := r.api.writes(); len(w) != 0 {
-		t.Errorf("CinderStack writes = %v", w)
+		t.Errorf("Cinderline writes = %v", w)
 	}
 }
 
@@ -564,7 +564,7 @@ func TestReviewBranchesFailures(t *testing.T) {
 	if !strings.Contains(r.log.String(), "clone failed") || !strings.Contains(r.log.String(), "CSR-1") {
 		t.Errorf("log = %s", r.log.String())
 	}
-	if got := r.ws.Calls(); len(got) != 3 || got[1].Args[0] != "cinderstack/CSR-4" {
+	if got := r.ws.Calls(); len(got) != 3 || got[1].Args[0] != "cinderline/CSR-4" {
 		t.Errorf("workspace calls = %+v, want CSR-4 checked after CSR-1 failed", got)
 	}
 
@@ -572,5 +572,137 @@ func TestReviewBranchesFailures(t *testing.T) {
 	r.api.routes["GET /issues?status=review"] = reply{500, `{"message":"down"}`}
 	if err := r.run(t); err == nil {
 		t.Error("a failed list is no error")
+	}
+}
+
+// soloRun is an UpdateBranch on CSR-1 by a solo team (only the
+// orchestrator, on claude) that has just worked in session "s1" with its
+// scoped token "tok" (decision 2026-11-07-solo-team-resolves-merge-conflicts).
+func soloRun(t *testing.T, team cinderline.Team, run client.RunReply, verified bool) (*upkeepRun, *client.Fake, []string, error) {
+	t.Helper()
+	r := newUpkeepRun(team)
+	r.u.Session, r.u.Token = "s1", "tok"
+	r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+	r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
+	r.ws.Logs = []workspace.LogReply{{Log: "abc CSR-1: T"}}
+	r.ws.Cleans = []workspace.BoolReply{{Yes: verified}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}, {Yes: true}}
+	r.ws.Markers = []workspace.BoolReply{{}}
+	r.ws.Resets = []error{nil}
+	claude := &client.Fake{Runs: []client.RunReply{run}}
+	conflicts, err := r.project(t).UpdateBranch(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude, "opencode": r.opencode}, r.ws, r.u)
+	return r, claude, conflicts, err
+}
+
+var soloDev = cinderline.Team{Name: "Solo", MaxMinutes: 45, Agents: devTeam.Agents[:1]}
+
+// A solo team's conflict gets one attempt by its orchestrator, in the
+// session it just worked in, with its scoped token and the resolver prompt;
+// a verified attempt leaves no conflict.
+func TestUpdateBranchSoloOrchestratorResolves(t *testing.T) {
+	r, claude, conflicts, err := soloRun(t, soloDev, client.RunReply{Result: client.Result{SessionID: "s1", Report: "Resolved."}}, true)
+	if conflicts != nil || err != nil {
+		t.Fatalf("UpdateBranch = %v, %v, want resolved", conflicts, err)
+	}
+	runs := claude.Calls()
+	if len(runs) != 1 {
+		t.Fatalf("orchestrator runs = %d, want 1 (never a retry)", len(runs))
+	}
+	turn := runs[0].Args[0].(client.Turn)
+	if turn.SessionID != "s1" || turn.Token != "tok" || turn.Dir != "/clone" || turn.Model != "m" || turn.MaxTurns != 30 || turn.MaxMinutes != 45 {
+		t.Errorf("orchestrator turn = %+v, want session s1 with token tok in the clone", turn)
+	}
+	if !strings.Contains(turn.Prompt, "# Your task: merge main into cinderline/CSR-1") || !strings.Contains(turn.Prompt, "- `work.txt`") || !strings.Contains(turn.Prompt, "abc CSR-1: T") {
+		t.Errorf("orchestrator prompt is not the resolver prompt:\n%s", turn.Prompt)
+	}
+	if len(r.opencode.Calls()) != 0 {
+		t.Error("another agent ran")
+	}
+	if got := r.methods(); !reflect.DeepEqual(got, []string{"MergeBase", "Head", "Log", "Clean", "IsAncestor", "IsAncestor", "ConflictMarkers"}) {
+		t.Errorf("workspace calls = %v, want the merge, the attempt's checks and no reset", got)
+	}
+	if got := r.body("POST /issues/CSR-1/comments"); !reflect.DeepEqual(got, []string{"Resolved."}) {
+		t.Errorf("comments = %v, want the report", got)
+	}
+}
+
+// A solo orchestrator's attempt that fails a check, or reports Blocked, is
+// undone and the conflict returned, as for the Merge Resolver.
+func TestUpdateBranchSoloOrchestratorFails(t *testing.T) {
+	for _, tt := range []struct {
+		way      string
+		run      client.RunReply
+		verified bool
+	}{
+		{"leaves the worktree unclean", client.RunReply{Result: client.Result{Report: "Done."}}, false},
+		{"reports Blocked", client.RunReply{Result: client.Result{Report: "Blocked: unsure."}}, true},
+	} {
+		t.Run(tt.way, func(t *testing.T) {
+			r, claude, conflicts, err := soloRun(t, soloDev, tt.run, tt.verified)
+			if !reflect.DeepEqual(conflicts, []string{"work.txt"}) || err != nil {
+				t.Fatalf("UpdateBranch = %v, %v, want work.txt", conflicts, err)
+			}
+			if len(claude.Calls()) != 1 {
+				t.Errorf("orchestrator runs = %d, want 1", len(claude.Calls()))
+			}
+			ms := r.methods()
+			if ms[len(ms)-1] != "Reset" || r.ws.Calls()[len(ms)-1].Args[1] != "old" {
+				t.Errorf("workspace calls = %v, want a reset to the old head last", ms)
+			}
+			if cs := r.body("POST /issues/CSR-1/comments"); len(cs) != 1 || !strings.HasPrefix(cs[0], "**Failed**: the merge with main was not resolved") {
+				t.Errorf("comments = %v", cs)
+			}
+		})
+	}
+}
+
+// Without the session it just worked in (CatchUp before a solo team's first
+// turn), or for a team with workers but no Merge Resolver, nobody runs.
+func TestUpdateBranchNoAttemptWithoutSoloSession(t *testing.T) {
+	for _, tt := range []struct {
+		way     string
+		team    cinderline.Team
+		session string
+	}{
+		{"solo without a session", soloDev, ""},
+		{"workers without a resolver", devTeam, "s1"},
+	} {
+		t.Run(tt.way, func(t *testing.T) {
+			r := newUpkeepRun(tt.team)
+			r.u.Session, r.u.Token = tt.session, "tok"
+			r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+			claude := &client.Fake{}
+			conflicts, err := r.project(t).UpdateBranch(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude}, r.ws, r.u)
+			if !reflect.DeepEqual(conflicts, []string{"work.txt"}) || err != nil {
+				t.Fatalf("UpdateBranch = %v, %v", conflicts, err)
+			}
+			if len(claude.Calls()) != 0 || !reflect.DeepEqual(r.methods(), []string{"MergeBase"}) {
+				t.Errorf("an agent ran: %v", r.methods())
+			}
+		})
+	}
+}
+
+// A team with a Merge Resolver is unchanged: the resolver runs in a fresh
+// session without a token, even when the orchestrator's session is known.
+func TestUpdateBranchResolverIgnoresSession(t *testing.T) {
+	r := newUpkeepRun(cinderline.Team{Agents: []cinderline.TeamAgent{devTeam.Agents[0], resolverAgent}})
+	r.u.Session, r.u.Token = "s1", "tok"
+	r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+	r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
+	r.ws.Logs = []workspace.LogReply{{}}
+	r.ws.Cleans = []workspace.BoolReply{{Yes: true}}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}, {Yes: true}}
+	r.ws.Markers = []workspace.BoolReply{{}}
+	r.opencode.Runs = []client.RunReply{{Result: client.Result{Report: "Resolved."}}}
+	claude := &client.Fake{}
+	if _, err := r.project(t).UpdateBranch(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude, "opencode": r.opencode}, r.ws, r.u); err != nil {
+		t.Fatal(err)
+	}
+	if len(claude.Calls()) != 0 || len(r.opencode.Calls()) != 1 {
+		t.Fatalf("orchestrator runs %d, resolver runs %d, want 0 and 1", len(claude.Calls()), len(r.opencode.Calls()))
+	}
+	if turn := r.opencode.Calls()[0].Args[0].(client.Turn); turn.SessionID != "" || turn.Token != "" {
+		t.Errorf("resolver turn = %+v, want a fresh session without a token (0122)", turn)
 	}
 }

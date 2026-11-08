@@ -9,32 +9,16 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
-
-// Project is what the steps of one configured project need.
-type Project struct {
-	Config  config.Project
-	Secrets *secrets.Secrets
-	State   string                  // the host state folder (config.Paths.State)
-	Env     environment.Environment // where the project's turns run
-	Log     *slog.Logger
-}
-
-// Hooks returns the project's steps for its scheduler slot.
-func (p Project) Hooks() scheduler.Hooks {
-	return scheduler.Hooks{Recover: p.Recover, Pin: p.Pin, Check: p.Check}
-}
 
 // PausedDir is the folder of a project's paused notes, one <REF>.json per
 // paused issue, in the host state folder. The URL is part of the name because
@@ -48,7 +32,7 @@ func PausedDir(state string, p config.Project) string {
 // issues is really being worked on. First it removes the containers and
 // networks a previous process left (review item 9), then it drops the paused
 // notes of issues a person has since closed (0114).
-func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
+func (p Project) Recover(ctx context.Context, c *cinderline.Client) error {
 	if err := p.Env.Cleanup(ctx); err != nil {
 		// Only hygiene: a failure must not keep the project from working.
 		p.Log.Warn("stale containers and networks not removed", "project", p.Config.Key, "err", err)
@@ -89,8 +73,8 @@ func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
 		return err
 	}
 	for _, issue := range issues {
-		var conflict *cinderstack.ConflictError
-		_, err := c.UpdateIssue(ctx, issue.Ref, cinderstack.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"})
+		var conflict *cinderline.ConflictError
+		_, err := c.UpdateIssue(ctx, issue.Ref, cinderline.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"})
 		if errors.As(err, &conflict) {
 			continue // someone moved it meanwhile; nothing to put back
 		}
@@ -99,32 +83,129 @@ func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
 		}
 		p.Log.Info("back to To do after a restart", "project", p.Config.Key, "issue", issue.Ref)
 	}
+
+	// Stranded branch recovery (decision 2026-11-07-publish-resilience point 3).
+	return p.pushStranded(ctx, c)
+}
+
+// pushStranded pushes any stranded branches and opens pull requests for
+// Review issues (decision 2026-11-07-publish-resilience point 3).
+func (p Project) pushStranded(ctx context.Context, c *cinderline.Client) error {
+	if p.Workspace == nil || p.Forge == nil {
+		return nil
+	}
+	proj, err := c.GetProject(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded branches not checked", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	fg, err := p.Forge(proj.Forge)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded branches not checked", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	base, err := BaseBranch(ctx, c, fg)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded branches not checked", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	clones, err := p.Workspace.Stranded(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		p.Log.Warn("stranded listing failed", "project", p.Config.Key, "err", err)
+		return nil
+	}
+	for _, clone := range clones {
+		ref, ok := strings.CutPrefix(clone.Branch, name.Name+"/")
+		if !ok {
+			p.Log.Warn("stranded branch not checked", "project", p.Config.Key, "branch", clone.Branch, "err", "not a "+name.Name+" branch")
+			continue
+		}
+		log := p.Log.With("project", p.Config.Key, "issue", ref)
+		issue, err := c.GetIssue(ctx, ref)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Warn("stranded branch not checked", "err", err)
+			continue
+		}
+		switch issue.Status.Value {
+		case "done", "cancelled":
+			log.Info("stranded branch of a closed issue left alone")
+			continue
+		}
+		state, err := fg.MergeState(ctx, clone.Branch)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Warn("stranded branch not checked", "err", err)
+			continue
+		}
+		switch state {
+		case forge.MergeMerged, forge.MergeClosed:
+			log.Info("stranded branch left alone", "pull_request_state", state)
+			continue
+		}
+		err = p.Workspace.Push(ctx, clone.Dir, clone.Branch)
+		if err != nil {
+			log.Warn("stranded branch not pushed", "err", err)
+			continue
+		}
+		log.Info("stranded branch pushed", "branch", clone.Branch)
+		if issue.Status.Value != "review" {
+			continue
+		}
+		pr, err := fg.OpenPullRequest(ctx, forge.PullRequestInput{
+			Branch: clone.Branch,
+			Base:   base,
+			Title:  ref + ": " + issue.Title,
+			Body:   pullRequestBody(ref, deref(issue.Body)),
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			log.Warn("pull request not opened for a stranded branch", "err", err)
+			continue
+		}
+		log.Info("pull request opened for a stranded branch", "pull_request", pr.URL)
+	}
 	return nil
 }
 
-// Pin refuses a repository from CinderStack other than the one configured on
+// Pin refuses a repository from Cinderline other than the one configured on
 // this machine, so the git token never follows a changed URL (0114).
-func (p Project) Pin(ctx context.Context, c *cinderstack.Client) error {
+func (p Project) Pin(ctx context.Context, c *cinderline.Client) error {
 	proj, err := c.GetProject(ctx)
 	if err != nil {
 		return err
 	}
 	if proj.RepositoryURL == "" {
-		return fmt.Errorf("CinderStack names no repository for %s; this runner is configured for %s", p.Config.Key, p.Config.Repository)
+		return fmt.Errorf("the project in Cinderline names no repository for %s; this runner is configured for %s", p.Config.Key, p.Config.Repository)
 	}
 	if !config.SameRepository(proj.RepositoryURL, p.Config.Repository) {
-		return fmt.Errorf("CinderStack names the repository %s, but this runner is configured for %s", proj.RepositoryURL, p.Config.Repository)
+		return fmt.Errorf("the project in Cinderline names the repository %s, but this runner is configured for %s", proj.RepositoryURL, p.Config.Repository)
 	}
 	return nil
 }
 
-// keys are the clients this runner runs, with the model credential each needs.
-var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "opencode": secrets.OpenRouterKey}
-
 // Check refuses, before the claim, an issue whose team has an agent this
 // runner cannot run: an unsupported client, or a client without its key, so
 // such a team does not drain To do (decision 0122).
-func (p Project) Check(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error {
+func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
 	if issue.Team == nil {
 		return errors.New("the issue has no team")
 	}

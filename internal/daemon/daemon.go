@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/localapi"
-	"github.com/rodo-software/cinderstack-runner/internal/run"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/run"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // Options configure Run.
@@ -64,10 +64,13 @@ func Run(ctx context.Context, o Options) error {
 	d := &daemon{sched: &scheduler.Scheduler{Log: log}}
 
 	reloads := make(chan chan error)
+	drain := make(chan struct{})
+	var drainOnce sync.Once // a second drain request must not close it again
 	srv := &http.Server{Handler: localapi.Handler(localapi.Handlers{
 		Version: o.Version,
 		Status:  d.status,
 		Stop:    stop,
+		Drain:   func() { drainOnce.Do(func() { close(drain) }) },
 		Follow:  lf.follow,
 		Reload: func() error {
 			reply := make(chan error, 1)
@@ -75,11 +78,15 @@ func Run(ctx context.Context, o Options) error {
 			case reloads <- reply:
 			case <-ctx.Done():
 				return errStopping
+			case <-drain:
+				return errStopping
 			}
 			select {
 			case err := <-reply:
 				return err
 			case <-ctx.Done():
+				return errStopping
+			case <-drain:
 				return errStopping
 			}
 		},
@@ -101,12 +108,24 @@ func Run(ctx context.Context, o Options) error {
 		var wg sync.WaitGroup
 		slots := d.slots(runCtx, &wg, log, o, cfg)
 		d.sched.MergeInterval = cfg.MergePoll() // no Run is going: the last one returned
-		wg.Go(func() { d.sched.Run(runCtx, slots) })
+		d.sched.Drain = drain
+		schedDone := make(chan struct{})
+		wg.Go(func() { d.sched.Run(runCtx, slots); close(schedDone) })
 		log.Info("scheduler started", "slots", len(slots))
 		if reply != nil {
 			reply <- reloadErr
 		}
 		select {
+		case <-drain:
+			log.Info("draining")
+			select {
+			case <-schedDone:
+			case <-ctx.Done():
+			}
+			cancel()
+			wg.Wait()
+			log.Info("stopped")
+			return nil
 		case <-ctx.Done():
 			cancel()
 			wg.Wait()
@@ -145,16 +164,31 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			projects = append(projects, st)
 			continue
 		}
-		c := cinderstack.New(p.URL, token, o.Version)
+		env := &environment.Docker{Project: p.Key, Log: log}
+		proj, err := run.NewProject(p, sec, o.Paths.State, env, log)
+		if err != nil {
+			log.Error("project not started", "project", p.Key, "err", err)
+			st.LastError, st.LastErrorAt = err.Error(), time.Now()
+			projects = append(projects, st)
+			continue
+		}
+		c := cinderline.New(p.URL, token, o.Version)
 		c.Log = log.With("project", p.Key)
 		wg.Go(func() {
-			t := time.NewTicker(cinderstack.HeartbeatInterval)
+			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
+			// Clients stay empty until their detection in M7 (CSR-59); only the default environment exists yet.
+			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}
+			if err := c.PutReport(ctx, r); err != nil && ctx.Err() == nil {
+				c.Log.Warn("report failed", "err", err)
+			}
+			if err := c.Heartbeat(ctx); err != nil && ctx.Err() == nil {
+				c.Log.Warn("heartbeat failed", "err", err)
+			}
+			t := time.NewTicker(cinderline.HeartbeatInterval)
 			defer t.Stop()
 			c.RunHeartbeats(ctx, t.C)
 		})
-		env := &environment.Docker{Project: p.Key, Log: log}
-		hooks := run.Project{Config: p, Secrets: sec, State: o.Paths.State, Env: env, Log: log}.Hooks()
-		slots = append(slots, scheduler.Slot{Project: p.Key, Client: c, Hooks: hooks})
+		slots = append(slots, scheduler.Slot{Project: p.Key, Client: c, Hooks: proj.Hooks()})
 		projects = append(projects, st)
 		slotted[p.Key] = true
 	}

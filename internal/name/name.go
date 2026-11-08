@@ -4,4 +4,4 @@
 package name
 
 // Name is the product name.
-const Name = "cinderstack"
+const Name = "cinderline"

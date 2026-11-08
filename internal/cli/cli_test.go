@@ -14,9 +14,10 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // No test here may use t.Parallel: keyring.MockInit replaces a global provider.
@@ -71,6 +72,9 @@ func newCLI(t *testing.T, stdin string) (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		Stdin:   strings.NewReader(stdin),
 		Stdout:  &out,
 		Stderr:  &errb,
+		Forge: func(string, string, string) (forge.Forge, error) {
+			return &forge.Fake{CISecretsReplies: []forge.CISecretsReply{{}}}, nil
+		},
 	}, &out, &errb
 }
 
@@ -122,6 +126,11 @@ func TestDispatch(t *testing.T) {
 		{[]string{"add", "x"}, 2, "", true},
 		{[]string{"remove"}, 2, "", true},
 		{[]string{"remove", "-bogus", "WEB"}, 2, "", true},
+		{[]string{"run", "x"}, 2, "", true},
+		{[]string{"status", "x"}, 2, "", true},
+		{[]string{"logs", "x"}, 2, "", true},
+		{[]string{"logs", "-n", "x"}, 2, "", true},
+		{[]string{"stop", "x"}, 2, "", true},
 	}
 	for _, tt := range tests {
 		c, out, errb := newCLI(t, "")
@@ -137,7 +146,7 @@ func TestDispatch(t *testing.T) {
 	}
 	c, _, errb := newCLI(t, "")
 	c.Run(nil)
-	for _, cmd := range []string{"add", "remove", "version"} {
+	for _, cmd := range []string{"add", "remove", "run", "status", "logs", "stop", "update", "version"} {
 		if !strings.Contains(errb.String(), "  "+cmd) {
 			t.Errorf("usage %q does not list %s", errb.String(), cmd)
 		}

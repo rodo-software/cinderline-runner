@@ -5,7 +5,10 @@
 // stand-in for tests.
 package forge
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Forge talks to the host of one repository.
 type Forge interface {
@@ -22,6 +25,13 @@ type Forge interface {
 	// state; "" when the branch has none. By branch, as legacy
 	// pullRequestOutcome: the runner keeps no pull request numbers (0091).
 	MergeState(ctx context.Context, branch string) (MergeState, error)
+	// CISecrets checks whether the repository's CI can read secrets from a
+	// pushed branch. nil, nil = no CI secret reachable from an unprotected
+	// branch; non-empty = the secrets reachable from any branch, each
+	// described like "repository secret DEPLOY_KEY"; error = the check could
+	// not be made (forge API refused or failed). On any HTTP failure the
+	// error is returned at once with no names.
+	CISecrets(ctx context.Context) (exposed []string, err error)
 }
 
 // PullRequestInput is what a new pull request is opened with.
@@ -47,3 +57,19 @@ const (
 	MergeClosed  MergeState = "closed" // closed without merging
 	MergeFailed  MergeState = "failed" // open, with failed checks on its head
 )
+
+// New returns the Forge of repository on a forge of kind, as a project names it.
+func New(kind, repository, token string) (Forge, error) {
+	switch kind {
+	case "github":
+		return NewGitHub(repository, token)
+	case "gitlab":
+		return NewGitLab(repository, token)
+	case "forgejo":
+		return NewForgejo(repository, token)
+	case "bitbucket":
+		return NewBitbucket(repository, token)
+	default:
+		return nil, fmt.Errorf("unsupported forge kind %q", kind)
+	}
+}

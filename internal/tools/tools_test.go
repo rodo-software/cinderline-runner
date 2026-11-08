@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 func sha256Hex(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
@@ -138,7 +138,7 @@ func TestVolumeNaming(t *testing.T) {
 	m, _ := pinned("amd64", true)
 	a, _ := pinned("arm64", false)
 	again, _ := pinned("amd64", false)
-	if g.volume() != again.volume() || !strings.HasPrefix(g.volume(), "cinderstack-tools-") {
+	if g.volume() != again.volume() || !strings.HasPrefix(g.volume(), "cinderline-tools-") {
 		t.Fatalf("volume %q", g.volume())
 	}
 	names := map[string]bool{g.volume(): true, m.volume(): true, a.volume(): true}

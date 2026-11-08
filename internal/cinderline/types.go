@@ -1,4 +1,4 @@
-package cinderstack
+package cinderline
 
 import (
 	"encoding/json"
@@ -107,8 +107,9 @@ type Team struct {
 	ID           int         `json:"id"`
 	Name         string      `json:"name"`
 	MaxMinutes   int         `json:"max_minutes"`
+	MaxTurns     int         `json:"max_turns"` // 0 when the app does not send it; the runner then uses 50 (decision 2026-11-07-team-max-turns)
 	Trusted      bool        `json:"trusted"`
-	MaxSubIssues int         `json:"max_sub_issues"` // CinderStack refuses more sub-issues on one issue
+	MaxSubIssues int         `json:"max_sub_issues"` // Cinderline refuses more sub-issues on one issue
 	Ponytail     bool        `json:"ponytail"`       // load the ponytail plugin in Claude Code runs (2026-11-03-per-team-ponytail-plugin)
 	Agents       []TeamAgent `json:"agents"`
 }

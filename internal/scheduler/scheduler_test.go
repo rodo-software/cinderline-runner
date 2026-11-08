@@ -5,16 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 )
 
 // events is an ordered, concurrency-safe log of what a server and the hooks saw.
@@ -55,19 +58,22 @@ type app struct {
 	claimStatus int
 	hold        time.Duration
 	ev          *events
+	rewind      bool // a PATCH to To do changes the ETag, so the next /work answers the issue again (CSR-81)
 }
 
-func (a app) start(t *testing.T) *cinderstack.Client {
+func (a app) start(t *testing.T) *cinderline.Client {
 	t.Helper()
 	if a.ev == nil {
 		t.Fatal("app needs events")
 	}
+	var version atomic.Int32
+	etag := func() string { return fmt.Sprintf(`"v%d"`, version.Load()+1) }
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/runner/v1")
 		var in map[string]string // the request body, if any
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		switch {
-		case r.Method == "GET" && path == "/work" && r.Header.Get("If-None-Match") == `"v1"`:
+		case r.Method == "GET" && path == "/work" && r.Header.Get("If-None-Match") == etag():
 			a.ev.add("GET /work cached")
 			select {
 			case <-r.Context().Done():
@@ -76,7 +82,7 @@ func (a app) start(t *testing.T) *cinderstack.Client {
 			w.WriteHeader(http.StatusNotModified)
 		case r.Method == "GET" && path == "/work":
 			a.ev.add("GET /work")
-			w.Header().Set("ETag", `"v1"`)
+			w.Header().Set("ETag", etag())
 			_, _ = io.WriteString(w, `{"issue":`+a.issue+`}`)
 		case r.Method == "GET" && path == "/issues" && r.URL.Query().Get("status") == "todo":
 			a.ev.add("GET /issues todo")
@@ -95,6 +101,9 @@ func (a app) start(t *testing.T) *cinderstack.Client {
 			_, _ = io.WriteString(w, `{}`)
 		case r.Method == "PATCH" && strings.HasPrefix(path, "/issues/"):
 			a.ev.add("PATCH " + path + " " + in["status"] + " from " + in["expected_status"])
+			if a.rewind && in["status"] == "todo" {
+				version.Add(1)
+			}
 			_, _ = io.WriteString(w, issue)
 		default:
 			a.ev.add("unexpected " + r.Method + " " + path)
@@ -102,7 +111,7 @@ func (a app) start(t *testing.T) *cinderstack.Client {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c := cinderstack.New(srv.URL, "tok", "0.0.0")
+	c := cinderline.New(srv.URL, "tok", "0.0.0")
 	c.HTTP = srv.Client()
 	c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	return c
@@ -176,12 +185,12 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func record(ev *events, what string) func(context.Context, *cinderstack.Client) error {
-	return func(context.Context, *cinderstack.Client) error { ev.add(what); return nil }
+func record(ev *events, what string) func(context.Context, *cinderline.Client) error {
+	return func(context.Context, *cinderline.Client) error { ev.add(what); return nil }
 }
 
-func recordIssue(ev *events, what string) func(context.Context, *cinderstack.Client, cinderstack.Issue) error {
-	return func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+func recordIssue(ev *events, what string) func(context.Context, *cinderline.Client, cinderline.Issue) error {
+	return func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 		ev.add(what + " " + i.Ref)
 		return nil
 	}
@@ -267,9 +276,9 @@ func TestSkipWithoutRunStep(t *testing.T) {
 }
 
 func TestFailingSlotDoesNotStopOthers(t *testing.T) {
-	fails := map[string]func(context.Context, *cinderstack.Client) error{
-		"panic": func(context.Context, *cinderstack.Client) error { panic("boom") },
-		"error": func(context.Context, *cinderstack.Client) error { return errors.New("boom") },
+	fails := map[string]func(context.Context, *cinderline.Client) error{
+		"panic": func(context.Context, *cinderline.Client) error { panic("boom") },
+		"error": func(context.Context, *cinderline.Client) error { return errors.New("boom") },
 	}
 	for n, fail := range fails {
 		t.Run(n, func(t *testing.T) {
@@ -278,7 +287,7 @@ func TestFailingSlotDoesNotStopOthers(t *testing.T) {
 			a := app{issue: issue, claimStatus: 200, hold: 20 * time.Millisecond, ev: evA}.start(t)
 			b := app{issue: issue, claimStatus: 200, hold: 20 * time.Millisecond, ev: evB}.start(t)
 			start(t, s, []Slot{
-				{Project: "A", Client: a, Hooks: Hooks{Recover: func(ctx context.Context, c *cinderstack.Client) error {
+				{Project: "A", Client: a, Hooks: Hooks{Recover: func(ctx context.Context, c *cinderline.Client) error {
 					evA.add("recover")
 					return fail(ctx, c)
 				}}},
@@ -306,7 +315,7 @@ func TestTimersFire(t *testing.T) {
 	c := app{issue: "null", hold: 10 * time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
 		Recover: record(ev, "recover"),
-		ReviewBranches: func(context.Context, *cinderstack.Client) error {
+		ReviewBranches: func(context.Context, *cinderline.Client) error {
 			ev.add("review")
 			return errors.New("review broke")
 		},
@@ -342,7 +351,7 @@ func TestStopAtOnce(t *testing.T) {
 		ev := &events{}
 		c := app{issue: "null", hold: 10 * time.Second, ev: ev}.start(t)
 		stop := start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-			Recover: func(context.Context, *cinderstack.Client) error { ev.add("recover"); return errors.New("down") },
+			Recover: func(context.Context, *cinderline.Client) error { ev.add("recover"); return errors.New("down") },
 		}}})
 		waitFor(t, "the first failure", func() bool { return ev.count("recover") == 1 })
 		time.Sleep(20 * time.Millisecond) // into the backoff
@@ -359,7 +368,7 @@ func TestStatus(t *testing.T) {
 	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	running, release := make(chan struct{}), make(chan struct{})
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Run: func(context.Context, *cinderstack.Client, cinderstack.Issue) error {
+		Run: func(context.Context, *cinderline.Client, cinderline.Issue) error {
 			running <- struct{}{}
 			<-release
 			return errors.New("boom")
@@ -383,7 +392,7 @@ func TestStatusAfterSlotFailure(t *testing.T) {
 	ev := &events{}
 	c := app{issue: "null", hold: time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Recover: func(context.Context, *cinderstack.Client) error { return errors.New("down") },
+		Recover: func(context.Context, *cinderline.Client) error { return errors.New("down") },
 	}}})
 	waitFor(t, "the failure in the status", func() bool { return s.Status()["CSR"].LastError != "" })
 	st := s.Status()["CSR"]
@@ -395,10 +404,10 @@ func TestStatusAfterSlotFailure(t *testing.T) {
 // Ported from legacy runner.test.mjs "an error after the claim ends in a
 // comment and Review", for Run and Publish, as an error and as a panic.
 func TestErrorAfterClaimEndsInCommentAndReview(t *testing.T) {
-	fail := func(ctx context.Context, c *cinderstack.Client, i cinderstack.Issue) error {
+	fail := func(ctx context.Context, c *cinderline.Client, i cinderline.Issue) error {
 		return errors.New("Issue not found.")
 	}
-	panics := func(context.Context, *cinderstack.Client, cinderstack.Issue) error { panic("Issue not found.") }
+	panics := func(context.Context, *cinderline.Client, cinderline.Issue) error { panic("Issue not found.") }
 	for _, tt := range []struct {
 		name  string
 		hooks func(ev *events) Hooks
@@ -446,7 +455,7 @@ func TestStopDuringRunLeavesIssueInProgress(t *testing.T) {
 	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	running := make(chan struct{})
 	stop := start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Run: func(ctx context.Context, _ *cinderstack.Client, _ cinderstack.Issue) error {
+		Run: func(ctx context.Context, _ *cinderline.Client, _ cinderline.Issue) error {
 			close(running)
 			<-ctx.Done()
 			return ctx.Err()
@@ -471,11 +480,11 @@ func TestPinRefusalClaimsNothing(t *testing.T) {
 	ev := &events{}
 	c := app{issue: issue, todo: "[" + issue + "]", claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Pin: func(context.Context, *cinderstack.Client) error {
+		Pin: func(context.Context, *cinderline.Client) error {
 			ev.add("pin")
-			return errors.New("CinderStack names another repository")
+			return errors.New("Cinderline names another repository")
 		},
-		Check: func(context.Context, *cinderstack.Client, cinderstack.Issue) error { ev.add("check"); return nil },
+		Check: func(context.Context, *cinderline.Client, cinderline.Issue) error { ev.add("check"); return nil },
 		Run:   recordIssue(ev, "run"),
 	}}})
 	waitFor(t, "the pin", func() bool { return ev.count("pin") == 1 })
@@ -486,7 +495,7 @@ func TestPinRefusalClaimsNothing(t *testing.T) {
 	if st := s.Status()["CSR"]; !strings.Contains(st.LastError, "another repository") {
 		t.Errorf("status %+v does not show the refusal", st)
 	}
-	if l := buf.String(); !strings.Contains(l, `"msg":"slot failed","project":"CSR","err":"repository: CinderStack names another repository"`) {
+	if l := buf.String(); !strings.Contains(l, `"msg":"slot failed","project":"CSR","err":"repository: Cinderline names another repository"`) {
 		t.Errorf("no failure line:\n%s", l)
 	}
 }
@@ -500,7 +509,7 @@ func TestCheckRefusalSkipsBeforeClaim(t *testing.T) {
 	ev := &events{}
 	c := app{issue: issue, todo: "[" + issue + "]", claimStatus: 200, hold: 200 * time.Millisecond, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Check: func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+		Check: func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 			ev.add("check " + i.Ref)
 			return errors.New("agent Ada runs on codex")
 		},
@@ -530,7 +539,7 @@ func TestSkippedIssueDoesNotBlockNext(t *testing.T) {
 	next := `{"ref":"CSR-10","title":"U","status":{"value":"todo","label":"To do"},"team":{"id":2,"name":"B"}}`
 	c := app{issue: issue, todo: "[" + issue + "," + next + "]", claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Check: func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+		Check: func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 			if i.Ref == "CSR-9" {
 				return errors.New("Unknown team.")
 			}
@@ -561,5 +570,165 @@ func TestFailingClaimWaitsForNextPoll(t *testing.T) {
 	}
 	if st := s.Status()["CSR"]; st.LastError != "" {
 		t.Errorf("a refused claim became a slot failure: %+v", st)
+	}
+}
+
+// writes are the POSTs and PATCHes the app saw, in order.
+func writes(ev *events) []string {
+	var got []string
+	for _, e := range ev.all() {
+		if strings.HasPrefix(e, "POST") || strings.HasPrefix(e, "PATCH") {
+			got = append(got, e)
+		}
+	}
+	return got
+}
+
+// CSR-81 point 4: a Run error wrapping ErrNotStarted (a failure before the
+// first agent turn: fetch, worktree, token) puts the issue back in To do
+// with no comment, logs it, and the slot waits StartBackoff before its next
+// claim; the next poll claims and runs it. It is not a slot failure.
+func TestNotStartedGoesBackToTodoWithoutComment(t *testing.T) {
+	s, buf := sched()
+	s.StartBackoff = time.Millisecond
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev, rewind: true}.start(t)
+	var runs atomic.Int32
+	run := func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
+		if runs.Add(1) == 1 {
+			return fmt.Errorf("%w: git fetch: Forgejo unreachable", ErrNotStarted)
+		}
+		ev.add("run " + i.Ref)
+		return nil
+	}
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{Run: run, Publish: recordIssue(ev, "publish")}}})
+	waitFor(t, "the second run", func() bool { return ev.count("publish CSR-9") == 1 })
+	want := []string{
+		"POST /issues/CSR-9/claim todo",
+		"PATCH /issues/CSR-9 todo from in_progress",
+		"POST /issues/CSR-9/claim todo",
+	}
+	if got := writes(ev); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("writes = %q, want %q", got, want)
+	}
+	if l := buf.String(); !strings.Contains(l, `"level":"WARN","msg":"not started, back in To do","project":"CSR","issue":"CSR-9","err":"the run did not start: git fetch: Forgejo unreachable","retry_in":`) {
+		t.Errorf("no warning with project, issue and wait:\n%s", l)
+	}
+	if st := s.Status()["CSR"]; st.LastError != "" {
+		t.Errorf("a run that did not start became a slot failure: %+v", st)
+	}
+}
+
+// CSR-81 point 4: the same issue failing to start three times in a row gets
+// one comment, so a persistent misconfiguration is visible; it still goes
+// back to To do, and later failures add no comment.
+func TestNotStartedThriceComments(t *testing.T) {
+	s, _ := sched()
+	s.StartBackoff = time.Millisecond
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev, rewind: true}.start(t)
+	run := func(context.Context, *cinderline.Client, cinderline.Issue) error {
+		return fmt.Errorf("%w: no git token", ErrNotStarted)
+	}
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{Run: run}}})
+	waitFor(t, "five failures", func() bool { return ev.count("PATCH /issues/CSR-9 todo from in_progress") >= 5 })
+	var comments []string
+	for _, w := range writes(ev) {
+		if strings.HasPrefix(w, "POST /issues/CSR-9/comments ") {
+			comments = append(comments, w)
+		}
+	}
+	if len(comments) != 1 || !strings.Contains(comments[0], "three times") || !strings.Contains(comments[0], "no git token") {
+		t.Fatalf("comments = %q, want one after the third failure naming the error", comments)
+	}
+	got := writes(ev)
+	if i := slices.Index(got, comments[0]); i < 5 || got[i-1] != "POST /issues/CSR-9/claim todo" || !strings.HasPrefix(got[i+1], "PATCH /issues/CSR-9 todo") {
+		t.Errorf("the comment is not between the third claim and its move back:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// runDraining runs s with a Drain channel and returns the channel and one
+// that is closed when Run returns. The context is only cancelled at cleanup.
+func runDraining(t *testing.T, s *Scheduler, slots []Slot) (drain chan struct{}, done chan struct{}) {
+	t.Helper()
+	drain, done = make(chan struct{}), make(chan struct{})
+	s.Drain = drain
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { s.Run(ctx, slots); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("Run did not return after cancel")
+		}
+	})
+	return drain, done
+}
+
+// CSR-44: a drain lets the run in flight finish and publish with its context
+// intact, claims nothing more, and then Run returns on its own.
+func TestDrainFinishesRunInFlight(t *testing.T) {
+	s, buf := sched()
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
+	running, release := make(chan struct{}), make(chan struct{})
+	var runCtxErr error
+	drain, done := runDraining(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
+		Run: func(ctx context.Context, _ *cinderline.Client, i cinderline.Issue) error {
+			ev.add("run " + i.Ref)
+			close(running)
+			<-release
+			runCtxErr = ctx.Err()
+			return nil
+		},
+		Publish: recordIssue(ev, "publish"),
+	}}})
+	<-running
+	close(drain)
+	select {
+	case <-done:
+		t.Fatal("Run returned while a run was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	works := ev.count("GET /work") + ev.count("GET /work cached")
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Run did not return after the run in flight finished; events %q", ev.all())
+	}
+	if runCtxErr != nil {
+		t.Errorf("the run's context was cancelled by the drain: %v", runCtxErr)
+	}
+	if ev.count("publish CSR-9") != 1 {
+		t.Errorf("the run in flight was not published; events %q", ev.all())
+	}
+	if n := ev.count("GET /work") + ev.count("GET /work cached"); n != works {
+		t.Errorf("polled for new work after the drain; events %q", ev.all())
+	}
+	if ev.count("run CSR-9") != 1 {
+		t.Errorf("runs = %d, want 1; events %q", ev.count("run CSR-9"), ev.all())
+	}
+	if l := buf.String(); strings.Contains(l, `"level":"ERROR"`) {
+		t.Errorf("the drain was logged as a failure:\n%s", l)
+	}
+}
+
+// CSR-44: an idle slot (in a long poll) ends at once on a drain.
+func TestDrainWhileIdleReturnsAtOnce(t *testing.T) {
+	s, buf := sched()
+	ev := &events{}
+	c := app{issue: "null", hold: 10 * time.Second, ev: ev}.start(t)
+	drain, done := runDraining(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "the long poll", func() bool { return ev.count("GET /work cached") == 1 })
+	close(drain)
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("Run did not return within 300ms of a drain while idle")
+	}
+	if l := buf.String(); strings.Contains(l, `"level":"ERROR"`) {
+		t.Errorf("the drain was logged as a failure:\n%s", l)
 	}
 }

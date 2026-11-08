@@ -9,9 +9,11 @@ import (
 	"io/fs"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // CLI is what a command runs with. Tests set Paths and Secrets to temp ones.
@@ -23,7 +25,13 @@ type CLI struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 
-	pathsErr error // from config.DefaultPaths; only commands that need the paths fail on it
+	exec          workspace.Exec                                            // nil means workspace.RunCommand
+	removeService func(exe string) error                                    // nil means uninstallService
+	startService  func(exe string) (bool, error)                            // nil means startService; update restarts the service with it
+	Forge         func(kind, repository, token string) (forge.Forge, error) // nil: forge.New
+	pathsErr      error                                                     // from config.DefaultPaths; only commands that need the paths fail on it
+	WindowsBuild  uint32                                                    // OS build on Windows, 0 elsewhere; Main sets it
+	exe           string                                                    // the binary update replaces; "" means os.Executable()
 }
 
 // command is one subcommand. A new command is one function and one entry in commands.
@@ -37,6 +45,13 @@ func commands() []command {
 	return []command{
 		{"add", "", "add a project, asking for its details", (*CLI).add},
 		{"remove", "[-url URL] KEY", "remove a project and its secrets", (*CLI).remove},
+		{"run", "", "run in the foreground until Ctrl-C", (*CLI).run},
+		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
+		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
+		{"stop", "[--drain]", "stop the running " + name.Name + " at once, or with --drain once its runs have finished", (*CLI).stopDaemon},
+		{"update", "[--refresh]", "update to the latest release, then stop the running " + name.Name + " once its runs have finished", (*CLI).update},
+		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
+		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }
@@ -44,6 +59,7 @@ func commands() []command {
 // Main runs the command in args with this machine's paths and secrets and returns the exit code.
 func Main(version string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	c := &CLI{Version: version, Stdin: stdin, Stdout: stdout, Stderr: stderr}
+	c.WindowsBuild = windowsBuild()
 	c.Paths, c.pathsErr = config.DefaultPaths()
 	if c.pathsErr == nil {
 		c.Secrets = secrets.New(c.Paths.State)
@@ -56,6 +72,11 @@ func (c *CLI) Run(args []string) int {
 	if len(args) > 0 {
 		for _, cmd := range commands() {
 			if cmd.name == args[0] {
+				if cmd.name != "version" {
+					if err := checkWindowsBuild(c.WindowsBuild); err != nil {
+						return c.fail(err)
+					}
+				}
 				return cmd.run(c, args[1:])
 			}
 		}

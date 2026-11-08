@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 var _ Forge = (*Bitbucket)(nil)
@@ -24,8 +24,9 @@ var _ Forge = (*Bitbucket)(nil)
 type Bitbucket struct {
 	HTTP *http.Client // set by NewBitbucket; replace it before first use, e.g. in tests
 
-	repo  string // REST base of the repository: https://api.bitbucket.org/2.0/repositories/<workspace>/<repo>
-	token string
+	repo      string // REST base of the repository: https://api.bitbucket.org/2.0/repositories/<workspace>/<repo>
+	workspace string // workspace slug
+	token     string
 }
 
 // NewBitbucket returns the Forge of repository, given as
@@ -47,9 +48,10 @@ func NewBitbucket(repository, token string) (*Bitbucket, error) {
 		return nil, fmt.Errorf("repository URL %q does not name a Bitbucket workspace/repository", repository)
 	}
 	return &Bitbucket{
-		HTTP:  &http.Client{Timeout: 30 * time.Second},
-		repo:  "https://api.bitbucket.org/2.0/repositories/" + url.PathEscape(workspace) + "/" + url.PathEscape(repo),
-		token: token,
+		HTTP:      &http.Client{Timeout: 30 * time.Second},
+		repo:      "https://api.bitbucket.org/2.0/repositories/" + url.PathEscape(workspace) + "/" + url.PathEscape(repo),
+		workspace: workspace,
+		token:     token,
 	}, nil
 }
 
@@ -181,6 +183,72 @@ func (b *Bitbucket) find(ctx context.Context, query, branch string) (bitbucketPu
 		}
 	}
 	return bitbucketPull{}, nil
+}
+
+func (b *Bitbucket) CISecrets(ctx context.Context) ([]string, error) {
+	var exposed []string
+	var deploymentEnvs []string
+
+	var repoVars struct {
+		Values []struct {
+			Key string `json:"key"`
+		} `json:"values"`
+	}
+	err := b.do(ctx, http.MethodGet, b.repo+"/pipelines_config/variables?pagelen=100", nil, &repoVars)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range repoVars.Values {
+		exposed = append(exposed, "repository variable "+v.Key)
+	}
+
+	var wsVars struct {
+		Values []struct {
+			Key string `json:"key"`
+		} `json:"values"`
+	}
+	err = b.do(ctx, http.MethodGet, "https://api.bitbucket.org/2.0/workspaces/"+url.PathEscape(b.workspace)+"/pipelines-config/variables?pagelen=100", nil, &wsVars)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range wsVars.Values {
+		exposed = append(exposed, "workspace variable "+v.Key)
+	}
+
+	var envs struct {
+		Values []struct {
+			UUID string `json:"uuid"`
+			Name string `json:"name"`
+		} `json:"values"`
+	}
+	err = b.do(ctx, http.MethodGet, b.repo+"/environments?pagelen=100", nil, &envs)
+	if err != nil {
+		return nil, err
+	}
+	for _, env := range envs.Values {
+		var envVars struct {
+			Values []struct {
+				Key string `json:"key"`
+			} `json:"values"`
+		}
+		err = b.do(ctx, http.MethodGet, b.repo+"/deployments_config/environments/"+url.PathEscape(env.UUID)+"/variables?pagelen=100", nil, &envVars)
+		if err != nil {
+			return nil, err
+		}
+		if len(envVars.Values) > 0 {
+			deploymentEnvs = append(deploymentEnvs, env.Name)
+		}
+	}
+
+	if len(exposed) > 0 {
+		return exposed, nil
+	}
+	if len(deploymentEnvs) > 0 {
+		return nil, fmt.Errorf("deployment environment %s has variables; whether only protected branches can deploy to it cannot be read through the API",
+			strings.Join(deploymentEnvs, ", "))
+	}
+	// shortcut: first page only (100 entries), upgrade when a repository has more
+	return nil, nil
 }
 
 // do sends one API request with in as its JSON body, when not nil, and

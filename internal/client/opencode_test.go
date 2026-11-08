@@ -11,14 +11,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
 
 // Ported from lib.test.mjs "opencodeArgs continues a session only when resuming".
 func TestOpenCodeArgs(t *testing.T) {
 	fresh := opencodeArgs(Turn{Model: "openrouter/q/c"})
-	want := []string{"run", "--format", "json", "--auto", "--title", "cinderstack", "--model", "openrouter/q/c"}
+	want := []string{"run", "--format", "json", "--auto", "--title", "cinderline", "--model", "openrouter/q/c"}
 	if !reflect.DeepEqual(fresh, want) {
 		t.Errorf("fresh args = %q, want %q", fresh, want)
 	}
@@ -65,10 +65,10 @@ func TestOpenCodeConfig(t *testing.T) {
 	if k := cfg.Provider.OpenRouter.Options.APIKey; k != "{env:OPENROUTER_API_KEY}" {
 		t.Errorf("apiKey = %q", k)
 	}
-	want := map[string]map[string]any{"cinderstack": {
+	want := map[string]map[string]any{"cinderline": {
 		"type":    "remote",
 		"url":     "https://cs.example/mcp",
-		"headers": map[string]any{"Authorization": "Bearer {env:CINDERSTACK_TOKEN}"},
+		"headers": map[string]any{"Authorization": "Bearer {env:CINDERLINE_TOKEN}"},
 		"oauth":   false,
 	}}
 	if !reflect.DeepEqual(cfg.MCP, want) {
@@ -99,7 +99,7 @@ func TestOpenCodeEnv(t *testing.T) {
 		"XDG_CONFIG_HOME=/state/opencode/config",
 		"OPENROUTER_API_KEY=sk-or-k",
 		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(Turn{MaxTurns: 3, Token: "tok"}, "u"),
-		"CINDERSTACK_TOKEN=tok",
+		"CINDERLINE_TOKEN=tok",
 	}
 	if !reflect.DeepEqual(orch, want) {
 		t.Errorf("orchestrator env =\n%q\nwant\n%q", orch, want)
@@ -184,9 +184,9 @@ func TestOpenCodeRunFresh(t *testing.T) {
 	c := &OpenCode{
 		Project: "CSR", Env: env, Key: "sk-or-k", MCPURL: "https://cs.example/mcp",
 		Tools: tools.Mount{
-			Args:        []string{"-v", "tools:/opt/cinderstack:ro"},
+			Args:        []string{"-v", "tools:/opt/cinderline:ro"},
 			Env:         []string{"DISABLE_AUTOUPDATER=1"},
-			OpenCodeEnv: []string{"LD_LIBRARY_PATH=/opt/cinderstack/lib"},
+			OpenCodeEnv: []string{"LD_LIBRARY_PATH=/opt/cinderline/lib"},
 		},
 		Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
 			docker = append(docker, argv)
@@ -205,9 +205,9 @@ func TestOpenCodeRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
-		Mounts:  []string{"-v", "cinderstack-CSR-repo:/repo:ro", "-v", "cinderstack-CSR-runs:/runs", "-v", "cinderstack-CSR-state:/state", "-v", "tools:/opt/cinderstack:ro"},
-		Env:     append([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderstack/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp")...),
-		Cmd:     append([]string{"/opt/cinderstack/bin/opencode"}, opencodeArgs(turn)...),
+		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state:/state", "-v", "tools:/opt/cinderline:ro"},
+		Env:     append([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp")...),
+		Cmd:     append([]string{"/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
 	}

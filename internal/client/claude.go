@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // Claude is the Claude Code Client: one container per turn through the
@@ -25,7 +25,7 @@ type Claude struct {
 	Env        environment.Environment // where the turn runs
 	Exec       workspace.Exec          // prepares the state volume; nil means workspace.RunCommand
 	Credential string                  // the project's Anthropic API key or `claude setup-token` token
-	MCPURL     string                  // CinderStack's MCP endpoint, as the agent container reaches it
+	MCPURL     string                  // Cinderline's MCP endpoint, as the agent container reaches it
 	Tools      tools.Mount             // from tools.Tools.Mount for the Environment's image
 }
 
@@ -144,7 +144,7 @@ func claudeArgs(t Turn, session, mcpURL string) []string {
 
 // claudeEnv is the agent container's environment for a Claude Code turn:
 // the config dir on the state volume, the project's Anthropic credential
-// and, for agents with CinderStack access, the scoped token. Agents without
+// and, for agents with Cinderline access, the scoped token. Agents without
 // it skip the project's CLAUDE.md files: workers get what they need in the
 // sub-issue (app repository decision 2026-11-05-workers-skip-project-files).
 func claudeEnv(credential string, t Turn) []string {

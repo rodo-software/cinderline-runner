@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 )
 
 // The cases of legacy runner.test.mjs, lib.test.mjs and lib.prompt.test.mjs
@@ -65,7 +65,7 @@ func TestResumePrompt(t *testing.T) {
 // Ported from lib.test.mjs "only a person's comments after the cursor count".
 func TestCommentCursor(t *testing.T) {
 	agent := "Boss"
-	cs := []cinderstack.Comment{{ID: 3}, {ID: 5, Author: cinderstack.CommentAuthor{Agent: &agent}}, {ID: 7}}
+	cs := []cinderline.Comment{{ID: 3}, {ID: 5, Author: cinderline.CommentAuthor{Agent: &agent}}, {ID: 7}}
 	if got := newestCommentID(cs); got != 7 {
 		t.Errorf("newestCommentID = %d, want 7", got)
 	}
@@ -73,7 +73,7 @@ func TestCommentCursor(t *testing.T) {
 		t.Errorf("newestCommentID(nil) = %d, want 0", got)
 	}
 	for _, tt := range []struct {
-		cs     []cinderstack.Comment
+		cs     []cinderline.Comment
 		cursor int
 		want   bool
 	}{
@@ -301,16 +301,16 @@ func TestAFailedResumeStartsOver(t *testing.T) {
 	}
 }
 
-// A status or comment list CinderStack cannot give ends the run with the
+// A status or comment list Cinderline cannot give ends the run with the
 // error, which the scheduler comments before Review.
-func TestAttemptsFailsWhenCinderStackDoes(t *testing.T) {
+func TestAttemptsFailsWhenCinderlineDoes(t *testing.T) {
 	for _, route := range []string{"GET /issues/CSR-7", "GET /issues/CSR-7/comments"} {
 		t.Run(route, func(t *testing.T) {
 			api := working()
 			api.routes[route] = reply{500, `{"message":"Server error."}`}
 			cl := &client.Fake{Runs: []client.RunReply{{}}}
 			if _, err := project(t).Attempts(context.Background(), api.client(t), cl, job); err == nil {
-				t.Fatal("Attempts succeeded without CinderStack")
+				t.Fatal("Attempts succeeded without Cinderline")
 			}
 		})
 	}

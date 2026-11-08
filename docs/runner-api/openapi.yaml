@@ -1,12 +1,12 @@
 openapi: 3.1.0
 info:
-  title: CinderStack runner API
+  title: Cinderline runner API
   version: 1.0.0
   license:
-    name: MIT
-    identifier: MIT
+    name: Functional Source License, Version 1.1, MIT Future License
+    identifier: FSL-1.1-MIT
   description: |
-    The REST API a runner uses to take issues from a CinderStack instance, run
+    The REST API a runner uses to take issues from a Cinderline instance, run
     agent teams on them and report back (plan M1, decision 2026-11-05-runner-rewrite-details).
     This file is authored in the runner repository and mirrored into the app
     repository, where a test checks it against the routes.
@@ -22,17 +22,17 @@ info:
     - an issue, team or run of another project, or one that does not exist:
       `404`, so a token never learns what exists outside its project.
 
-    **Versions (EMBER-44).** Every request carries `CinderStack-Runner-Version`.
+    **Versions (EMBER-44).** Every request carries `Cinderline-Runner-Version`.
     Any route may answer `426` with the minimum runner version. Every response,
-    including errors, `304` and `426`, carries `CinderStack-Api-Version`.
+    including errors, `304` and `426`, carries `Cinderline-Api-Version`.
 
     **Issue references** such as `CSR-9` identify issues in paths.
 servers:
   - url: '{instance}/api/runner/v1'
     variables:
       instance:
-        default: https://cinderstack.example.com
-        description: Base URL of the CinderStack instance.
+        default: https://cinderline.example.com
+        description: Base URL of the Cinderline instance.
 security:
   - runnerToken: []
 paths:
@@ -46,7 +46,7 @@ paths:
         '200':
           description: The project.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
           content:
             application/json:
@@ -88,7 +88,7 @@ paths:
         '200':
           description: The first To do issue with a team, or none.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
             ETag:
               $ref: '#/components/headers/ETag'
@@ -105,7 +105,7 @@ paths:
         '304':
           description: The answer is unchanged since `If-None-Match`.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
             ETag:
               $ref: '#/components/headers/ETag'
@@ -141,7 +141,7 @@ paths:
         '200':
           description: The issues, in board order, without their comments.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
           content:
             application/json:
@@ -269,7 +269,7 @@ paths:
         '200':
           description: The comments.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
           content:
             application/json:
@@ -304,7 +304,7 @@ paths:
         '201':
           description: The new comment.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
           content:
             application/json:
@@ -364,7 +364,7 @@ paths:
         '200':
           description: The team.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
           content:
             application/json:
@@ -427,13 +427,13 @@ paths:
       operationId: createAgentToken
       summary: Create a short-lived token for one agent run on this issue.
       description: |
-        The token an agent uses for the CinderStack MCP tools. It is scoped to
+        The token an agent uses for the Cinderline MCP tools. It is scoped to
         the issue `ref` and its tree; no kind reaches other issues. See
         `AgentTokenKind` for what each kind may do. The token is named after
         the issue's team and the agent, so the app detects the agent from it
         (0045). It expires after the team's `max_minutes` plus a margin. The
         runner deletes it when the run ends. Workers and the Merge Resolver get
-        no CinderStack access and so no token (0122).
+        no Cinderline access and so no token (0122).
 
         A new token for the same issue and agent replaces the previous one.
       parameters:
@@ -455,7 +455,7 @@ paths:
         '201':
           description: The plain token, shown only once.
           headers:
-            CinderStack-Api-Version:
+            Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
           content:
             application/json:
@@ -503,7 +503,7 @@ components:
       description: A Sanctum personal access token of the project's runner user with the `runner` ability.
   parameters:
     RunnerVersion:
-      name: CinderStack-Runner-Version
+      name: Cinderline-Runner-Version
       in: header
       required: true
       description: The runner's version, e.g. `1.2.0`.
@@ -533,12 +533,12 @@ components:
     NoContent:
       description: Done.
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
     IssueWithComments:
       description: The issue, with its comments.
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
       content:
         application/json:
@@ -547,7 +547,7 @@ components:
     Unauthenticated:
       description: No token, or the token is invalid or expired.
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
       content:
         application/json:
@@ -556,7 +556,7 @@ components:
     Forbidden:
       description: The token lacks the `runner` ability.
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
       content:
         application/json:
@@ -565,7 +565,7 @@ components:
     NotFound:
       description: Not found in this token's project (also when it exists in another project).
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
       content:
         application/json:
@@ -574,7 +574,7 @@ components:
     Conflict:
       description: The issue's status is not `expected_status`; nothing changed.
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
       content:
         application/json:
@@ -589,7 +589,7 @@ components:
     ValidationFailed:
       description: The request is invalid.
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
       content:
         application/json:
@@ -609,7 +609,7 @@ components:
     UpgradeRequired:
       description: The runner is older than the app supports, or sent no version.
       headers:
-        CinderStack-Api-Version:
+        Cinderline-Api-Version:
           $ref: '#/components/headers/ApiVersion'
       content:
         application/json:
@@ -816,6 +816,10 @@ components:
           type: string
         max_minutes:
           description: The longest an agent run of this team may take.
+          type: integer
+          minimum: 1
+        max_turns:
+          description: The most turns an agent run of this team may take (Claude Code's --max-turns, OpenCode's steps). The runner uses 50 when it is missing (decision 2026-11-07-team-max-turns).
           type: integer
           minimum: 1
         trusted:

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 var _ Forge = (*Forgejo)(nil)
@@ -25,6 +25,8 @@ type Forgejo struct {
 	HTTP *http.Client // set by NewForgejo; replace it before first use, e.g. in tests
 
 	repo  string // REST base of the repository: https://<host>/api/v1/repos/<owner>/<repo>
+	owner string // repository owner
+	host  string // API base: https://<host>/api/v1
 	token string
 	sleep func(context.Context, time.Duration) error // between merge attempts; replaced in tests
 }
@@ -53,6 +55,8 @@ func NewForgejo(repository, token string) (*Forgejo, error) {
 	return &Forgejo{
 		HTTP:  &http.Client{Timeout: 30 * time.Second},
 		repo:  "https://" + host + "/api/v1/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo),
+		owner: owner,
+		host:  "https://" + host + "/api/v1",
 		token: token,
 		sleep: sleep,
 	}, nil
@@ -65,8 +69,9 @@ type forgejoPull struct {
 	State   string `json:"state"`
 	Merged  bool   `json:"merged"`
 	Head    struct {
-		Ref string `json:"ref"`
-		SHA string `json:"sha"`
+		Ref   string `json:"ref"`
+		SHA   string `json:"sha"`
+		Label string `json:"label"`
 	} `json:"head"`
 }
 
@@ -108,9 +113,8 @@ func (f *Forgejo) OpenPullRequest(ctx context.Context, in PullRequestInput) (Pul
 }
 
 func (f *Forgejo) FindPullRequest(ctx context.Context, branch string) (PullRequest, bool, error) {
-	// shortcut: the 50 newest open pull requests only, as legacy; page if a repository has more open at once.
-	pr, err := f.find(ctx, "?state=open&limit=50", branch)
-	return PullRequest{Number: pr.Number, URL: pr.HTMLURL}, pr.Head.Ref != "", err
+	pr, err := f.find(ctx, "?state=open&limit="+strconv.Itoa(forgejoPageSize), branch)
+	return PullRequest{Number: pr.Number, URL: pr.HTMLURL}, pr.Head.Label != "", err
 }
 
 // RequestMerge asks Forgejo to squash-merge the pull request and delete
@@ -135,12 +139,11 @@ func (f *Forgejo) RequestMerge(ctx context.Context, pr PullRequest) error {
 }
 
 func (f *Forgejo) MergeState(ctx context.Context, branch string) (MergeState, error) {
-	// shortcut: the 50 most recently updated pull requests only, as legacy; page if a repository has more at once.
-	pr, err := f.find(ctx, "?state=all&sort=recentupdate&limit=50", branch)
+	pr, err := f.find(ctx, "?state=all&sort=recentupdate&limit="+strconv.Itoa(forgejoPageSize), branch)
 	switch {
 	case err != nil:
 		return "", err
-	case pr.Head.Ref == "": // none found
+	case pr.Head.Label == "": // none found
 		return "", nil
 	case pr.Merged:
 		return MergeMerged, nil
@@ -159,19 +162,67 @@ func (f *Forgejo) MergeState(ctx context.Context, branch string) (MergeState, er
 	return MergePending, nil
 }
 
-// find is the first pull request of branch in the list query names,
-// matched by head ref as legacy, or the zero pull request (empty Head.Ref).
-func (f *Forgejo) find(ctx context.Context, query, branch string) (forgejoPull, error) {
-	var prs []forgejoPull
-	if err := f.do(ctx, http.MethodGet, f.repo+"/pulls"+query, nil, &prs); err != nil {
-		return forgejoPull{}, err
+func (f *Forgejo) CISecrets(ctx context.Context) ([]string, error) {
+	var exposed []string
+
+	var repoSecrets []struct {
+		Name string `json:"name"`
 	}
-	for _, pr := range prs {
-		if pr.Head.Ref == branch {
-			return pr, nil
+	err := f.do(ctx, http.MethodGet, f.repo+"/actions/secrets?limit=50", nil, &repoSecrets)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range repoSecrets {
+		exposed = append(exposed, "repository secret "+s.Name)
+	}
+
+	var orgSecrets []struct {
+		Name string `json:"name"`
+	}
+	err = f.do(ctx, http.MethodGet, f.host+"/orgs/"+url.PathEscape(f.owner)+"/actions/secrets?limit=50", nil, &orgSecrets)
+	if err != nil {
+		var e *forgejoError
+		if errors.As(err, &e) && e.status == http.StatusNotFound {
+			// owner is a user, not an org
+		} else {
+			return nil, err
+		}
+	} else {
+		for _, s := range orgSecrets {
+			exposed = append(exposed, "organization secret "+s.Name)
 		}
 	}
-	return forgejoPull{}, nil
+	// shortcut: first page only (50 entries), upgrade when a repository has more
+	return exposed, nil
+}
+
+// forgejoPageSize is the page size used when listing pull requests.
+const forgejoPageSize = 50
+
+// find is the first pull request of branch in the list query names,
+// matched by head.label, which survives branch deletion (decision
+// 2026-11-07-publish-resilience), or the zero pull request (empty Head.Label).
+func (f *Forgejo) find(ctx context.Context, query, branch string) (forgejoPull, error) {
+	for page := 1; ; page++ {
+		var u string
+		if page == 1 {
+			u = f.repo + "/pulls" + query
+		} else {
+			u = f.repo + "/pulls" + query + "&page=" + strconv.Itoa(page)
+		}
+		var prs []forgejoPull
+		if err := f.do(ctx, http.MethodGet, u, nil, &prs); err != nil {
+			return forgejoPull{}, err
+		}
+		for _, pr := range prs {
+			if pr.Head.Label == branch {
+				return pr, nil
+			}
+		}
+		if len(prs) < forgejoPageSize {
+			return forgejoPull{}, nil
+		}
+	}
 }
 
 // do sends one API request with in as its JSON body, when not nil, and

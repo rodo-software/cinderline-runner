@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
 
 // Ported from lib.test.mjs "claudeArgs gives a worker no MCP server at all".
@@ -20,7 +20,7 @@ func TestClaudeArgsWorkerHasNoMCPServer(t *testing.T) {
 	want := []string{
 		"-p", "--session-id", "s", "--model", "m", "--max-turns", "5", "--output-format", "json",
 		"--dangerously-skip-permissions",
-		"--mcp-config", `{"mcpServers":{"cinderstack":{"headers":{"Authorization":"Bearer ${CINDERSTACK_TOKEN}"},"type":"http","url":"https://cs.example/mcp"}}}`,
+		"--mcp-config", `{"mcpServers":{"cinderline":{"headers":{"Authorization":"Bearer ${CINDERLINE_TOKEN}"},"type":"http","url":"https://cs.example/mcp"}}}`,
 		"--strict-mcp-config",
 	}
 	if !reflect.DeepEqual(orch, want) {
@@ -52,7 +52,7 @@ func TestClaudeArgsPluginOnlyForPonytailTeams(t *testing.T) {
 		t.Errorf("args %q load a plugin", a)
 	}
 	a := claudeArgs(Turn{Model: "m", MaxTurns: 5, Ponytail: true}, "s", "u")
-	if got, want := a[len(a)-2:], []string{"--plugin-dir", "/opt/cinderstack/ponytail"}; !reflect.DeepEqual(got, want) {
+	if got, want := a[len(a)-2:], []string{"--plugin-dir", "/opt/cinderline/ponytail"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("args end %q, want %q", got, want)
 	}
 }
@@ -72,7 +72,7 @@ func TestClaudeEnv(t *testing.T) {
 	want := []string{
 		"CLAUDE_CONFIG_DIR=/state/claude",
 		"ANTHROPIC_API_KEY=sk-ant-api03-k",
-		"CINDERSTACK_TOKEN=tok",
+		"CINDERLINE_TOKEN=tok",
 	}
 	if !reflect.DeepEqual(orch, want) {
 		t.Errorf("orchestrator env = %q, want %q", orch, want)
@@ -153,7 +153,7 @@ func TestClaudeRunFresh(t *testing.T) {
 	var docker [][]string
 	c := &Claude{
 		Project: "CSR", Env: env, Credential: "sk-ant-api03-k", MCPURL: "https://cs.example/mcp",
-		Tools: tools.Mount{Args: []string{"-v", "tools:/opt/cinderstack:ro"}, Env: []string{"DISABLE_AUTOUPDATER=1"}},
+		Tools: tools.Mount{Args: []string{"-v", "tools:/opt/cinderline:ro"}, Env: []string{"DISABLE_AUTOUPDATER=1"}},
 		Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
 			docker = append(docker, argv)
 			return "", nil
@@ -175,9 +175,9 @@ func TestClaudeRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
-		Mounts:  []string{"-v", "cinderstack-CSR-repo:/repo:ro", "-v", "cinderstack-CSR-runs:/runs", "-v", "cinderstack-CSR-state:/state", "-v", "tools:/opt/cinderstack:ro"},
+		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:     append([]string{"DISABLE_AUTOUPDATER=1"}, claudeEnv("sk-ant-api03-k", Turn{Token: "tok"})...),
-		Cmd:     append([]string{"/opt/cinderstack/bin/claude"}, claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, session, "https://cs.example/mcp")...),
+		Cmd:     append([]string{"/opt/cinderline/bin/claude"}, claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, session, "https://cs.example/mcp")...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
 	}
