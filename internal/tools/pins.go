@@ -10,6 +10,12 @@ const (
 	OpenCodeVersion = "1.19.5"
 	// CodexVersion is the GitHub release rust-v<CodexVersion> of openai/codex.
 	CodexVersion = "0.167.0"
+	// GeminiVersion is the npm package @google/gemini-cli, a self-contained JS
+	// bundle that needs Node.
+	GeminiVersion = "0.67.0"
+	// NodeVersion is the nodejs.org release, for glibc images; musl takes node
+	// from muslLibsImage, the same version.
+	NodeVersion  = "22.23.4"
 	PonytailRepo = "https://github.com/DietrichGebert/ponytail"
 	PonytailTag  = "v5.3.2"
 	// PonytailCommit is what PonytailTag points at; the clone is refused
@@ -51,7 +57,18 @@ var codexHostSHA256 = map[string]string{
 	"arm64": "6e99948fa20ca816a01f222a56afa261b321e00cbed611d76bb92c765fd11ec6",
 }
 
+// geminiSRI is the npm integrity of @google/gemini-cli 0.67.0 from
+// registry.npmjs.org/@google/gemini-cli/0.67.0, dist.integrity.
+const geminiSRI = "sha512-lDJfCcYem6/6QZdwZFiGfOu1ZxJJ+j4wsr4HlmcYBfqUHTDXLKDv1MPUXYL2Ok1ygdfMve0F5KrW/ORNZRSHIg=="
+
+// nodeSHA256 is per arch, from nodejs.org/dist/v22.23.4/SHASUMS256.txt.
+var nodeSHA256 = map[string]string{
+	"amd64": "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
+	"arm64": "f7a1e486dbc8b286847815b477d4fb5e9fb963ed4489c3e1588853d685f589f9",
+}
+
 // muslLibsImage supplies libstdc++ and libgcc_s, which OpenCode's musl build
-// needs and a bare Alpine image lacks. Pinned by digest, so Docker checks
-// it by hash (node 22.23.4 on Alpine 3.24.4, multi-arch index).
+// needs and a bare Alpine image lacks, and node for Gemini CLI on musl.
+// Pinned by digest, so Docker checks it by hash (node 22.23.4 on Alpine
+// 3.24.4, multi-arch index).
 const muslLibsImage = "node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202"

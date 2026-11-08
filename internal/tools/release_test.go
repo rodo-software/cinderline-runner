@@ -12,6 +12,8 @@ func TestReleaseNotesNamePins(t *testing.T) {
 	for _, want := range []string{
 		"Claude Code " + ClaudeVersion,
 		"OpenCode " + OpenCodeVersion,
+		"Gemini CLI " + GeminiVersion,
+		"Node.js " + NodeVersion,
 		"ponytail " + PonytailTag,
 	} {
 		if !strings.Contains(got, want) {

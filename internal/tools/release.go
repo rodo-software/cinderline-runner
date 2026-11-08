@@ -7,6 +7,6 @@ import "fmt"
 // workflow prints it with `go run ./internal/tools/releasenotes` and hands
 // the file to GoReleaser as --release-header.
 func ReleaseNotes() string {
-	return fmt.Sprintf("Pinned agent CLIs in the tools volume:\n\n- Claude Code %s\n- OpenCode %s\n- Codex %s\n- ponytail %s (%s)\n",
-		ClaudeVersion, OpenCodeVersion, CodexVersion, PonytailTag, PonytailCommit)
+	return fmt.Sprintf("Pinned agent CLIs in the tools volume:\n\n- Claude Code %s\n- OpenCode %s\n- Codex %s\n- Gemini CLI %s\n- Node.js %s\n- ponytail %s (%s)\n",
+		ClaudeVersion, OpenCodeVersion, CodexVersion, GeminiVersion, NodeVersion, PonytailTag, PonytailCommit)
 }

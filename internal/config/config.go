@@ -51,6 +51,8 @@ type Project struct {
 	AllowExisting bool   `json:"allow_existing,omitempty"`
 	// OpenAIBaseURL is an OpenAI-compatible base URL for Codex; empty means OpenAI's API.
 	OpenAIBaseURL string `json:"openai_base_url,omitempty"`
+	// GeminiVertex says the Gemini key is a Vertex AI express-mode key; false means the Gemini API.
+	GeminiVertex bool `json:"gemini_vertex,omitempty"`
 }
 
 // Paths are the per-machine paths. Computing them creates nothing on disk.

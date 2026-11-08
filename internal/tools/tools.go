@@ -27,8 +27,8 @@ import (
 )
 
 // Path is where agent containers see the volume: the CLIs (Claude Code, OpenCode,
-// Codex) in Path/bin, the ponytail plugin in Path/ponytail and, on musl, OpenCode's
-// libraries in Path/lib.
+// Codex) in Path/bin, Gemini CLI in Path/gemini, node in Path/bin, the ponytail
+// plugin in Path/ponytail and, on musl, OpenCode's and Gemini's libraries in Path/lib.
 const Path = "/opt/" + name.Name
 
 // fillScript fills the volume at /t from the checked downloads at /s, then
@@ -39,6 +39,8 @@ cd /t
 mkdir -p bin
 cp /s/claude /s/opencode /s/codex /s/codex-code-mode-host bin/
 chmod 755 bin/claude bin/opencode bin/codex bin/codex-code-mode-host
+if [ -f /s/node ]; then cp /s/node bin/ && chmod 755 bin/node; fi
+tar -xzf /s/gemini.tgz && mv package gemini
 git clone --quiet --depth 1 --branch "$2" "$1" ponytail
 test "$(git -C ponytail rev-parse HEAD)" = "$3"
 rm -rf ponytail/.git
@@ -51,8 +53,8 @@ type Mount struct {
 	// Code from updating itself on every run from a read-only volume
 	// (review item 11).
 	Env []string
-	// OpenCodeEnv is added for OpenCode runs: on musl, the libraries it
-	// needs from the volume. Only for those runs, so the image's own
+	// OpenCodeEnv is added for OpenCode and Gemini runs: on musl, the libraries
+	// they need from the volume. Only for those runs, so the image's own
 	// programs keep their libraries.
 	OpenCodeEnv []string
 }
@@ -156,6 +158,19 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	if err := extract(hostTgz, s.CodexHostBinary, filepath.Join(staging, "codex-code-mode-host")); err != nil {
 		return err
 	}
+	geminiTgz := filepath.Join(staging, "gemini.tgz")
+	if err := download(ctx, hc, s.GeminiURL, geminiTgz, s.GeminiSRI); err != nil {
+		return err
+	}
+	if s.NodeURL != "" {
+		nodeTgz := filepath.Join(staging, "node.tgz")
+		if err := download(ctx, hc, s.NodeURL, nodeTgz, s.NodeSHA256); err != nil {
+			return err
+		}
+		if err := extract(nodeTgz, s.NodeBinary, filepath.Join(staging, "node")); err != nil {
+			return err
+		}
+	}
 
 	steps := [][]string{
 		{"docker", "volume", "rm", "--force", vol},
@@ -163,7 +178,7 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	}
 	if s.Musl {
 		steps = append(steps, []string{"docker", "run", "--rm", "--platform", "linux/" + s.Arch, "--network", "none", "-v", vol + ":/t",
-			"--entrypoint", "sh", muslLibsImage, "-c", "mkdir -p /t/lib && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/"})
+			"--entrypoint", "sh", muslLibsImage, "-c", "mkdir -p /t/lib /t/bin && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/ && cp /usr/local/bin/node /t/bin/node"})
 	}
 	steps = append(steps, []string{"docker", "run", "--rm", "-v", vol + ":/t", "-v", staging + ":/s:ro",
 		"--entrypoint", "sh", workspace.GitImage, "-c", fillScript, "sh", PonytailRepo, s.PonytailTag, s.PonytailCommit})
@@ -183,6 +198,8 @@ type set struct {
 	OpenCodeURL, OpenCodeSRI                       string
 	CodexURL, CodexSHA256, CodexBinary             string
 	CodexHostURL, CodexHostSHA256, CodexHostBinary string
+	GeminiURL, GeminiSRI                           string
+	NodeURL, NodeSHA256, NodeBinary                string
 	PonytailTag                                    string
 	PonytailCommit, LibsImage                      string
 }
@@ -200,7 +217,7 @@ func pinned(arch string, musl bool) (set, error) {
 	target := map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}[arch]
 	cb := "codex-" + target
 	chb := "codex-code-mode-host-" + target
-	return set{
+	s := set{
 		Arch: arch, Platform: p, Musl: musl,
 		ClaudeURL:       "https://downloads.claude.ai/claude-code-releases/" + ClaudeVersion + "/" + p + "/claude",
 		ClaudeSHA256:    claudeSHA256[p],
@@ -212,8 +229,17 @@ func pinned(arch string, musl bool) (set, error) {
 		CodexHostURL:    "https://github.com/openai/codex/releases/download/rust-v" + CodexVersion + "/" + chb + ".tar.gz",
 		CodexHostSHA256: codexHostSHA256[arch],
 		CodexHostBinary: chb,
+		GeminiURL:       "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-" + GeminiVersion + ".tgz",
+		GeminiSRI:       geminiSRI,
 		PonytailTag:     PonytailTag, PonytailCommit: PonytailCommit, LibsImage: muslLibsImage,
-	}, nil
+	}
+	if !musl {
+		dir := "node-v" + NodeVersion + "-linux-" + a
+		s.NodeURL = "https://nodejs.org/dist/v" + NodeVersion + "/" + dir + ".tar.gz"
+		s.NodeSHA256 = nodeSHA256[arch]
+		s.NodeBinary = dir + "/bin/node"
+	}
+	return s, nil
 }
 
 func (s set) volume() string {

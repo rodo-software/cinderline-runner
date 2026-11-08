@@ -216,7 +216,7 @@ func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderli
 	for _, a := range team.Agents {
 		kind, ok := keys[a.Client]
 		if !ok {
-			return fmt.Errorf("agent %s runs on %s; this runner supports only claude, codex and opencode", a.Name, a.Client)
+			return fmt.Errorf("agent %s runs on %s; this runner supports only claude, codex, gemini and opencode", a.Name, a.Client)
 		}
 		if _, _, err := p.Secrets.Get(p.Config, kind); err != nil {
 			return fmt.Errorf("agent %s runs on %s, which needs this project's %s key: %w", a.Name, a.Client, kind, err)
