@@ -27,9 +27,11 @@ type CLI struct {
 
 	exec          workspace.Exec                                            // nil means workspace.RunCommand
 	removeService func(exe string) error                                    // nil means uninstallService
+	startService  func(exe string) (bool, error)                            // nil means startService; update restarts the service with it
 	Forge         func(kind, repository, token string) (forge.Forge, error) // nil: forge.New
 	pathsErr      error                                                     // from config.DefaultPaths; only commands that need the paths fail on it
 	WindowsBuild  uint32                                                    // OS build on Windows, 0 elsewhere; Main sets it
+	exe           string                                                    // the binary update replaces; "" means os.Executable()
 }
 
 // command is one subcommand. A new command is one function and one entry in commands.
@@ -46,7 +48,8 @@ func commands() []command {
 		{"run", "", "run in the foreground until Ctrl-C", (*CLI).run},
 		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
 		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
-		{"stop", "", "stop the running " + name.Name + " at once", (*CLI).stopDaemon},
+		{"stop", "[--drain]", "stop the running " + name.Name + " at once, or with --drain once its runs have finished", (*CLI).stopDaemon},
+		{"update", "[--refresh]", "update to the latest release, then stop the running " + name.Name + " once its runs have finished", (*CLI).update},
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
 		{"version", "", "print the version", (*CLI).version},

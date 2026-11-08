@@ -408,3 +408,26 @@ func TestSlotsRegisterAllHooks(t *testing.T) {
 		}
 	}
 }
+
+// CSR-44: POST /drain makes an idle daemon exit cleanly, like stop, once its
+// slots have finished (the scheduler tests cover a run in flight).
+func TestDrain(t *testing.T) {
+	keyring.MockInit()
+	p := paths(t)
+	writeConfig(t, p)
+	c, done := start(t, p)
+	if err := c.Drain(ctxT(t)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return within a second of a drain with nothing in flight")
+	}
+	if _, err := c.Status(ctxT(t)); !errors.Is(err, localapi.ErrNotRunning) {
+		t.Errorf("Status after drain = %v, want ErrNotRunning", err)
+	}
+}

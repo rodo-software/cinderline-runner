@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,6 +14,8 @@ import (
 	"github.com/rodo-software/cinderstack-runner/internal/localapi"
 	"github.com/rodo-software/cinderstack-runner/internal/name"
 )
+
+var drainPoll = time.Second // how often stop --drain asks the daemon what it still runs; tests shorten it
 
 // run runs the daemon in the foreground. daemon.Run stops on SIGINT and SIGTERM
 // itself and gives localapi.ErrHeld while the service holds the socket.
@@ -87,19 +90,74 @@ func (c *CLI) logs(args []string) int {
 	return 0
 }
 
-// stopDaemon stops the daemon at once (decision 2026-11-05-runner-rewrite-details point 14).
+// stopDaemon stops the daemon at once, or with --drain once its runs have finished.
 func (c *CLI) stopDaemon(args []string) int {
-	if !c.noArgs("stop", args) {
+	f := c.flags("stop", "[--drain]")
+	drainFlag := f.Bool("drain", false, "let current runs finish before stopping")
+	if err := f.Parse(args); err != nil || f.NArg() > 0 {
+		if err == nil {
+			f.Usage()
+		}
 		return 2
 	}
 	if c.pathsErr != nil {
 		return c.fail(c.pathsErr)
+	}
+	if *drainFlag {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := c.drainAndWait(ctx); err != nil {
+			return c.fail(err)
+		}
+		fmt.Fprintln(c.Stdout, "Stopped "+name.Name)
+		return 0
 	}
 	if err := (localapi.Client{Socket: c.Paths.Socket}).Stop(context.Background()); err != nil {
 		return c.fail(err)
 	}
 	fmt.Fprintln(c.Stdout, "Stopped "+name.Name)
 	return 0
+}
+
+// drainAndWait calls Drain on the local API and then polls Status until the
+// daemon has exited. It prints the issues still in flight to Stdout when they
+// change. A later job (update) reuses this method.
+func (c *CLI) drainAndWait(ctx context.Context) error {
+	cl := localapi.Client{Socket: c.Paths.Socket}
+	if err := cl.Drain(ctx); err != nil {
+		return err
+	}
+	var last []string
+	failed := false
+	for {
+		st, err := cl.Status(ctx)
+		if errors.Is(err, localapi.ErrNotRunning) {
+			return nil
+		}
+		switch {
+		case err != nil && failed:
+			return err
+		case err != nil:
+			failed = true // the daemon may exit while it answers (EOF); the next poll tells
+		default:
+			failed = false
+			var issues []string
+			for _, p := range st.Projects {
+				if p.Issue != "" {
+					issues = append(issues, p.Issue)
+				}
+			}
+			if len(issues) > 0 && strings.Join(issues, ",") != strings.Join(last, ",") {
+				fmt.Fprintln(c.Stdout, "Waiting for "+strings.Join(issues, ", ")+" to finish")
+			}
+			last = issues
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(drainPoll):
+		}
+	}
 }
 
 // noArgs reports whether args is empty, printing the command's usage when it is not.

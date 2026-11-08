@@ -64,10 +64,13 @@ func Run(ctx context.Context, o Options) error {
 	d := &daemon{sched: &scheduler.Scheduler{Log: log}}
 
 	reloads := make(chan chan error)
+	drain := make(chan struct{})
+	var drainOnce sync.Once // a second drain request must not close it again
 	srv := &http.Server{Handler: localapi.Handler(localapi.Handlers{
 		Version: o.Version,
 		Status:  d.status,
 		Stop:    stop,
+		Drain:   func() { drainOnce.Do(func() { close(drain) }) },
 		Follow:  lf.follow,
 		Reload: func() error {
 			reply := make(chan error, 1)
@@ -75,11 +78,15 @@ func Run(ctx context.Context, o Options) error {
 			case reloads <- reply:
 			case <-ctx.Done():
 				return errStopping
+			case <-drain:
+				return errStopping
 			}
 			select {
 			case err := <-reply:
 				return err
 			case <-ctx.Done():
+				return errStopping
+			case <-drain:
 				return errStopping
 			}
 		},
@@ -101,12 +108,24 @@ func Run(ctx context.Context, o Options) error {
 		var wg sync.WaitGroup
 		slots := d.slots(runCtx, &wg, log, o, cfg)
 		d.sched.MergeInterval = cfg.MergePoll() // no Run is going: the last one returned
-		wg.Go(func() { d.sched.Run(runCtx, slots) })
+		d.sched.Drain = drain
+		schedDone := make(chan struct{})
+		wg.Go(func() { d.sched.Run(runCtx, slots); close(schedDone) })
 		log.Info("scheduler started", "slots", len(slots))
 		if reply != nil {
 			reply <- reloadErr
 		}
 		select {
+		case <-drain:
+			log.Info("draining")
+			select {
+			case <-schedDone:
+			case <-ctx.Done():
+			}
+			cancel()
+			wg.Wait()
+			log.Info("stopped")
+			return nil
 		case <-ctx.Done():
 			cancel()
 			wg.Wait()

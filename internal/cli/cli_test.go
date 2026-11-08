@@ -146,7 +146,7 @@ func TestDispatch(t *testing.T) {
 	}
 	c, _, errb := newCLI(t, "")
 	c.Run(nil)
-	for _, cmd := range []string{"add", "remove", "run", "status", "logs", "stop", "version"} {
+	for _, cmd := range []string{"add", "remove", "run", "status", "logs", "stop", "update", "version"} {
 		if !strings.Contains(errb.String(), "  "+cmd) {
 			t.Errorf("usage %q does not list %s", errb.String(), cmd)
 		}

@@ -293,3 +293,63 @@ func TestM2AddRunStatus(t *testing.T) {
 		t.Fatal("run did not return after stop")
 	}
 }
+
+// CSR-44: stop --drain asks the daemon to drain and waits until it has exited.
+func TestStopDrainWaitsForDaemonToExit(t *testing.T) {
+	defer func(d time.Duration) { drainPoll = d }(drainPoll)
+	drainPoll = 10 * time.Millisecond
+	c, out, errb := daemonCLI(t, "")
+	saveConfig(t, c)
+	done := startDaemon(t, c)
+	if code := c.Run([]string{"stop", "--drain"}); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("daemon.Run = %v, want nil", err)
+		}
+	default:
+		t.Fatal("stop --drain returned before the daemon exited")
+	}
+	if !strings.Contains(out.String(), "Stopped") {
+		t.Errorf("stdout %q, want it to say the daemon stopped", out.String())
+	}
+}
+
+// CSR-44: while draining, stop --drain says which issues it waits for, and
+// returns once the daemon has gone.
+func TestStopDrainNamesIssuesInFlight(t *testing.T) {
+	defer func(d time.Duration) { drainPoll = d }(drainPoll)
+	drainPoll = 10 * time.Millisecond
+	c, out, errb := daemonCLI(t, "")
+	if err := os.MkdirAll(filepath.Dir(c.Paths.Socket), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := localapi.Listen(c.Paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	drained, polls := false, 0
+	srv := &http.Server{}
+	srv.Handler = localapi.Handler(localapi.Handlers{
+		Drain: func() { mu.Lock(); drained = true; mu.Unlock() },
+		Status: func() []scheduler.ProjectStatus {
+			mu.Lock()
+			defer mu.Unlock()
+			if polls++; drained && polls > 2 {
+				go srv.Close() // the run finished and the daemon exits
+			}
+			return []scheduler.ProjectStatus{{Project: "CSR", Connected: true, Issue: "CSR-7"}}
+		},
+	})
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	if code := c.Run([]string{"stop", "--drain"}); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if !strings.Contains(out.String(), "CSR-7") {
+		t.Errorf("stdout %q, want it to name CSR-7", out.String())
+	}
+}

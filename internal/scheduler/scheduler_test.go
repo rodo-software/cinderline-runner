@@ -646,3 +646,89 @@ func TestNotStartedThriceComments(t *testing.T) {
 		t.Errorf("the comment is not between the third claim and its move back:\n%s", strings.Join(got, "\n"))
 	}
 }
+
+// runDraining runs s with a Drain channel and returns the channel and one
+// that is closed when Run returns. The context is only cancelled at cleanup.
+func runDraining(t *testing.T, s *Scheduler, slots []Slot) (drain chan struct{}, done chan struct{}) {
+	t.Helper()
+	drain, done = make(chan struct{}), make(chan struct{})
+	s.Drain = drain
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { s.Run(ctx, slots); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("Run did not return after cancel")
+		}
+	})
+	return drain, done
+}
+
+// CSR-44: a drain lets the run in flight finish and publish with its context
+// intact, claims nothing more, and then Run returns on its own.
+func TestDrainFinishesRunInFlight(t *testing.T) {
+	s, buf := sched()
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
+	running, release := make(chan struct{}), make(chan struct{})
+	var runCtxErr error
+	drain, done := runDraining(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
+		Run: func(ctx context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+			ev.add("run " + i.Ref)
+			close(running)
+			<-release
+			runCtxErr = ctx.Err()
+			return nil
+		},
+		Publish: recordIssue(ev, "publish"),
+	}}})
+	<-running
+	close(drain)
+	select {
+	case <-done:
+		t.Fatal("Run returned while a run was in flight")
+	case <-time.After(100 * time.Millisecond):
+	}
+	works := ev.count("GET /work") + ev.count("GET /work cached")
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Run did not return after the run in flight finished; events %q", ev.all())
+	}
+	if runCtxErr != nil {
+		t.Errorf("the run's context was cancelled by the drain: %v", runCtxErr)
+	}
+	if ev.count("publish CSR-9") != 1 {
+		t.Errorf("the run in flight was not published; events %q", ev.all())
+	}
+	if n := ev.count("GET /work") + ev.count("GET /work cached"); n != works {
+		t.Errorf("polled for new work after the drain; events %q", ev.all())
+	}
+	if ev.count("run CSR-9") != 1 {
+		t.Errorf("runs = %d, want 1; events %q", ev.count("run CSR-9"), ev.all())
+	}
+	if l := buf.String(); strings.Contains(l, `"level":"ERROR"`) {
+		t.Errorf("the drain was logged as a failure:\n%s", l)
+	}
+}
+
+// CSR-44: an idle slot (in a long poll) ends at once on a drain.
+func TestDrainWhileIdleReturnsAtOnce(t *testing.T) {
+	s, buf := sched()
+	ev := &events{}
+	c := app{issue: "null", hold: 10 * time.Second, ev: ev}.start(t)
+	drain, done := runDraining(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "the long poll", func() bool { return ev.count("GET /work cached") == 1 })
+	close(drain)
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("Run did not return within 300ms of a drain while idle")
+	}
+	if l := buf.String(); strings.Contains(l, `"level":"ERROR"`) {
+		t.Errorf("the drain was logged as a failure:\n%s", l)
+	}
+}

@@ -47,6 +47,10 @@ Installs to `%LocalAppData%\Programs\cinderstack\cinderstack.exe`. If that direc
 To pin a specific version, set `CINDERSTACK_DOWNLOAD_URL` before running (e.g.
 `https://github.com/rodo-software/cinderstack-runner/releases/download/v0.1.0`).
 
+## Update
+
+`cinderstack update` downloads and verifies the latest release, refreshes the tools volume and default image, replaces the binary, and lets the running runner finish its runs before it stops; `cinderstack stop --drain` does only the last part. If the service is installed, `cinderstack update` starts it again with the new binary.
+
 ## Build
 
 ```

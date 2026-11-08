@@ -44,6 +44,14 @@ func uninstallService(exe string) error {
 	return schtasks(schtasksArgs("delete", "")...)
 }
 
+// startService starts the installed service; installed is false, and nothing is done, when there is none.
+func startService(exe string) (installed bool, err error) {
+	if err := schtasks("/query", "/tn", name.Name); err != nil {
+		return false, nil
+	}
+	return true, schtasks(schtasksArgs("run", "")...)
+}
+
 func schtasks(args ...string) error {
 	cmd := exec.Command(filepath.Join(os.Getenv("SystemRoot"), "System32", "schtasks.exe"), args...)
 	out, err := cmd.CombinedOutput()
