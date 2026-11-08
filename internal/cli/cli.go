@@ -28,6 +28,7 @@ type CLI struct {
 	exec          workspace.Exec                                            // nil means workspace.RunCommand
 	removeService func(exe string) error                                    // nil means uninstallService
 	startService  func(exe string) (bool, error)                            // nil means startService; update restarts the service with it
+	processGone   func(pid int) bool                                        // nil means processGone; drainAndWait waits with it until the daemon's process has exited
 	Forge         func(kind, repository, token string) (forge.Forge, error) // nil: forge.New
 	pathsErr      error                                                     // from config.DefaultPaths; only commands that need the paths fail on it
 	WindowsBuild  uint32                                                    // OS build on Windows, 0 elsewhere; Main sets it

@@ -29,6 +29,7 @@ func daemonCLI(t *testing.T, stdin string) (*CLI, *bytes.Buffer, *bytes.Buffer) 
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	c.Paths.Socket = filepath.Join(dir, "run", "sock")
 	c.Paths.Log = filepath.Join(c.Paths.State, "log")
+	c.processGone = func(int) bool { return true } // the daemon runs in this process, which never exits
 	return c, out, errb
 }
 

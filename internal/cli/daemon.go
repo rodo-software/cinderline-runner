@@ -123,10 +123,17 @@ func (c *CLI) stopDaemon(args []string) int {
 }
 
 // drainAndWait calls Drain on the local API and then polls Status until the
-// daemon has exited. It prints the issues still in flight to Stdout when they
-// change. A later job (update) reuses this method.
+// daemon's socket is gone and the process has exited. It prints the issues
+// still in flight to Stdout when they change. A later job (update) reuses
+// this method. It waits for the process separately because the socket closes
+// before the process does.
 func (c *CLI) drainAndWait(ctx context.Context) error {
 	cl := localapi.Client{Socket: c.Paths.Socket}
+	st, err := cl.Status(ctx)
+	if err != nil {
+		return err
+	}
+	pid := st.PID
 	if err := cl.Drain(ctx); err != nil {
 		return err
 	}
@@ -135,6 +142,22 @@ func (c *CLI) drainAndWait(ctx context.Context) error {
 	for {
 		st, err := cl.Status(ctx)
 		if errors.Is(err, localapi.ErrNotRunning) {
+			gone := c.processGone
+			if gone == nil {
+				gone = processGone
+			}
+			if pid != 0 {
+				for {
+					if gone(pid) {
+						return nil
+					}
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(drainPoll):
+					}
+				}
+			}
 			return nil
 		}
 		switch {
