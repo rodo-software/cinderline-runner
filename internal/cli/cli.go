@@ -53,6 +53,7 @@ func commands() []command {
 		{"update", "[--refresh]", "update to the latest release, then stop the running " + name.Name + " once its runs have finished", (*CLI).update},
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
+		{"login", "CLIENT --project KEY", "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

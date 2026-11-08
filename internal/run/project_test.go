@@ -40,21 +40,23 @@ func hooksSet(h scheduler.Hooks) []string {
 }
 
 // A client is built only when its model credential is in the keychain
-// (decision 0122); all seven hooks are set either way.
+// (decision 0122), except Claude Code, Codex and Gemini CLI: without a key
+// they use the login on the state volume (CSR-58, decisions A and B). All
+// seven hooks are set either way.
 func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		keys []secrets.Kind
 		want []string
 	}{
-		{"both keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, []string{"claude", "opencode"}},
-		{"anthropic only", []secrets.Kind{secrets.AnthropicCredential}, []string{"claude"}},
-		{"openrouter only", []secrets.Kind{secrets.OpenRouterKey}, []string{"opencode"}},
-		{"openai only", []secrets.Kind{secrets.OpenAIKey}, []string{"codex"}},
-		{"all three keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey, secrets.OpenRouterKey}, []string{"claude", "codex", "opencode"}},
-		{"gemini only", []secrets.Kind{secrets.GeminiKey}, []string{"gemini"}},
+		{"both keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
+		{"anthropic only", []secrets.Kind{secrets.AnthropicCredential}, []string{"claude", "codex", "gemini"}},
+		{"openrouter only", []secrets.Kind{secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
+		{"openai only", []secrets.Kind{secrets.OpenAIKey}, []string{"claude", "codex", "gemini"}},
+		{"all three keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey, secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
+		{"gemini only", []secrets.Kind{secrets.GeminiKey}, []string{"claude", "codex", "gemini"}},
 		{"all four keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey, secrets.GeminiKey, secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
-		{"no model key", nil, nil},
+		{"no model key", nil, []string{"claude", "codex", "gemini"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keyring.MockInit()

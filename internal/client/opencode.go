@@ -30,7 +30,7 @@ var _ Client = (*OpenCode)(nil)
 // Run runs one turn. OpenCode has no turn limit to hit (see opencodeConfig),
 // so HitTurnLimit stays false.
 func (c *OpenCode) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := prepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
 		return Result{}, err
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{

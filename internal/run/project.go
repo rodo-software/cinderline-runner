@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -79,7 +80,9 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	mcpURL := strings.TrimRight(cfg.URL, "/") + "/mcp"
 	for name, kind := range keys {
 		cred, _, err := sec.Get(cfg, kind)
-		if err != nil {
+		// Without a keychain key, Claude Code, Codex and Gemini CLI use the
+		// login that `login` stored on the state volume (CSR-58).
+		if err != nil && !(errors.Is(err, secrets.ErrNotFound) && (name == "claude" || name == "codex" || name == "gemini")) {
 			continue
 		}
 		switch name {

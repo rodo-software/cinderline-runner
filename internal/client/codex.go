@@ -32,7 +32,7 @@ var _ Client = (*Codex)(nil)
 // Run runs one turn. Codex has no turn or step limit; the team's time limit
 // bounds the turn. HitTurnLimit stays false.
 func (c *Codex) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := prepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
 		return Result{}, err
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
@@ -99,7 +99,9 @@ func codexArgs(t Turn, mcpURL, baseURL string) []string {
 func codexEnv(key string, t Turn) []string {
 	env := []string{
 		"CODEX_HOME=" + StatePath + "/codex",
-		"CODEX_API_KEY=" + key,
+	}
+	if key != "" {
+		env = append(env, "CODEX_API_KEY="+key)
 	}
 	if t.Token != "" {
 		return append(env, tokenVar+"="+t.Token)

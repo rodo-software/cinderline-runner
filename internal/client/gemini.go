@@ -44,18 +44,9 @@ func geminiArgs(t Turn) []string {
 	return a
 }
 
-// geminiSettings builds the user settings file content. The settings go to
-// the user settings file. A system settings file is skipped unless its folder
-// is owned by root, and the repository's own .gemini/settings.json is ignored.
-// Headless mode refuses an untrusted folder (exit 55); hence --skip-trust.
-// The turn limit exits 53 with a result of type FatalTurnLimitedError.
-func geminiSettings(t Turn, mcpURL string, vertex bool) string {
-	sec := map[string]any{}
-	if vertex {
-		sec["auth"] = map[string]string{"selectedType": "vertex-ai"}
-	} else {
-		sec["auth"] = map[string]string{"selectedType": "gemini-api-key"}
-	}
+// geminiSettingsWithAuth is geminiSettings with an explicit auth type.
+func geminiSettingsWithAuth(t Turn, mcpURL string, authType string) string {
+	sec := map[string]any{"auth": map[string]string{"selectedType": authType}}
 	cfg := map[string]any{"security": sec}
 	if t.MaxTurns > 0 {
 		cfg["model"] = map[string]int{"maxSessionTurns": t.MaxTurns}
@@ -75,6 +66,22 @@ func geminiSettings(t Turn, mcpURL string, vertex bool) string {
 	return string(s)
 }
 
+func geminiAuthType(vertex bool) string {
+	if vertex {
+		return "vertex-ai"
+	}
+	return "gemini-api-key"
+}
+
+// geminiSettings builds the user settings file content. The settings go to
+// the user settings file. A system settings file is skipped unless its folder
+// is owned by root, and the repository's own .gemini/settings.json is ignored.
+// Headless mode refuses an untrusted folder (exit 55); hence --skip-trust.
+// The turn limit exits 53 with a result of type FatalTurnLimitedError.
+func geminiSettings(t Turn, mcpURL string, vertex bool) string {
+	return geminiSettingsWithAuth(t, mcpURL, geminiAuthType(vertex))
+}
+
 // geminiSettingsVar is the environment variable that holds the settings JSON.
 var geminiSettingsVar = strings.ToUpper(name.Name) + "_GEMINI_SETTINGS"
 
@@ -82,16 +89,22 @@ var geminiSettingsVar = strings.ToUpper(name.Name) + "_GEMINI_SETTINGS"
 // CLI home on the state volume, the project's key (either as GEMINI_API_KEY or,
 // for Vertex, as GOOGLE_API_KEY with Vertex switched on), the settings and,
 // for agents with Cinderline access, the scoped token.
+// When key is empty no key variables are set and the auth type is oauth-personal:
+// the stored Google login on the state volume is used instead.
 func geminiEnv(key string, vertex bool, t Turn, mcpURL string) []string {
 	env := []string{
 		"GEMINI_CLI_HOME=" + StatePath + "/gemini",
 	}
-	if vertex {
+	auth := geminiAuthType(vertex)
+	switch {
+	case key == "":
+		auth = "oauth-personal"
+	case vertex:
 		env = append(env, "GOOGLE_GENAI_USE_VERTEXAI=true", "GOOGLE_API_KEY="+key)
-	} else {
+	default:
 		env = append(env, "GEMINI_API_KEY="+key)
 	}
-	env = append(env, geminiSettingsVar+"="+geminiSettings(t, mcpURL, vertex))
+	env = append(env, geminiSettingsVar+"="+geminiSettingsWithAuth(t, mcpURL, auth))
 	if t.Token != "" {
 		return append(env, tokenVar+"="+t.Token)
 	}
@@ -155,7 +168,7 @@ func parseGemini(out string) Result {
 
 // Run runs one turn.
 func (c *Gemini) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := prepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
 		return Result{}, err
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
