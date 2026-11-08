@@ -145,6 +145,8 @@ func sched() (*Scheduler, *logBuf) {
 		ReviewInterval: 10 * time.Millisecond,
 		MergeInterval:  10 * time.Millisecond,
 		MaxBackoff:     20 * time.Millisecond,
+		IdleWait:       time.Millisecond,
+		MaxIdleWait:    10 * time.Millisecond,
 	}, buf
 }
 
@@ -731,4 +733,112 @@ func TestDrainWhileIdleReturnsAtOnce(t *testing.T) {
 	if l := buf.String(); strings.Contains(l, `"level":"ERROR"`) {
 		t.Errorf("the drain was logged as a failure:\n%s", l)
 	}
+}
+
+// pacedWork is a runner API whose /work answers at once (CSR-113): answers(n)
+// gives the body of the nth call, from 1, each with a new ETag. It records when
+// each /work call came.
+func pacedWork(t *testing.T, answers func(n int) string) (*cinderline.Client, func() []time.Time) {
+	t.Helper()
+	var mu sync.Mutex
+	var at []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runner/v1/work" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		mu.Lock()
+		at = append(at, time.Now())
+		n := len(at)
+		mu.Unlock()
+		w.Header().Set("ETag", fmt.Sprintf(`"v%d"`, n))
+		_, _ = io.WriteString(w, `{"issue":`+answers(n)+`}`)
+	}))
+	t.Cleanup(srv.Close)
+	c := cinderline.New(srv.URL, "tok", "0.0.0")
+	c.HTTP = srv.Client()
+	c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	return c, func() []time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Time(nil), at...)
+	}
+}
+
+// A server that answers at once with no work gets one GET /work per
+// IdleWait, not a tight loop (CSR-113).
+func TestEmptyAnswersArePaced(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 50*time.Millisecond, 50*time.Millisecond
+	c, calls := pacedWork(t, func(int) string { return "null" })
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	time.Sleep(300 * time.Millisecond)
+	stop(time.Second)
+	if n := len(calls()); n < 3 || n > 8 {
+		t.Fatalf("%d GET /work in 300ms at one per 50ms, want about 6", n)
+	}
+}
+
+// Unchanged answers (304) are paced too.
+func TestUnchangedAnswersArePaced(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 50*time.Millisecond, 50*time.Millisecond
+	ev := &events{}
+	c := app{issue: "null", ev: ev}.start(t) // hold 0: the 304 comes at once
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	time.Sleep(300 * time.Millisecond)
+	stop(time.Second)
+	if n := ev.count("GET /work") + ev.count("GET /work cached"); n < 3 || n > 8 {
+		t.Fatalf("%d GET /work in 300ms at one per 50ms, want about 6", n)
+	}
+}
+
+// The wait doubles per empty answer up to MaxIdleWait.
+func TestIdleWaitDoubles(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 20*time.Millisecond, 80*time.Millisecond
+	c, calls := pacedWork(t, func(int) string { return "null" })
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "six calls", func() bool { return len(calls()) >= 6 })
+	stop(time.Second)
+	at := calls()
+	// waits 20, 40, 80, 80, 80 ms
+	for i, min := range []time.Duration{20, 40, 80, 80, 80} {
+		if gap := at[i+1].Sub(at[i]); gap < min*time.Millisecond {
+			t.Errorf("gap %d = %v, want at least %v", i+1, gap, min*time.Millisecond)
+		}
+	}
+	if gap := at[5].Sub(at[4]); gap > 150*time.Millisecond {
+		t.Errorf("gap 5 = %v, want about 80ms (the ceiling)", gap)
+	}
+}
+
+// A 200 with an issue resets the wait to IdleWait.
+func TestAnswerWithWorkResetsIdleWait(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 20*time.Millisecond, time.Second
+	c, calls := pacedWork(t, func(n int) string {
+		if n == 5 {
+			return issue // skipped: no run step
+		}
+		return "null"
+	})
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "six calls", func() bool { return len(calls()) >= 6 })
+	stop(time.Second)
+	at := calls()
+	// before the issue the wait grew to 160ms; after it, back to 20ms
+	if gap := at[5].Sub(at[4]); gap < 20*time.Millisecond || gap > 100*time.Millisecond {
+		t.Fatalf("wait after the answer with an issue = %v, want 20ms (reset)", gap)
+	}
+}
+
+// Stopping during an idle wait returns at once, not after the wait (CSR-113).
+func TestStopDuringIdleWait(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 10*time.Second, 10*time.Second
+	c, calls := pacedWork(t, func(int) string { return "null" })
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "the first call", func() bool { return len(calls()) == 1 })
+	stop(500 * time.Millisecond)
 }

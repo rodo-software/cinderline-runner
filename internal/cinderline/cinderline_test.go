@@ -212,6 +212,27 @@ func TestWorkETag(t *testing.T) {
 	}
 }
 
+// A weak ETag goes back verbatim (CSR-113: weak forms match on the server).
+func TestWorkWeakETagVerbatim(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("If-None-Match"))
+		w.Header().Set(name.Name+"-Api-Version", "1.0.0")
+		w.Header().Set("ETag", `W/"a-1"`)
+		_, _ = io.WriteString(w, `{"issue":null}`)
+	}))
+	defer srv.Close()
+	c := New(srv.URL, runnerToken, version)
+	for range 2 {
+		if _, err := c.Work(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []string{"", `W/"a-1"`}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("If-None-Match = %q, want %q", seen, want)
+	}
+}
+
 func TestUpgradeRequired(t *testing.T) {
 	c, _ := server(t, 426, `{"message":"Upgrade the runner.","minimum_runner_version":"1.3.0"}`,
 		map[string]string{name.Name + "-Api-Version": "1.4.0"})

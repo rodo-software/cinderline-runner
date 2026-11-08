@@ -61,19 +61,20 @@ paths:
   /work:
     get:
       operationId: getWork
-      summary: Long-poll for the next To do issue with a team.
+      summary: Poll for the next To do issue with a team.
       description: |
         Answers as soon as the project has a To do issue with a team, or after
-        `wait` seconds. The answer is the first such issue in board order, or
-        `issue: null` when there is none; both are `200` with an `ETag`. When
-        the request's `If-None-Match` matches the current answer, the app keeps
-        waiting until the answer changes or `wait` runs out, and then answers
-        `304` without a body.
+        `wait` seconds; it may answer at once. The answer is the first such
+        issue in board order, or `issue: null` when there is none; both are
+        `200` with an `ETag`. When the request's `If-None-Match` matches the
+        current answer, the app keeps waiting until the answer changes or
+        `wait` runs out, and then answers `304` without a body. The runner
+        paces its own polls between answers that bring no work.
       parameters:
         - $ref: '#/components/parameters/RunnerVersion'
         - name: wait
           in: query
-          description: Seconds to wait for work before answering.
+          description: The most seconds the app may hold the request waiting for work; it may answer sooner, also at once.
           schema:
             type: integer
             minimum: 0
