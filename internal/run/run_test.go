@@ -259,7 +259,9 @@ func TestCheck(t *testing.T) {
 	}{
 		{"claude and opencode with both keys", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, ""},
 		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential}, "Qwen runs on opencode, which needs this project's openrouter"},
-		{"an orchestrator on another client", team(agent("C", "codex")), nil, "C runs on codex; this runner supports only claude and opencode"},
+		{"a Codex agent with an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.OpenAIKey}, ""},
+		{"a Codex agent without an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, "C runs on codex, which needs this project's openai"},
+		{"an orchestrator on another client", team(agent("G", "gemini")), nil, "G runs on gemini; this runner supports only claude, codex and opencode"},
 		{"a Claude agent without an Anthropic credential", team(agent("Boss", "claude")), nil, "Boss runs on claude, which needs this project's anthropic"},
 		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, nil, "Unknown team."},
 	} {

@@ -42,7 +42,7 @@ func (c *CLI) remove(args []string) int {
 		return c.fail(fmt.Errorf("projects on several instances have key %s; choose one with -url: %s", key, strings.Join(urls, ", ")))
 	}
 	p := matches[0]
-	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey} {
+	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey} {
 		if err := c.Secrets.Delete(p, k); err != nil {
 			return c.fail(err)
 		}

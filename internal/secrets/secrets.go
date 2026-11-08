@@ -27,10 +27,12 @@ const (
 	// AnthropicCredential is an API key or a `claude setup-token` token; the package does not tell them apart.
 	AnthropicCredential Kind = "anthropic"
 	OpenRouterKey       Kind = "openrouter"
+	// OpenAIKey is an OpenAI API key, for Codex.
+	OpenAIKey Kind = "openai"
 )
 
 // modelCredentials are the kinds CopyModelCredentials copies.
-var modelCredentials = []Kind{AnthropicCredential, OpenRouterKey}
+var modelCredentials = []Kind{AnthropicCredential, OpenRouterKey, OpenAIKey}
 
 // Store says where a secret was found or written.
 type Store string

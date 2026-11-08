@@ -8,8 +8,10 @@ const (
 	// OpenCodeVersion is the version of the npm platform packages
 	// opencode-linux-<arch>[-musl].
 	OpenCodeVersion = "1.19.5"
-	PonytailRepo    = "https://github.com/DietrichGebert/ponytail"
-	PonytailTag     = "v5.3.2"
+	// CodexVersion is the GitHub release rust-v<CodexVersion> of openai/codex.
+	CodexVersion = "0.167.0"
+	PonytailRepo = "https://github.com/DietrichGebert/ponytail"
+	PonytailTag  = "v5.3.2"
 	// PonytailCommit is what PonytailTag points at; the clone is refused
 	// otherwise, so a moved tag can't change the plugin.
 	PonytailCommit = "16352ac229eb08a9598dcae48fe9f2b342567d86"
@@ -31,6 +33,22 @@ var openCodeSRI = map[string]string{
 	"linux-arm64":      "sha512-u2HFRI6v1nNMVKiV34An8XrGBxJeZ+RCg2tYu3SqlGODKqKsr5RoEbaX1tnsfGb+rETh9AJVX9kS8dSZXPufsA==",
 	"linux-x64-musl":   "sha512-y6nUbH3ViajN37KaVVy0/KnWv/i48Bx5QPv9Ul9ONJya1ossV7CHVb+ZNFc61M5GqlVtjCvZV7T0eBMqhJG7mg==",
 	"linux-arm64-musl": "sha512-YxvpVPJ/jeevV93DVRiuOVbhkoJAuwQUadPDHPaw65aZkAKZ6OE7XySwCS+Rjlhzt7fPryisvAOjUtZkwfMBuQ==",
+}
+
+// codexSHA256 is per arch, the SHA-256 of codex-<target>.tar.gz as the GitHub
+// release API lists it (assets[].digest) for rust-v<CodexVersion>. Codex ships
+// static musl builds only, which run on glibc and musl images alike.
+var codexSHA256 = map[string]string{
+	"amd64": "9d64836106d5b374e90ee4454c7ebcde7ca7106558bd7e41a34b9f26ebda251a",
+	"arm64": "843489acb4d4b1079745c36b03c5963b887b83155af208fd53584e33ee8eb281",
+}
+
+// codexHostSHA256 is per arch, the SHA-256 of codex-code-mode-host-<target>.tar.gz
+// from the same release; Codex runs code mode in this host, which it looks
+// for next to its own binary.
+var codexHostSHA256 = map[string]string{
+	"amd64": "b5074d5dd64643b2c073927e494a588eff31c1f5a27f12c1e2c45f9a6cf07dd4",
+	"arm64": "6e99948fa20ca816a01f222a56afa261b321e00cbed611d76bb92c765fd11ec6",
 }
 
 // muslLibsImage supplies libstdc++ and libgcc_s, which OpenCode's musl build

@@ -50,6 +50,8 @@ func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 		{"both keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, []string{"claude", "opencode"}},
 		{"anthropic only", []secrets.Kind{secrets.AnthropicCredential}, []string{"claude"}},
 		{"openrouter only", []secrets.Kind{secrets.OpenRouterKey}, []string{"opencode"}},
+		{"openai only", []secrets.Kind{secrets.OpenAIKey}, []string{"codex"}},
+		{"all three keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey, secrets.OpenRouterKey}, []string{"claude", "codex", "opencode"}},
 		{"no model key", nil, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,6 +85,32 @@ func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 				t.Errorf("nil hooks: %v", missing)
 			}
 		})
+	}
+}
+
+// The Codex client gets the project's OpenAI key, Cinderline's MCP endpoint
+// and the project's optional OpenAI-compatible base URL from the local config.
+func TestNewProjectCodexFromConfig(t *testing.T) {
+	keyring.MockInit()
+	state := t.TempDir()
+	sec := secrets.New(state)
+	pc := cfg
+	pc.OpenAIBaseURL = "http://host.docker.internal:11434/v1"
+	for _, k := range []secrets.Kind{secrets.GitToken, secrets.OpenAIKey} {
+		if _, err := sec.Set(pc, k, "secret-"+string(k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := NewProject(pc, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
+	if err != nil {
+		t.Fatalf("NewProject: %v", err)
+	}
+	c, ok := p.Clients["codex"].(*client.Codex)
+	if !ok {
+		t.Fatalf("codex client = %T", p.Clients["codex"])
+	}
+	if c.Key != "secret-openai" || c.BaseURL != pc.OpenAIBaseURL || c.Project != pc.Key || !strings.HasSuffix(c.MCPURL, "/mcp") {
+		t.Errorf("codex client = %+v", c)
 	}
 }
 

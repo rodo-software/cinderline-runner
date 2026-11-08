@@ -1,8 +1,8 @@
-// Package tools fills and mounts the tools volume: the pinned agent CLIs,
-// downloaded on the user's machine from their official sources and checked
-// by hash (EMBER-57), in a read-only volume per pinned set that every agent
-// container mounts. No image of ours carries them, so Claude Code is never
-// redistributed (2026-11-04-licences-before-publishing).
+// Package tools fills and mounts the tools volume: the pinned agent CLIs (Claude
+// Code, OpenCode, Codex), downloaded on the user's machine from their official
+// sources and checked by hash (EMBER-57), in a read-only volume per pinned set
+// that every agent container mounts. No image of ours carries them, so Claude
+// Code is never redistributed (2026-11-04-licences-before-publishing).
 package tools
 
 import (
@@ -26,9 +26,9 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// Path is where agent containers see the volume: the CLIs in Path/bin, the
-// ponytail plugin in Path/ponytail and, on musl, OpenCode's libraries in
-// Path/lib.
+// Path is where agent containers see the volume: the CLIs (Claude Code, OpenCode,
+// Codex) in Path/bin, the ponytail plugin in Path/ponytail and, on musl, OpenCode's
+// libraries in Path/lib.
 const Path = "/opt/" + name.Name
 
 // fillScript fills the volume at /t from the checked downloads at /s, then
@@ -37,8 +37,8 @@ const Path = "/opt/" + name.Name
 const fillScript = `set -e
 cd /t
 mkdir -p bin
-cp /s/claude /s/opencode bin/
-chmod 755 bin/claude bin/opencode
+cp /s/claude /s/opencode /s/codex /s/codex-code-mode-host bin/
+chmod 755 bin/claude bin/opencode bin/codex bin/codex-code-mode-host
 git clone --quiet --depth 1 --branch "$2" "$1" ponytail
 test "$(git -C ponytail rev-parse HEAD)" = "$3"
 rm -rf ponytail/.git
@@ -142,6 +142,20 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	if err := extract(tgz, "package/bin/opencode", filepath.Join(staging, "opencode")); err != nil {
 		return err
 	}
+	codexTgz := filepath.Join(staging, "codex.tgz")
+	if err := download(ctx, hc, s.CodexURL, codexTgz, s.CodexSHA256); err != nil {
+		return err
+	}
+	if err := extract(codexTgz, s.CodexBinary, filepath.Join(staging, "codex")); err != nil {
+		return err
+	}
+	hostTgz := filepath.Join(staging, "codex-code-mode-host.tgz")
+	if err := download(ctx, hc, s.CodexHostURL, hostTgz, s.CodexHostSHA256); err != nil {
+		return err
+	}
+	if err := extract(hostTgz, s.CodexHostBinary, filepath.Join(staging, "codex-code-mode-host")); err != nil {
+		return err
+	}
 
 	steps := [][]string{
 		{"docker", "volume", "rm", "--force", vol},
@@ -163,12 +177,14 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 
 // set is the pinned tools for one platform; its hash names its volume.
 type set struct {
-	Arch, Platform            string
-	Musl                      bool
-	ClaudeURL, ClaudeSHA256   string
-	OpenCodeURL, OpenCodeSRI  string
-	PonytailTag               string
-	PonytailCommit, LibsImage string
+	Arch, Platform                                 string
+	Musl                                           bool
+	ClaudeURL, ClaudeSHA256                        string
+	OpenCodeURL, OpenCodeSRI                       string
+	CodexURL, CodexSHA256, CodexBinary             string
+	CodexHostURL, CodexHostSHA256, CodexHostBinary string
+	PonytailTag                                    string
+	PonytailCommit, LibsImage                      string
 }
 
 // pinned is the set for a Docker engine arch (amd64 or arm64) and libc.
@@ -181,13 +197,22 @@ func pinned(arch string, musl bool) (set, error) {
 	if musl {
 		p += "-musl"
 	}
+	target := map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}[arch]
+	cb := "codex-" + target
+	chb := "codex-code-mode-host-" + target
 	return set{
 		Arch: arch, Platform: p, Musl: musl,
-		ClaudeURL:    "https://downloads.claude.ai/claude-code-releases/" + ClaudeVersion + "/" + p + "/claude",
-		ClaudeSHA256: claudeSHA256[p],
-		OpenCodeURL:  "https://registry.npmjs.org/opencode-" + p + "/-/opencode-" + p + "-" + OpenCodeVersion + ".tgz",
-		OpenCodeSRI:  openCodeSRI[p],
-		PonytailTag:  PonytailTag, PonytailCommit: PonytailCommit, LibsImage: muslLibsImage,
+		ClaudeURL:       "https://downloads.claude.ai/claude-code-releases/" + ClaudeVersion + "/" + p + "/claude",
+		ClaudeSHA256:    claudeSHA256[p],
+		OpenCodeURL:     "https://registry.npmjs.org/opencode-" + p + "/-/opencode-" + p + "-" + OpenCodeVersion + ".tgz",
+		OpenCodeSRI:     openCodeSRI[p],
+		CodexURL:        "https://github.com/openai/codex/releases/download/rust-v" + CodexVersion + "/" + cb + ".tar.gz",
+		CodexSHA256:     codexSHA256[arch],
+		CodexBinary:     cb,
+		CodexHostURL:    "https://github.com/openai/codex/releases/download/rust-v" + CodexVersion + "/" + chb + ".tar.gz",
+		CodexHostSHA256: codexHostSHA256[arch],
+		CodexHostBinary: chb,
+		PonytailTag:     PonytailTag, PonytailCommit: PonytailCommit, LibsImage: muslLibsImage,
 	}, nil
 }
 

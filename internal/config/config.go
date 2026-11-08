@@ -49,6 +49,8 @@ type Project struct {
 	Key           string `json:"key"`
 	Repository    string `json:"repository"`
 	AllowExisting bool   `json:"allow_existing,omitempty"`
+	// OpenAIBaseURL is an OpenAI-compatible base URL for Codex; empty means OpenAI's API.
+	OpenAIBaseURL string `json:"openai_base_url,omitempty"`
 }
 
 // Paths are the per-machine paths. Computing them creates nothing on disk.

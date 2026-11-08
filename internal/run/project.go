@@ -19,7 +19,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "opencode": secrets.OpenRouterKey}
+var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "codex": secrets.OpenAIKey, "opencode": secrets.OpenRouterKey}
 
 // Project is what the steps of one configured project need.
 type Project struct {
@@ -85,6 +85,8 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		switch name {
 		case "claude":
 			p.Clients["claude"] = &client.Claude{Project: cfg.Key, Env: env, Credential: cred, MCPURL: mcpURL}
+		case "codex":
+			p.Clients["codex"] = &client.Codex{Project: cfg.Key, Env: env, Key: cred, BaseURL: cfg.OpenAIBaseURL, MCPURL: mcpURL}
 		case "opencode":
 			p.Clients["opencode"] = &client.OpenCode{Project: cfg.Key, Env: env, Key: cred, MCPURL: mcpURL}
 		}
@@ -104,6 +106,8 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		for _, cl := range p.Clients {
 			switch c := cl.(type) {
 			case *client.Claude:
+				c.Tools = mount
+			case *client.Codex:
 				c.Tools = mount
 			case *client.OpenCode:
 				c.Tools = mount

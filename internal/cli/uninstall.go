@@ -65,7 +65,7 @@ func (c *CLI) uninstall(args []string) int {
 		}
 	}
 	for _, p := range cfg.Projects {
-		for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey} {
+		for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey} {
 			if err := c.Secrets.Delete(p, k); err != nil {
 				return c.fail(err)
 			}

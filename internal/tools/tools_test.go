@@ -126,6 +126,18 @@ func TestPinsCoverEveryPlatform(t *testing.T) {
 			if len(s.ClaudeSHA256) != 64 || !strings.HasPrefix(s.OpenCodeSRI, "sha512-") {
 				t.Fatalf("%s musl=%v: bad pins %+v", arch, musl, s)
 			}
+			// Codex ships static musl builds only, from its GitHub release;
+			// glibc and musl images share them.
+			target := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[arch] + "-unknown-linux-musl"
+			if s.CodexBinary != "codex-"+target || len(s.CodexSHA256) != 64 ||
+				s.CodexURL != "https://github.com/openai/codex/releases/download/rust-v"+CodexVersion+"/codex-"+target+".tar.gz" {
+				t.Fatalf("%s musl=%v: bad Codex pins %+v", arch, musl, s)
+			}
+			// Codex runs code mode in this host, which it looks for next to itself.
+			if s.CodexHostBinary != "codex-code-mode-host-"+target || len(s.CodexHostSHA256) != 64 ||
+				s.CodexHostURL != "https://github.com/openai/codex/releases/download/rust-v"+CodexVersion+"/codex-code-mode-host-"+target+".tar.gz" {
+				t.Fatalf("%s musl=%v: bad Codex code-mode host pins %+v", arch, musl, s)
+			}
 		}
 	}
 	if _, err := pinned("riscv64", false); err == nil {
@@ -210,14 +222,46 @@ func TestLockExcludes(t *testing.T) {
 	}
 }
 
-// pinsServer serves the claude binary and the opencode tarball of s.
+// pinsServer serves the claude binary, the opencode tarball and a codex
+// tarball of s.
 func pinsServer(t *testing.T, claude, oc []byte) (string, set) {
 	s, _ := pinned("arm64", true)
+	codex := tgz(t, map[string]string{s.CodexBinary: "CODEX"})
+	host := tgz(t, map[string]string{s.CodexHostBinary: "HOST"})
 	s.ClaudeSHA256 = sha256Hex(claude)
 	s.OpenCodeSRI = sriSHA512(oc)
-	base := serve(t, map[string][]byte{"/claude": claude, "/oc.tgz": oc})
-	s.ClaudeURL, s.OpenCodeURL = base+"/claude", base+"/oc.tgz"
+	s.CodexSHA256 = sha256Hex(codex)
+	s.CodexHostSHA256 = sha256Hex(host)
+	base := serve(t, map[string][]byte{"/claude": claude, "/oc.tgz": oc, "/codex.tgz": codex, "/host.tgz": host})
+	s.ClaudeURL, s.OpenCodeURL, s.CodexURL, s.CodexHostURL = base+"/claude", base+"/oc.tgz", base+"/codex.tgz", base+"/host.tgz"
 	return base, s
+}
+
+// The fill script puts codex and its code-mode host next to claude and opencode.
+func TestFillScriptInstallsCodex(t *testing.T) {
+	if !strings.Contains(fillScript, "/s/codex") || !strings.Contains(fillScript, "bin/codex") ||
+		!strings.Contains(fillScript, "/s/codex-code-mode-host") || !strings.Contains(fillScript, "bin/codex-code-mode-host") {
+		t.Fatalf("fill script does not install codex:\n%s", fillScript)
+	}
+}
+
+func TestMountRefusesTamperedCodex(t *testing.T) {
+	_, s := pinsServer(t, []byte("CLAUDE"), tgz(t, map[string]string{"package/bin/opencode": "OC"}))
+	s.CodexSHA256 = sha256Hex([]byte("something else"))
+	f := &fakeDocker{answers: map[string]string{"docker version --format": "arm64\n", "docker run --rm": "musl\n"}}
+	n := 0
+	exec := func(ctx context.Context, env []string, argv ...string) (string, error) {
+		n++
+		out, err := f.exec(ctx, env, argv...)
+		if n == 3 {
+			return "", errors.New("exit status 1")
+		}
+		return out, err
+	}
+	tl := &Tools{State: t.TempDir(), Exec: exec, pins: func(string, bool) (set, error) { return s, nil }}
+	if _, err := tl.Mount(context.Background(), "img"); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("tampered codex accepted: %v", err)
+	}
 }
 
 func TestMountFillsMissingVolume(t *testing.T) {
