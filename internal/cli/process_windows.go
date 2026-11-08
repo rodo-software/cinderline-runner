@@ -2,12 +2,16 @@
 
 package cli
 
-import "os"
+import "syscall"
 
-// On Windows, os.FindProcess opens the process handle, so it fails when the
-// process no longer exists. On Unix, FindProcess never fails for a PID that
-// was once valid, so we must Signal(0) instead; see process_unix.go.
+// os.FindProcess succeeds for an exited process while a handle to it stays
+// open, so wait on the handle instead.
 func processGone(pid int) bool {
-	_, err := os.FindProcess(pid)
-	return err != nil
+	h, err := syscall.OpenProcess(syscall.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		return err != syscall.ERROR_ACCESS_DENIED
+	}
+	defer syscall.CloseHandle(h)
+	ev, err := syscall.WaitForSingleObject(h, 0)
+	return err == nil && ev == syscall.WAIT_OBJECT_0
 }

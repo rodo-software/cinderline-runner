@@ -254,6 +254,8 @@ func newApp(t *testing.T) *app {
 // TestM2AddRunStatus is the M2 check against fakes: add a project, run the
 // daemon, see it report, heartbeat and find no work, and see that in status.
 func TestM2AddRunStatus(t *testing.T) {
+	// daemon startup cleanup shells out to docker; empty PATH keeps it off the host's real Docker
+	t.Setenv("PATH", t.TempDir())
 	a := newApp(t)
 	c, out, errb := daemonCLI(t, lines(a.url, goodToken, "", "git-tok"))
 	if code := c.Run([]string{"add"}); code != 0 {
