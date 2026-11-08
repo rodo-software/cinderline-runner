@@ -164,7 +164,7 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			projects = append(projects, st)
 			continue
 		}
-		env := &environment.Docker{Project: p.Key, Log: log}
+		env := &environment.Docker{Project: p.Key, Log: log, BuildImage: cfg.BuildImage}
 		proj, err := run.NewProject(p, sec, o.Paths.State, env, log)
 		if err != nil {
 			log.Error("project not started", "project", p.Key, "err", err)

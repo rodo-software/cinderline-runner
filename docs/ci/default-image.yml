@@ -1,0 +1,61 @@
+# Draft for Willem (CSR-49): agents may not edit .github/ (AGENTS.md; decision
+# 2026-11-05-ci), so this file waits here. To put it in place:
+#   1. Copy this file to .github/workflows/default-image.yml and merge it to main.
+#   2. Push a release tag (v*), as for release.yml. This workflow builds
+#      images/default/Dockerfile for linux/amd64 and linux/arm64 and pushes
+#      ghcr.io/rodo-software/cinderline-runner-default:<tag> with build
+#      provenance and an SBOM. On the first run, make the package public in
+#      the organisation's GitHub package settings so runners can pull it
+#      without logging in.
+#   3. The job summary shows the image's digest and the Dockerfile's sum.
+#      Put them in internal/environment/docker.go as publishedDigest and
+#      publishedSum and commit; the next release then pulls that image. Until
+#      then, or when the Dockerfile changes again, runners build locally.
+#      Check the attestation with:
+#      gh attestation verify oci://ghcr.io/rodo-software/cinderline-runner-default@<digest> --repo rodo-software/cinderline-runner
+# The image holds no agent CLIs (decision 2026-11-04-licences-before-publishing):
+# they come from the tools volume. Check the action versions before enabling.
+name: default-image
+on:
+  push:
+    tags:
+      - "v*"
+permissions:
+  contents: read
+  packages: write # push to ghcr.io
+  id-token: write # attest-build-provenance signs with the workflow's identity
+  attestations: write # and stores the attestation on the repository
+env:
+  IMAGE: ghcr.io/rodo-software/cinderline-runner-default
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: images/default
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.ref_name }}
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Pin
+        run: |
+          {
+            echo "publishedDigest = \"${{ steps.build.outputs.digest }}\""
+            echo "publishedSum = \"$(sha256sum images/default/Dockerfile | cut -c1-12)\""
+          } >> "$GITHUB_STEP_SUMMARY"

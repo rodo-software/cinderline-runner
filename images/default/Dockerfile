@@ -1,7 +1,9 @@
 # The default image agent containers run in: today's toolchain, PHP 8.4,
 # Composer, Node 22, git and Go with staticcheck and govulncheck, without
-# agent CLIs, which come from the tools volume (plan M4). The runner builds
-# it locally until M5 publishes it. Runs as uid 1000, the user the
+# agent CLIs, which come from the tools volume (plan M4). Published on GHCR
+# by docs/ci/default-image.yml; the runner pulls it by a pinned digest and
+# builds it locally when offline, when config.json sets build_image, or when
+# this file changed since the pinned image. Runs as uid 1000, the user the
 # workspace's git runs as, which Claude Code also requires for
 # --dangerously-skip-permissions.
 #

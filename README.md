@@ -51,6 +51,8 @@ To pin a specific version, set `CINDERLINE_DOWNLOAD_URL` before running (e.g.
 
 `cinderline update` downloads and verifies the latest release, refreshes the tools volume and default image, replaces the binary, and lets the running runner finish its runs before it stops; `cinderline stop --drain` does only the last part. If the service is installed, `cinderline update` starts it again with the new binary.
 
+Agent containers run the default image, `ghcr.io/rodo-software/cinderline-runner-default`, pulled by a pinned digest. Offline, or with `"build_image": true` in `config.json`, the runner builds it locally from `images/default/Dockerfile` instead.
+
 ## Build
 
 ```
