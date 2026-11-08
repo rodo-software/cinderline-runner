@@ -31,6 +31,9 @@ func (c *CLI) add(args []string) int {
 		}
 		return 2
 	}
+	if err := c.checkDocker(context.Background(), false); err != nil {
+		return c.fail(err)
+	}
 	cfg, err := c.loadConfig()
 	if err != nil {
 		return c.fail(err)
