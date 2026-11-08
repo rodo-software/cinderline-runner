@@ -37,6 +37,6 @@ jobs:
         env:
           TOKEN: ${{ secrets.MIRROR_GITHUB_TOKEN }}
         run: |
-          remote="https://x-access-token:${TOKEN}@github.com/rodo-software/cinderstack-runner.git"
+          remote="https://x-access-token:${TOKEN}@github.com/rodo-software/cinderline-runner.git"
           git push --force "$remote" refs/remotes/origin/main:refs/heads/main
           git push "$remote" --tags
