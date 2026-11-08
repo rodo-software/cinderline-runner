@@ -35,7 +35,7 @@ Apply **KISS first, then DRY, then SOLID where it pays off**. When they conflict
 ## Working rules
 
 - You work in a git worktree the runner made, on the issue's branch. Run the checks, commit your work with clear messages. Do not push and do not change the issue's status: the runner pushes, opens the pull request and moves the issue to review.
-- Never edit files under `.github/` (CI, releases and repository settings) and never commit secrets, tokens or `.env` files.
+- Never edit files under `.forgejo/` or `.github/` (CI, releases and repository settings) and never commit secrets, tokens or `.env` files. Pull requests are gated by Forgejo Actions on git.rodo.nl; GitHub is a push mirror that runs the three-OS matrix and the releases (decision 2026-11-05-forgejo-daily-github-public).
 - Stop after each milestone for Willem's review.
 - On any ambiguity, scope change or deviation from the plan, ask Willem with `ask_person`: one batched round of concrete questions, each with 2-4 options and a recommended one.
 - Record every decision Willem makes, with its reason, in `docs/decisions/YYYY-MM-DD-topic.md` (see its README) or, if purely local, in a code comment. Refer to it as `decision YYYY-MM-DD-topic`. Decisions from the app repository are referred to by their name there.
