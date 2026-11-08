@@ -32,6 +32,9 @@ const WorkWait = 25
 // HeartbeatInterval is how often the runner sends a heartbeat.
 const HeartbeatInterval = 60 * time.Second
 
+// maxRows caps GET /issues and GET /issues/{ref}/comments (decision 2026-11-08-comment-cursor).
+const maxRows = 200
+
 // Header names.
 var (
 	runnerVersionHeader = name.Name + "-Runner-Version"
@@ -145,6 +148,9 @@ func (c *Client) ListIssues(ctx context.Context, status ...string) ([]Issue, err
 	}
 	q := url.Values{"status": {strings.Join(status, ",")}}
 	err := c.call(ctx, "listIssues", "GET", "/issues?"+q.Encode(), nil, 200, &out)
+	if err == nil && len(out.Issues) >= maxRows {
+		c.Log.Warn(fmt.Sprintf("more than %d %s issues; only the first %d are handled", maxRows, strings.Join(status, ","), maxRows))
+	}
 	return out.Issues, err
 }
 
@@ -172,12 +178,16 @@ func (c *Client) ClaimIssue(ctx context.Context, ref, expectedStatus string) (Is
 	return out, err
 }
 
-// ListComments returns an issue's comments, oldest first.
-func (c *Client) ListComments(ctx context.Context, ref string) ([]Comment, error) {
+// ListComments returns an issue's comments, oldest first, at most 200: with after > 0 the oldest ones newer than that comment ID, else the newest.
+func (c *Client) ListComments(ctx context.Context, ref string, after int) ([]Comment, error) {
 	var out struct {
 		Comments []Comment `json:"comments"`
 	}
-	err := c.call(ctx, "listComments", "GET", issuePath(ref)+"/comments", nil, 200, &out)
+	path := issuePath(ref) + "/comments"
+	if after > 0 {
+		path += "?after=" + strconv.Itoa(after)
+	}
+	err := c.call(ctx, "listComments", "GET", path, nil, 200, &out)
 	return out.Comments, err
 }
 

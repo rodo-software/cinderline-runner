@@ -112,9 +112,13 @@ var operations = []operation{
 	{"claimIssue", func(ctx context.Context, c *Client) (any, error) { return c.ClaimIssue(ctx, "CSR-9", "todo") },
 		"POST", "/api/runner/v1/issues/CSR-9/claim", "", `{"expected_status":"todo"}`, 200, issueWithCommentsJSON},
 	{"listComments", func(ctx context.Context, c *Client) (any, error) {
-		cs, err := c.ListComments(ctx, "CSR-9")
+		cs, err := c.ListComments(ctx, "CSR-9", 0)
 		return map[string]any{"comments": cs}, err
 	}, "GET", "/api/runner/v1/issues/CSR-9/comments", "", "", 200, `{"comments":[` + commentJSON + `]}`},
+	{"listComments after", func(ctx context.Context, c *Client) (any, error) {
+		cs, err := c.ListComments(ctx, "CSR-9", 250)
+		return map[string]any{"comments": cs}, err
+	}, "GET", "/api/runner/v1/issues/CSR-9/comments", "after=250", "", 200, `{"comments":[` + commentJSON + `]}`},
 	{"addComment", func(ctx context.Context, c *Client) (any, error) { return c.AddComment(ctx, "CSR-9", "hi") },
 		"POST", "/api/runner/v1/issues/CSR-9/comments", "", `{"body":"hi"}`, 201, commentJSON},
 	{"addProgress", func(ctx context.Context, c *Client) (any, error) { return nil, c.AddProgress(ctx, "CSR-9", "step 2") },
@@ -371,5 +375,28 @@ func TestNoTokensInLogsOrErrors(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "path=/api/runner/v1/runs/CSR-9/agent-token") {
 		t.Errorf("log has no request lines:\n%s", buf.String())
+	}
+}
+
+// GET /issues returns at most 200 rows: a full page logs one warning naming
+// the status and is used as it is; a page below the cap logs nothing.
+func TestListIssuesWarnsAtTheCap(t *testing.T) {
+	for n, warn := range map[int]bool{199: false, 200: true} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(name.Name+"-Api-Version", "1.0.0")
+			_, _ = io.WriteString(w, `{"issues":[`+strings.Repeat(issueJSON+",", n-1)+issueJSON+`]}`)
+		}))
+		c := New(srv.URL, runnerToken, version)
+		var buf bytes.Buffer
+		c.Log = slog.New(slog.NewTextHandler(&buf, nil))
+		is, err := c.ListIssues(context.Background(), "todo")
+		srv.Close()
+		if err != nil || len(is) != n {
+			t.Fatalf("%d: ListIssues = %d issues, %v", n, len(is), err)
+		}
+		got := strings.Count(buf.String(), "more than 200 todo issues; only the first 200 are handled")
+		if want := map[bool]int{false: 0, true: 1}[warn]; got != want {
+			t.Errorf("%d issues: %d warnings, want %d; log:\n%s", n, got, want, buf.String())
+		}
 	}
 }

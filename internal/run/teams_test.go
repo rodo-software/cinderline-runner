@@ -93,8 +93,8 @@ func (tr *tree) api() *fakeAPI {
 		defer tr.mu.Unlock()
 		method, path, _ := strings.Cut(key, " ")
 		switch {
-		case path == "/issues/CSR-1/comments" && method == "GET":
-			return comments(tr.comments...), true
+		case strings.HasPrefix(path, "/issues/CSR-1/comments") && method == "GET":
+			return commentPage(path, tr.comments), true
 		case strings.HasSuffix(path, "/comments"):
 			return reply{201, comment(900, false)}, true
 		case strings.HasSuffix(path, "/progress"):
@@ -694,5 +694,33 @@ func TestACommentResumeThatFailsTwiceInTheLastRound(t *testing.T) {
 	ts := turns(&r.claude.Fake)
 	if len(ts) != 3 || ts[2].SessionID != "s1" || ts[2].Prompt != CommentsPrompt("CSR-1") {
 		t.Fatalf("turns = %+v, want the retry in the same session", ts)
+	}
+}
+
+// The cursor reads only comments after it (decision 2026-11-08-comment-cursor):
+// a person's answer followed by more than 200 agent comments in one round is
+// still seen, and the orchestrator is resumed to read it.
+func TestTeamCursorSeesAPersonsCommentPastTheCap(t *testing.T) {
+	p := project(t)
+	tr := newTree("in_progress")
+	for _, c := range commentRange(1, 250, true) {
+		tr.comment(c)
+	}
+	r := newTeamRun(tr)
+	r.claude.Runs = []client.RunReply{ok("s1", "Done."), ok("s1", "Read them.")}
+	r.claude.during = func(client.Turn) {
+		if len(r.claude.Calls()) == 0 {
+			tr.comment(comment(251, false))
+			for _, c := range commentRange(252, 451, true) {
+				tr.comment(c)
+			}
+		}
+	}
+	out, err := r.run(t, context.Background(), p)
+	if err != nil || out.Report != "Read them." {
+		t.Fatalf("Rounds = %+v, %v", out, err)
+	}
+	if ts := turns(&r.claude.Fake); len(ts) != 2 || ts[1].Prompt != CommentsPrompt("CSR-1") {
+		t.Fatalf("turns = %+v", ts)
 	}
 }

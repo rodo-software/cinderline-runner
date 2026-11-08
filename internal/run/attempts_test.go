@@ -190,3 +190,40 @@ func TestProgressIsCutTo200Characters(t *testing.T) {
 		t.Fatalf("writes = %q", w)
 	}
 }
+
+// The cursor reads only comments after it (decision 2026-11-08-comment-cursor):
+// on an issue with 250 comments, a person's answer followed by 200 agent
+// comments during the run is still seen, and the session resumes to read it.
+func TestAttemptsSeesAPersonsCommentPastTheCap(t *testing.T) {
+	all := commentRange(1, 250, true)
+	api := working()
+	api.handle = func(key, _ string) (reply, bool) {
+		path, ok := strings.CutPrefix(key, "GET ")
+		if !ok || !strings.HasPrefix(path, "/issues/CSR-7/comments") {
+			return reply{}, false
+		}
+		return commentPage(path, all), true
+	}
+	cl := &client.Fake{Runs: []client.RunReply{
+		{Result: client.Result{SessionID: "s1", Report: "done"}},
+		{Result: client.Result{SessionID: "s1", Report: "read"}},
+	}}
+	c := api.client(t)
+	// The fake client has no hook into a run, so the comments the run adds are
+	// in place as soon as the cursor read has happened.
+	first := api.handle
+	api.handle = func(key, body string) (reply, bool) {
+		r, ok := first(key, body)
+		if ok && len(all) == 250 {
+			all = append(append(all, comment(251, false)), commentRange(252, 451, true)...)
+		}
+		return r, ok
+	}
+	res, err := project(t).Attempts(context.Background(), c, cl, job)
+	if err != nil || res.Report != "read" {
+		t.Fatalf("Attempts = %+v, %v", res, err)
+	}
+	if ts := turns(cl); len(ts) != 2 || ts[1].SessionID != "s1" || ts[1].Prompt != CommentsPrompt("CSR-7") {
+		t.Fatalf("turns = %+v", ts)
+	}
+}

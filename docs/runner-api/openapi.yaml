@@ -125,6 +125,10 @@ paths:
       description: |
         Used for recovery (In progress at start), keeping Review branches
         current and checking merges (Review). Archived issues are left out.
+
+        Returns at most 200 issues, in board order; there is no paging. The
+        runner logs a warning when a list comes back with 200 issues and handles
+        only those.
       parameters:
         - $ref: '#/components/parameters/RunnerVersion'
         - name: status
@@ -264,8 +268,21 @@ paths:
     get:
       operationId: listComments
       summary: An issue's comments, oldest first.
+      description: |
+        Returns at most 200 comments, oldest first. With after, the oldest 200
+        comments whose ID is greater than after; without it, the newest 200.
+        The runner keeps a comment cursor and asks with after=<cursor>, so the
+        cap hides a newer comment only when more than 200 arrived since the
+        cursor (decision 2026-11-08-comment-cursor).
       parameters:
         - $ref: '#/components/parameters/RunnerVersion'
+        - name: after
+          in: query
+          required: false
+          description: A comment ID; only comments with a greater ID are returned.
+          schema:
+            type: integer
+            minimum: 1
       responses:
         '200':
           description: The comments.
@@ -288,6 +305,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
         '426':
           $ref: '#/components/responses/UpgradeRequired'
     post:

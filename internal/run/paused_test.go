@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,6 +47,39 @@ func comment(id int, agent bool) string {
 
 func comments(c ...string) reply {
 	return reply{200, `{"comments":[` + strings.Join(c, ",") + `]}`}
+}
+
+// commentRange is comments from..to, by an agent or a person.
+func commentRange(from, to int, agent bool) []string {
+	var out []string
+	for id := from; id <= to; id++ {
+		out = append(out, comment(id, agent))
+	}
+	return out
+}
+
+// commentPage answers GET .../comments[?after=N] as the contract does
+// (decision 2026-11-08-comment-cursor): with after, the oldest 200 newer than
+// it; without, the newest 200; oldest first either way.
+func commentPage(path string, cs []string) reply {
+	after := 0
+	if _, q, ok := strings.Cut(path, "?after="); ok {
+		after, _ = strconv.Atoi(q)
+	}
+	var out []string
+	for _, c := range cs {
+		var v struct{ ID int }
+		_ = json.Unmarshal([]byte(c), &v)
+		if v.ID > after {
+			out = append(out, c)
+		}
+	}
+	if after > 0 {
+		out = out[:min(len(out), 200)]
+	} else {
+		out = out[max(0, len(out)-200):]
+	}
+	return comments(out...)
 }
 
 // Ported from lib.prompt.test.mjs "resumePrompt tells the agent to reply to
@@ -205,10 +239,9 @@ func TestACommentDuringARun(t *testing.T) {
 		t.Run(by, func(t *testing.T) {
 			p := project(t)
 			api := working()
-			api.queues = map[string][]reply{"GET /issues/CSR-7/comments": {
-				comments(comment(5, false), comment(6, true)),
-				comments(comment(5, false), comment(6, true), comment(7, by == "an agent")),
-			}}
+			api.routes["GET /issues/CSR-7/comments"] = comments(comment(5, false), comment(6, true))
+			api.routes["GET /issues/CSR-7/comments?after=6"] = comments(comment(7, by == "an agent"))
+			api.routes["GET /issues/CSR-7/comments?after=7"] = comments()
 			cl := &client.Fake{Runs: []client.RunReply{
 				{Result: client.Result{SessionID: "the-session", Report: "built"}},
 				{Result: client.Result{SessionID: "the-session", Report: "read them"}},
@@ -272,6 +305,7 @@ func TestACommentResumeContinuesAfterTheTurnLimit(t *testing.T) {
 	p := project(t)
 	api := working()
 	api.queues = map[string][]reply{"GET /issues/CSR-7/comments": {comments(), comments(comment(7, false))}}
+	api.routes["GET /issues/CSR-7/comments?after=7"] = comments()
 	cl := &client.Fake{Runs: []client.RunReply{
 		{Result: client.Result{SessionID: "s1"}},
 		{Result: client.Result{SessionID: "s1", HitTurnLimit: true}, Err: errFailed},
