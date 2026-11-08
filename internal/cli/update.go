@@ -47,7 +47,12 @@ func (c *CLI) updateRefresh() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	image, err := (&environment.Docker{}).Image(ctx)
+	cfg, err := c.loadConfig()
+	if err != nil {
+		return c.fail(err)
+	}
+
+	image, err := (&environment.Docker{BuildImage: cfg.BuildImage}).Image(ctx)
 	if err != nil {
 		return c.fail(err)
 	}

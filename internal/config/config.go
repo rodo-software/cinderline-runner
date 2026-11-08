@@ -28,8 +28,11 @@ type Config struct {
 	Version int `json:"version"`
 	// MergePollSeconds is how often the merge status of trusted Review
 	// issues is checked, legacy's MERGE_POLL_SECONDS; 0 is its default.
-	MergePollSeconds int       `json:"merge_poll_seconds,omitempty"`
-	Projects         []Project `json:"projects"`
+	MergePollSeconds int `json:"merge_poll_seconds,omitempty"`
+	// BuildImage makes the runner build the default image locally instead of
+	// pulling the published one (decision on CSR-49).
+	BuildImage bool      `json:"build_image,omitempty"`
+	Projects   []Project `json:"projects"`
 }
 
 // MergePoll is the merge check interval, 60 seconds unless set.

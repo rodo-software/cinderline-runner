@@ -315,3 +315,13 @@ func TestSameRepository(t *testing.T) {
 		}
 	}
 }
+
+// CSR-49: build_image is optional and false unless set (decision on CSR-49, option A).
+func TestBuildImage(t *testing.T) {
+	if cfg, err := Load(writeFile(t, `{"version":1,"projects":[]}`)); err != nil || cfg.BuildImage {
+		t.Fatalf("default = %v, %v; want false", cfg, err)
+	}
+	if cfg, err := Load(writeFile(t, `{"version":1,"build_image":true,"projects":[]}`)); err != nil || !cfg.BuildImage {
+		t.Fatalf("set = %v, %v; want true", cfg, err)
+	}
+}

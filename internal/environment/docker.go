@@ -26,6 +26,16 @@ import (
 // by digest (mysql 8.0.46, multi-arch index).
 const MySQLImage = "mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
 
+// PublishedImage is the default image on GHCR, multi-arch, without agent
+// CLIs (decision 2026-11-05-runner-rewrite-details point 2).
+const PublishedImage = "ghcr.io/rodo-software/" + name.Name + "-runner-default"
+
+// publishedDigest pins the published image; publishedSum is the first 12 hex
+// of the SHA-256 of the images/default/Dockerfile it was built from, so a
+// changed Dockerfile is built locally until it is published and pinned again.
+// Both stay empty until the first publish (docs/ci/default-image.yml).
+var publishedDigest, publishedSum = "", ""
+
 // DBEnv are the variables today's compose file sets, so Laravel's tests in
 // the clone reach the run's MySQL; real environment variables win over the
 // project's .env file.
@@ -39,10 +49,11 @@ var mysqlEnv = []string{"-e", "MYSQL_DATABASE=laravel_testing", "-e", "MYSQL_USE
 // point 13), and every container and network labelled with the project and
 // issue (review item 9).
 type Docker struct {
-	Project string         // project key, in names and labels
-	Exec    workspace.Exec // nil means workspace.RunCommand
-	Stream  Stream         // the agent container; nil means streamCommand
-	Log     *slog.Logger   // the agent's output, line by line; nil means slog.Default()
+	Project    string         // project key, in names and labels
+	Exec       workspace.Exec // nil means workspace.RunCommand
+	Stream     Stream         // the agent container; nil means streamCommand
+	Log        *slog.Logger   // the agent's output, line by line; nil means slog.Default()
+	BuildImage bool           // config.json build_image: always build the image locally
 }
 
 var _ Environment = (*Docker)(nil)
@@ -165,12 +176,25 @@ func (l *lines) flush() {
 	}
 }
 
-// Image returns the default image's tag, building it from the embedded
-// Dockerfile when missing. The tag is the Dockerfile's hash, so a runner
-// with a changed Dockerfile builds its own.
+// Image returns the default image: the published one by its pinned digest
+// when a pin is set for this Dockerfile, else the locally built one, whose
+// tag is the Dockerfile's hash, so a runner with a changed Dockerfile
+// builds its own. config.json's build_image always builds locally.
 func (d *Docker) Image(ctx context.Context) (string, error) {
 	sum := sha256.Sum256(defaultimage.Dockerfile)
-	tag := name.Name + "-default:" + hex.EncodeToString(sum[:6])
+	sumHex := hex.EncodeToString(sum[:6])
+	tag := name.Name + "-default:" + sumHex
+	if !d.BuildImage && publishedDigest != "" && publishedSum == sumHex {
+		ref := PublishedImage + "@" + publishedDigest
+		if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref); err == nil {
+			return ref, nil
+		}
+		_, err := d.exec(ctx, "docker", "pull", "--quiet", ref)
+		if err == nil {
+			return ref, nil
+		}
+		d.log().Warn("default image pull failed, building it locally", "image", ref, "err", err)
+	}
 	if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", tag); err == nil {
 		return tag, nil
 	}

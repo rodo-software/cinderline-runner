@@ -43,6 +43,7 @@ func scripted(outs []string, errs map[int]error) (*Docker, *[]execCall) {
 }
 
 func TestImageExists(t *testing.T) {
+	pin(t, "", "")
 	d, calls := scripted(nil, nil)
 	tag, err := d.Image(context.Background())
 	if err != nil {
@@ -58,6 +59,7 @@ func TestImageExists(t *testing.T) {
 }
 
 func TestImageBuiltWhenMissing(t *testing.T) {
+	pin(t, "", "")
 	var built []byte
 	d, calls := scripted(nil, map[int]error{0: errors.New("no such image")})
 	record := d.Exec
