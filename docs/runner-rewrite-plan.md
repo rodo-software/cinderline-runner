@@ -165,7 +165,7 @@ A port of today's behaviour in `legacy/runner.mjs` and `legacy/lib.mjs`. Every b
 - **Codex** (EMBER-37) and **Gemini CLI** (EMBER-38) as `Client` implementations, each with headless flags, session resume, a turn or step limit, JSON output parsing and a credential, checked against the current version of that CLI.
 - **`cinderline login <client>`** runs the CLI's own login in a container, without the CLI on the host (EMBER-39). For Claude Code this is the alternative to a stored `setup-token` token: the credentials then live on the project's state volume.
 - **Detection:** per client, the binary is in the tools volume, its credential is configured and the credential works (EMBER-40). The result goes into the runner report (EMBER-42).
-- **Errors reach Cinderline:** a repository mismatch, a missing key, an unsupported client or failed polls are reported rather than only logged (EMBER-45). **Open:** through the runner report, or as a comment on the skipped issue (D8 says computed, not stored).
+- **Errors reach Cinderline:** a repository mismatch, a missing key, an unsupported client or failed polls are reported rather than only logged (EMBER-45): all of them in the runner report, and a missing key or unsupported client also as one comment on the skipped issue, once per change (decision 2026-11-08-errors-reach-cinderline).
 - **Done when:** a team that mixes all four clients runs end to end, and a missing key shows up in Cinderline.
 
 ### M8. Network allowlist

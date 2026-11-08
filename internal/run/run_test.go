@@ -216,16 +216,21 @@ func TestPausedDirIsPerProject(t *testing.T) {
 // Ported from legacy runner.test.mjs "<x> is skipped before the claim", the
 // repository cases, and lib.test.mjs "assertRepository accepts only the
 // configured repository".
+// CSR-60: a mismatch or a missing repository is a repository_mismatch
+// error for the report, its text without the credentials of either URL; a
+// project that cannot be read is a plain error (a failed poll).
 func TestPin(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		rep  reply
 		err  string
+		kind string
 	}{
-		{"the configured repository", reply{200, `{"key":"CSR","repository_url":"git@git.example:o/r.git"}`}, ""},
-		{"a repository other than the configured one", reply{200, `{"key":"CSR","repository_url":"https://evil.example/o/r.git"}`}, "evil.example"},
-		{"a project without a repository", reply{200, `{"key":"CSR","repository_url":""}`}, "no repository"},
-		{"no project", reply{500, `{"message":"Server error."}`}, "500"},
+		{"the configured repository", reply{200, `{"key":"CSR","repository_url":"git@git.example:o/r.git"}`}, "", ""},
+		{"a repository other than the configured one", reply{200, `{"key":"CSR","repository_url":"https://evil.example/o/r.git"}`}, "evil.example", cinderline.KindRepositoryMismatch},
+		{"another repository with credentials in its URL", reply{200, `{"key":"CSR","repository_url":"https://bob:s3cr3t-value@evil.example/o/r.git"}`}, "evil.example", cinderline.KindRepositoryMismatch},
+		{"a project without a repository", reply{200, `{"key":"CSR","repository_url":""}`}, "no repository", cinderline.KindRepositoryMismatch},
+		{"no project", reply{500, `{"message":"Server error."}`}, "500", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := project(t)
@@ -234,7 +239,27 @@ func TestPin(t *testing.T) {
 			if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
 				t.Fatalf("Pin = %v, want an error with %q", err, tt.err)
 			}
+			checkKind(t, err, tt.kind, "")
+			if err != nil && strings.Contains(err.Error(), "s3cr3t-value") {
+				t.Errorf("error %q carries a credential", err)
+			}
 		})
+	}
+}
+
+// checkKind fails unless err is a *cinderline.ReportError of kind for issue,
+// or, when kind is empty, not a ReportError at all.
+func checkKind(t *testing.T, err error, kind, issue string) {
+	t.Helper()
+	var re *cinderline.ReportError
+	if !errors.As(err, &re) {
+		if kind != "" {
+			t.Errorf("error %v is not a ReportError of kind %s", err, kind)
+		}
+		return
+	}
+	if re.Kind != kind || re.Issue != issue || re.Message != err.Error() {
+		t.Errorf("ReportError = %+v (Error() %q), want kind %q, issue %q and Message equal to Error()", *re, err.Error(), kind, issue)
 	}
 }
 
@@ -256,16 +281,17 @@ func TestCheck(t *testing.T) {
 		team reply
 		keys []secrets.Kind
 		err  string
+		kind string
 	}{
-		{"claude and opencode with both keys", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, ""},
-		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential}, "Qwen runs on opencode, which needs this project's openrouter"},
-		{"a Codex agent with an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.OpenAIKey}, ""},
-		{"a Codex agent without an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, "C runs on codex, which needs this project's openai"},
-		{"a Gemini agent with a Gemini key", team(agent("G", "gemini")), []secrets.Kind{secrets.GeminiKey}, ""},
-		{"a Gemini agent without a Gemini key", team(agent("G", "gemini")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey}, "G runs on gemini, which needs this project's gemini"},
-		{"an orchestrator on another client", team(agent("A", "aider")), nil, "A runs on aider; this runner supports only claude, codex, gemini and opencode"},
-		{"a Claude agent without an Anthropic credential", team(agent("Boss", "claude")), nil, "Boss runs on claude, which needs this project's anthropic"},
-		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, nil, "Unknown team."},
+		{"claude and opencode with both keys", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, "", ""},
+		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential}, "Qwen runs on opencode, which needs this project's openrouter", cinderline.KindMissingKey},
+		{"a Codex agent with an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.OpenAIKey}, "", ""},
+		{"a Codex agent without an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, "C runs on codex, which needs this project's openai", cinderline.KindMissingKey},
+		{"a Gemini agent with a Gemini key", team(agent("G", "gemini")), []secrets.Kind{secrets.GeminiKey}, "", ""},
+		{"a Gemini agent without a Gemini key", team(agent("G", "gemini")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey}, "G runs on gemini, which needs this project's gemini", cinderline.KindMissingKey},
+		{"an orchestrator on another client", team(agent("A", "aider")), nil, "A runs on aider; this runner supports only claude, codex, gemini and opencode", cinderline.KindUnsupportedClient},
+		{"a Claude agent without an Anthropic credential", team(agent("Boss", "claude")), nil, "Boss runs on claude, which needs this project's anthropic", cinderline.KindMissingKey},
+		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, nil, "Unknown team.", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := project(t)
@@ -279,6 +305,11 @@ func TestCheck(t *testing.T) {
 			err := p.Check(context.Background(), api.client(t), issue)
 			if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
 				t.Fatalf("Check = %v, want an error with %q", err, tt.err)
+			}
+			if tt.kind != "" {
+				checkKind(t, err, tt.kind, "CSR-1")
+			} else {
+				checkKind(t, err, "", "")
 			}
 			if err != nil && strings.Contains(err.Error(), "s3cr3t-value") {
 				t.Errorf("error %q carries a secret", err)

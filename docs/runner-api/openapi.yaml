@@ -908,6 +908,21 @@ components:
           type: array
           items:
             enum: [default, docker, existing]
+        errors:
+          description: Errors the runner holds in memory now (decision 2026-11-08-errors-reach-cinderline); sent only when changed, at most once per heartbeat. Messages never carry tokens.
+          type: array
+          items:
+            type: object
+            required: [kind, message]
+            properties:
+              kind:
+                type: string
+                enum: [repository_mismatch, missing_key, unsupported_client, poll_failed]
+              message:
+                type: string
+              issue:
+                description: An issue ref, set only for missing_key and unsupported_client.
+                type: string
     AgentTokenKind:
       description: |
         What an agent token may do, limited to the issue it was made for:

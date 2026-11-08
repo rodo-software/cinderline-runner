@@ -132,7 +132,7 @@ var operations = []operation{
 			{Name: "claude", Version: &v, State: "ready"}, {Name: "opencode", State: "missing_binary"},
 		}, Environments: []string{"default", "docker"}})
 	}, "PUT", "/api/runner/v1/report", "",
-		`{"runner_version":"1.2.0","clients":[{"name":"claude","version":"2.0.1","state":"ready"},{"name":"opencode","version":null,"state":"missing_binary"}],"environments":["default","docker"]}`,
+		`{"runner_version":"1.2.0","clients":[{"name":"claude","version":"2.0.1","state":"ready"},{"name":"opencode","version":null,"state":"missing_binary"}],"environments":["default","docker"],"errors":[]}`,
 		204, ""},
 	{"heartbeat", func(ctx context.Context, c *Client) (any, error) { return nil, c.Heartbeat(ctx) },
 		"POST", "/api/runner/v1/heartbeat", "", "", 204, ""},
@@ -297,11 +297,22 @@ func TestWorkTimeout(t *testing.T) {
 	}
 }
 
+// RunHeartbeats sends one heartbeat per tick and, after it, the report when
+// it changed since the last one the server accepted (decision
+// 2026-11-08-errors-reach-cinderline): a failed heartbeat is logged, and an
+// unchanged report is not sent again.
 func TestRunHeartbeats(t *testing.T) {
 	hits := make(chan struct{}, 10)
 	var mu sync.Mutex
-	n := 0
+	n, reports := 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && r.URL.Path == "/api/runner/v1/report" {
+			mu.Lock()
+			reports++
+			mu.Unlock()
+			w.WriteHeader(204)
+			return
+		}
 		mu.Lock()
 		n++
 		first := n == 1
@@ -325,19 +336,27 @@ func TestRunHeartbeats(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan time.Time)
 	done := make(chan struct{})
-	go func() { c.RunHeartbeats(ctx, ticks); close(done) }()
+	base := Report{RunnerVersion: version, Clients: []ReportClient{}, Environments: []string{"default"}}
+	go func() { c.RunHeartbeats(ctx, ticks, base); close(done) }()
 	for range 3 {
 		ticks <- time.Now()
 		<-hits
 	}
+	ticks <- time.Now() // the loop has finished the third tick's report once it takes the fourth
+	<-hits
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunHeartbeats did not stop after cancel")
 	}
-	if n != 3 {
-		t.Errorf("heartbeats = %d, want 3", n)
+	mu.Lock()
+	defer mu.Unlock()
+	if n != 4 {
+		t.Errorf("heartbeats = %d, want 4", n)
+	}
+	if reports != 1 {
+		t.Errorf("reports = %d, want 1: the first tick sends it, unchanged ones do not", reports)
 	}
 	if got := strings.Count(buf.String(), "level=WARN"); got != 1 {
 		t.Errorf("warn lines = %d, want 1:\n%s", got, buf.String())

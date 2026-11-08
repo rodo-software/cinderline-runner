@@ -206,7 +206,7 @@ func TestReportAndHeartbeatAtStart(t *testing.T) {
 	})
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if want := `Bearer tok-A {"runner_version":"1.2.3","clients":[],"environments":["default"]}`; strings.TrimSpace(a.reports[0]) != want {
+	if want := `Bearer tok-A {"runner_version":"1.2.3","clients":[],"environments":["default"],"errors":[]}`; strings.TrimSpace(a.reports[0]) != want {
 		t.Errorf("report = %s, want %s", a.reports[0], want)
 	}
 	if a.heartbeats[0] != "Bearer tok-A" {

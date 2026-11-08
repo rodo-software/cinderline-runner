@@ -121,11 +121,31 @@ type ReportClient struct {
 	State   string  `json:"state"`
 }
 
+// ReportError is one error the runner holds: a kind, optionally an issue ref
+// (for issue-specific errors such as a missing key), and a message. Its
+// Error() returns the message.
+type ReportError struct {
+	Kind    string `json:"kind"`
+	Issue   string `json:"issue,omitempty"`
+	Message string `json:"message"`
+}
+
+func (e *ReportError) Error() string { return e.Message }
+
+// Error kinds for the report's errors list.
+const (
+	KindRepositoryMismatch = "repository_mismatch"
+	KindMissingKey         = "missing_key"
+	KindUnsupportedClient  = "unsupported_client"
+	KindPollFailed         = "poll_failed"
+)
+
 // Report is what the runner tells the app about itself.
 type Report struct {
 	RunnerVersion string         `json:"runner_version"`
 	Clients       []ReportClient `json:"clients"`
 	Environments  []string       `json:"environments"`
+	Errors        []ReportError  `json:"errors"`
 }
 
 // UpdateIssueRequest changes an issue. Status needs ExpectedStatus; empty fields are not sent.

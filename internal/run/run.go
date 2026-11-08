@@ -7,7 +7,6 @@ package run
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -194,12 +193,24 @@ func (p Project) Pin(ctx context.Context, c *cinderline.Client) error {
 		return err
 	}
 	if proj.RepositoryURL == "" {
-		return fmt.Errorf("the project in Cinderline names no repository for %s; this runner is configured for %s", p.Config.Key, p.Config.Repository)
+		return &cinderline.ReportError{Kind: cinderline.KindRepositoryMismatch, Message: "the project in Cinderline names no repository for " + p.Config.Key + "; this runner is configured for " + stripURL(p.Config.Repository)}
 	}
 	if !config.SameRepository(proj.RepositoryURL, p.Config.Repository) {
-		return fmt.Errorf("the project in Cinderline names the repository %s, but this runner is configured for %s", proj.RepositoryURL, p.Config.Repository)
+		return &cinderline.ReportError{Kind: cinderline.KindRepositoryMismatch, Message: "the project in Cinderline names the repository " + stripURL(proj.RepositoryURL) + ", but this runner is configured for " + stripURL(p.Config.Repository)}
 	}
 	return nil
+}
+
+// stripURL removes user info from a URL string. scp-form git@host:o/r stays
+// as it is. A string that is not a valid URL is returned unchanged.
+func stripURL(s string) string {
+	if strings.Contains(s, "://") {
+		if u, err := url.Parse(s); err == nil && u.User != nil {
+			u.User = nil
+			return u.String()
+		}
+	}
+	return s
 }
 
 // Check refuses, before the claim, an issue whose team has an agent this
@@ -216,10 +227,10 @@ func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderli
 	for _, a := range team.Agents {
 		kind, ok := keys[a.Client]
 		if !ok {
-			return fmt.Errorf("agent %s runs on %s; this runner supports only claude, codex, gemini and opencode", a.Name, a.Client)
+			return &cinderline.ReportError{Kind: cinderline.KindUnsupportedClient, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + "; this runner supports only claude, codex, gemini and opencode"}
 		}
 		if _, _, err := p.Secrets.Get(p.Config, kind); err != nil {
-			return fmt.Errorf("agent %s runs on %s, which needs this project's %s key: %w", a.Name, a.Client, kind, err)
+			return &cinderline.ReportError{Kind: cinderline.KindMissingKey, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + ", which needs this project's " + string(kind) + " key: " + err.Error()}
 		}
 	}
 	return nil

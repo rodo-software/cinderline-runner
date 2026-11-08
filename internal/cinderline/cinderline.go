@@ -10,6 +10,7 @@ package cinderline
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -82,6 +84,9 @@ type Client struct {
 	mu         sync.Mutex
 	etag       string
 	apiVersion string
+
+	errors     map[string]ReportError // key: issue ref for issue errors, kind for runner-wide errors
+	lastReport []byte                 // JSON of the last report the server accepted; nil at start
 }
 
 // New returns a client for the instance at baseURL, e.g. https://cinderline.example.com.
@@ -210,8 +215,12 @@ func (c *Client) GetTeam(ctx context.Context, id int) (Team, error) {
 	return out, err
 }
 
-// PutReport replaces the runner's report.
+// PutReport replaces the runner's report. The Errors field is always sent as
+// a list: nil becomes an empty slice so it is never null in JSON.
 func (c *Client) PutReport(ctx context.Context, r Report) error {
+	if r.Errors == nil {
+		r.Errors = []ReportError{}
+	}
 	return c.call(ctx, "putReport", "PUT", "/report", r, 204, nil)
 }
 
@@ -220,9 +229,83 @@ func (c *Client) Heartbeat(ctx context.Context) error {
 	return c.call(ctx, "heartbeat", "POST", "/heartbeat", nil, 204, nil)
 }
 
-// RunHeartbeats sends one heartbeat per tick until ctx is done, logging failures.
-// The caller passes time.NewTicker(HeartbeatInterval).C.
-func (c *Client) RunHeartbeats(ctx context.Context, ticks <-chan time.Time) {
+// SetError stores e under e.Issue (when non-empty) or e.Kind. It returns true
+// when the key was absent or the stored error differs from e.
+func (c *Client) SetError(e ReportError) bool {
+	key := e.Kind
+	if e.Issue != "" {
+		key = e.Issue
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.errors == nil {
+		c.errors = map[string]ReportError{}
+	}
+	prev, ok := c.errors[key]
+	if ok && prev == e {
+		return false
+	}
+	c.errors[key] = e
+	return true
+}
+
+// ClearError removes the error stored under key (an issue ref or a kind).
+func (c *Client) ClearError(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.errors, key)
+}
+
+// KeepIssueErrors drops every issue error whose ref is not in refs.
+// Runner-wide errors (empty Issue) stay.
+func (c *Client) KeepIssueErrors(refs map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, e := range c.errors {
+		if e.Issue != "" && !refs[e.Issue] {
+			delete(c.errors, key)
+		}
+	}
+}
+
+// SyncReport sends the report with the held errors when it differs from the
+// last report the server accepted. On success it records the report as sent;
+// on failure the next call tries again.
+func (c *Client) SyncReport(ctx context.Context, base Report) error {
+	c.mu.Lock()
+	errs := make([]ReportError, 0, len(c.errors))
+	for _, e := range c.errors {
+		errs = append(errs, e)
+	}
+	slices.SortFunc(errs, func(a, b ReportError) int {
+		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Issue, b.Issue))
+	})
+	base.Errors = errs
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		c.mu.Unlock()
+		return err
+	}
+	if c.lastReport != nil && bytes.Equal(c.lastReport, encoded) {
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
+
+	if err := c.PutReport(ctx, base); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	c.lastReport = encoded
+	c.mu.Unlock()
+	return nil
+}
+
+// RunHeartbeats sends one heartbeat per tick and syncs the report afterwards,
+// until ctx is done. A failed heartbeat is logged as a warn. A sync failure
+// logs one Warn "report failed" unless ctx is done.
+func (c *Client) RunHeartbeats(ctx context.Context, ticks <-chan time.Time, base Report) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -230,6 +313,9 @@ func (c *Client) RunHeartbeats(ctx context.Context, ticks <-chan time.Time) {
 		case <-ticks:
 			if err := c.Heartbeat(ctx); err != nil && ctx.Err() == nil {
 				c.Log.Warn("heartbeat failed", "err", err)
+			}
+			if err := c.SyncReport(ctx, base); err != nil && ctx.Err() == nil {
+				c.Log.Warn("report failed", "err", err)
 			}
 		}
 	}

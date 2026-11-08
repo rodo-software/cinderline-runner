@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -163,6 +164,17 @@ func (s *Scheduler) slot(ctx context.Context, work context.Context, slot Slot) {
 			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 			return
 		}
+		c := slot.Client
+		var re *cinderline.ReportError
+		if errors.As(err, &re) && re.Issue == "" {
+			c.SetError(*re)
+		} else {
+			msg := err.Error()
+			if i := strings.Index(msg, "\n"); i >= 0 {
+				msg = msg[:i]
+			}
+			c.SetError(cinderline.ReportError{Kind: cinderline.KindPollFailed, Message: msg})
+		}
 		s.setStatus(slot.Project, func(st *ProjectStatus) {
 			st.Connected, st.Issue, st.LastError, st.LastErrorAt = false, "", err.Error(), time.Now()
 		})
@@ -222,6 +234,7 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 			return polled, err
 		}
 		polled = true
+		c.ClearError(cinderline.KindPollFailed)
 		s.setStatus(slot.Project, func(st *ProjectStatus) {
 			st.Connected, st.LastPoll, st.LastError, st.LastErrorAt = true, time.Now(), "", time.Time{}
 		})
@@ -280,6 +293,7 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline
 		if err := h.Pin(work, c); err != nil {
 			return nil, fmt.Errorf("repository: %w", err)
 		}
+		c.ClearError(cinderline.KindRepositoryMismatch)
 	}
 	var queue []cinderline.Issue
 	if first != nil {
@@ -289,6 +303,7 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline
 	for {
 		if len(queue) == 0 {
 			if listed {
+				c.KeepIssueErrors(tried)
 				return nil, nil
 			}
 			// shortcut: one page of To do issues, as the API returns them; page if a board outgrows it.
@@ -311,8 +326,17 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline
 					return nil, work.Err()
 				}
 				s.Log.Warn("skipped before the claim", "project", slot.Project, "issue", issue.Ref, "err", err)
+				var re *cinderline.ReportError
+				if errors.As(err, &re) && re.Issue != "" {
+					if c.SetError(*re) {
+						if _, cerr := c.AddComment(work, issue.Ref, "The runner skipped this issue before claiming it: "+re.Message); cerr != nil {
+							s.Log.Warn("failed to add comment for skipped issue", "project", slot.Project, "issue", issue.Ref, "err", cerr)
+						}
+					}
+				}
 				continue
 			}
+			c.ClearError(issue.Ref)
 		}
 		var conflict *cinderline.ConflictError
 		if _, err := c.ClaimIssue(work, issue.Ref, "todo"); errors.As(err, &conflict) {
