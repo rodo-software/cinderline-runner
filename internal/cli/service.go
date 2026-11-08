@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"os"
@@ -21,6 +22,9 @@ func (c *CLI) service(args []string) int {
 	}
 	switch args[0] {
 	case "install":
+		if err := c.checkDocker(context.Background(), false); err != nil {
+			return c.fail(err)
+		}
 		if err := installService(exe); err != nil {
 			return c.fail(err)
 		}

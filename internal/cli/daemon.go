@@ -26,6 +26,9 @@ func (c *CLI) run(args []string) int {
 	if c.pathsErr != nil {
 		return c.fail(c.pathsErr)
 	}
+	if err := c.checkDocker(context.Background(), true); err != nil {
+		return c.fail(err)
+	}
 	if err := daemon.Run(context.Background(), daemon.Options{Paths: c.Paths, Version: c.Version}); err != nil {
 		return c.fail(err)
 	}

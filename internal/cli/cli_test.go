@@ -72,6 +72,7 @@ func newCLI(t *testing.T, stdin string) (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		Stdin:   strings.NewReader(stdin),
 		Stdout:  &out,
 		Stderr:  &errb,
+		exec:    healthyDocker,
 		Forge: func(string, string, string) (forge.Forge, error) {
 			return &forge.Fake{CISecretsReplies: []forge.CISecretsReply{{}}}, nil
 		},

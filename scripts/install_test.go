@@ -152,9 +152,12 @@ func TestInstallShTamperedChecksumRefuses(t *testing.T) {
 // returns the install path, output and error.
 func runPs(t *testing.T, srv *httptest.Server) (string, string, error) {
 	t.Helper()
+	if runtime.GOOS != "windows" {
+		t.Skip("install.ps1 runs on Windows with PowerShell") // macOS runners have powershell too, but the script reads Windows-only variables
+	}
 	ps, err := exec.LookPath("powershell")
 	if err != nil {
-		if ps, err = exec.LookPath("pwsh"); err != nil || runtime.GOOS != "windows" {
+		if ps, err = exec.LookPath("pwsh"); err != nil {
 			t.Skip("install.ps1 runs on Windows with PowerShell")
 		}
 	}
