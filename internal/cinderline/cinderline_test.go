@@ -1,4 +1,4 @@
-package cinderstack
+package cinderline
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 const (

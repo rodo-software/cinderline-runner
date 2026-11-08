@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-BASE="${CINDERSTACK_DOWNLOAD_URL:-https://github.com/rodo-software/cinderstack-runner/releases/latest/download}"
+BASE="${CINDERLINE_DOWNLOAD_URL:-https://github.com/rodo-software/cinderline-runner/releases/latest/download}"
 
 case "$(uname -s)" in
 Linux)  OS=linux  ;;
@@ -21,7 +21,7 @@ arm64|aarch64) ARCH=arm64 ;;
 	;;
 esac
 
-FILE="cinderstack_${OS}_${ARCH}.tar.gz"
+FILE="cinderline_${OS}_${ARCH}.tar.gz"
 
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -49,11 +49,11 @@ fi
 
 tar -xzf "$TMPDIR/$FILE" -C "$TMPDIR"
 mkdir -p "$HOME/.local/bin"
-cp "$TMPDIR/cinderstack" "$HOME/.local/bin/.cinderstack.tmp"
-chmod 755 "$HOME/.local/bin/.cinderstack.tmp"
-mv "$HOME/.local/bin/.cinderstack.tmp" "$HOME/.local/bin/cinderstack"
+cp "$TMPDIR/cinderline" "$HOME/.local/bin/.cinderline.tmp"
+chmod 755 "$HOME/.local/bin/.cinderline.tmp"
+mv "$HOME/.local/bin/.cinderline.tmp" "$HOME/.local/bin/cinderline"
 
-echo "Installed cinderstack to $HOME/.local/bin/cinderstack"
+echo "Installed cinderline to $HOME/.local/bin/cinderline"
 
 case ":${PATH:-}:" in
 *:"$HOME/.local/bin":*) ;;
@@ -66,5 +66,5 @@ case ":${PATH:-}:" in
 esac
 
 echo
-echo "To check the build provenance: gh attestation verify $FILE --repo rodo-software/cinderstack-runner"
+echo "To check the build provenance: gh attestation verify $FILE --repo rodo-software/cinderline-runner"
 echo "(Download the archive first with: curl -fsSL -o \"$FILE\" \"$BASE/$FILE\")"

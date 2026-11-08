@@ -9,7 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 func installService(exe string) error {

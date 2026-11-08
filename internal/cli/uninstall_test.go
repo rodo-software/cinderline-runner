@@ -12,9 +12,9 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 var (
@@ -156,7 +156,7 @@ func TestUninstallRevokeList(t *testing.T) {
 	}
 	exe, _ := os.Executable()
 	for _, want := range []string{
-		"Revoke the runner token of each project in CinderStack:\n",
+		"Revoke the runner token of each project in Cinderline:\n",
 		"  WEB at https://a.example.com\n",
 		"  API at https://b.example.com\n",
 		"Delete the binary yourself: " + exe + "\n",

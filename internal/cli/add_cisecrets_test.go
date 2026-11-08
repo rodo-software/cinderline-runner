@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
 )
 
 // Acceptance tests of CSR-47: add checks the repository's CI secrets with the

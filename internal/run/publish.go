@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // The merge wait of a trusted team's pull request (decision
@@ -52,7 +52,7 @@ var mergeStatusOf = map[forge.MergeState]string{
 // BaseBranch is the branch runs start from and pull requests target: the
 // project's base branch, else the remote's default branch (decision
 // 2026-11-04-base-branch).
-func BaseBranch(ctx context.Context, c *cinderstack.Client, fg forge.Forge) (string, error) {
+func BaseBranch(ctx context.Context, c *cinderline.Client, fg forge.Forge) (string, error) {
 	proj, err := c.GetProject(ctx)
 	if err != nil {
 		return "", err
@@ -65,7 +65,7 @@ func BaseBranch(ctx context.Context, c *cinderstack.Client, fg forge.Forge) (str
 		err = errors.New("the forge names none")
 	}
 	if err != nil {
-		return "", fmt.Errorf("could not find the repository's default branch; set a base branch on the project in CinderStack (%w)", err)
+		return "", fmt.Errorf("could not find the repository's default branch; set a base branch on the project in Cinderline (%w)", err)
 	}
 	return b, nil
 }
@@ -77,11 +77,11 @@ type Pub struct {
 	Base       string
 	Dir        string
 	MaxTurns   int // the Merge Resolver's
-	Team       cinderstack.Team
+	Team       cinderline.Team
 	Forge      string // the project's forge, as GET project names it, for the report
 	Unread     bool   // reading a person's comments failed twice: add UnreadComments
 	// Session and Token are the solo orchestrator's session it just worked in
-	// and its scoped CinderStack token, for the merge attempt before the push
+	// and its scoped Cinderline token, for the merge attempt before the push
 	// (decision 2026-11-07-solo-team-resolves-merge-conflicts); never logged.
 	Session, Token string
 }
@@ -97,11 +97,11 @@ type Published struct {
 // and body text, shared by Publish and the stranded branch recovery
 // (decision 2026-11-07-publish-resilience).
 func pullRequestBody(ref, body string) string {
-	return strings.TrimSpace("Resolves " + ref + " in CinderStack.\n\n" + body)
+	return strings.TrimSpace("Resolves " + ref + " in Cinderline.\n\n" + body)
 }
 
 // Publish ends a finished run, as legacy publish() and runIssue(): commit
-// what was left, merge the base in with UpdateBranch, push cinderstack/<REF>
+// what was left, merge the base in with UpdateBranch, push cinderline/<REF>
 // (never the base), open or find the pull request and, for a trusted team
 // without conflicts, request the merge and wait for it every 15 seconds for
 // at most 15 minutes, holding the project's slot. A trusted issue's
@@ -109,7 +109,7 @@ func pullRequestBody(ref, body string) string {
 // Review. A conflict left is pushed as it is, for a person to resolve.
 // Errors are the run's: the scheduler comments them and moves the issue to
 // Review.
-func (p Project) Publish(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, fg forge.Forge, pub Pub) error {
+func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, fg forge.Forge, pub Pub) error {
 	log := p.Log.With("project", p.Config.Key, "issue", pub.Ref)
 	// Built here, never passed in, so the push can never target the base.
 	branch := name.Name + "/" + pub.Ref
@@ -174,7 +174,7 @@ func (p Project) Publish(ctx context.Context, c *cinderstack.Client, clients map
 		return err
 	}
 	// Refused when the issue is no longer In progress, for example after a question (decision 0116).
-	if _, err := c.UpdateIssue(ctx, pub.Ref, cinderstack.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}); err != nil {
+	if _, err := c.UpdateIssue(ctx, pub.Ref, cinderline.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}); err != nil {
 		log.Warn("not moved to Review", "err", err)
 	}
 	return nil
@@ -183,7 +183,7 @@ func (p Project) Publish(ctx context.Context, c *cinderstack.Client, clients map
 // attempt does one attempt of the publish loop: UpdateBranch, IsAncestor,
 // push and OpenPullRequest. It returns the conflicts, whether nothing was
 // pushed (HEAD already in the base), the pull request, and any error.
-func (p Project) attempt(ctx context.Context, c *cinderstack.Client, clients map[string]client.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (conflicts []string, nothing bool, pr forge.PullRequest, err error) {
+func (p Project) attempt(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (conflicts []string, nothing bool, pr forge.PullRequest, err error) {
 	// The branch protection blocks outdated pull requests (decision 0121).
 	conflicts, err = p.UpdateBranch(ctx, c, clients, ws, Upkeep{
 		Ref: pub.Ref, Branch: branch, Base: pub.Base, Dir: pub.Dir, MaxTurns: pub.MaxTurns, Team: pub.Team, Session: pub.Session, Token: pub.Token,
@@ -207,7 +207,7 @@ func (p Project) attempt(ctx context.Context, c *cinderstack.Client, clients map
 
 // open pushes the branch, posts the progress line and opens the pull request.
 // It is the retried part of Publish (decision 2026-11-07-publish-resilience).
-func (p Project) open(ctx context.Context, c *cinderstack.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (forge.PullRequest, error) {
+func (p Project) open(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (forge.PullRequest, error) {
 	if err := ws.Push(ctx, pub.Dir, branch); err != nil {
 		return forge.PullRequest{}, err
 	}
@@ -282,7 +282,7 @@ func FinishReport(pub *Published, trusted bool, forgeKind string) string {
 // issue that fails is logged and the next one checked.
 //
 // shortcut: one page of Review issues, as the API returns them, like ReviewBranches; page if Review outgrows it.
-func (p Project) CheckMerges(ctx context.Context, c *cinderstack.Client, fg forge.Forge) error {
+func (p Project) CheckMerges(ctx context.Context, c *cinderline.Client, fg forge.Forge) error {
 	issues, err := c.ListIssues(ctx, "review")
 	if err != nil {
 		return err

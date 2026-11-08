@@ -7,16 +7,16 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "opencode": secrets.OpenRouterKey}
@@ -52,7 +52,7 @@ type runState struct {
 type runHandoff struct {
 	Ref, Title, Body string
 	Dir, Base        string
-	Team             cinderstack.Team
+	Team             cinderline.Team
 	MaxTurns         int
 	Forge            string
 	Unread           bool
@@ -135,7 +135,7 @@ func (p *Project) Hooks() scheduler.Hooks {
 func notStarted(err error) error { return fmt.Errorf("%w: %w", scheduler.ErrNotStarted, err) }
 
 // hookRun is the Run hook that the scheduler calls.
-func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error {
+func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
 	log := p.Log.With("project", p.Config.Key, "issue", issue.Ref)
 	ref := issue.Ref
 
@@ -220,7 +220,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cind
 		}
 	}
 
-	tok, err := c.CreateAgentToken(ctx, ref, cinderstack.KindOrchestrator, agent.Name)
+	tok, err := c.CreateAgentToken(ctx, ref, cinderline.KindOrchestrator, agent.Name)
 	if err != nil {
 		return notStarted(err)
 	}
@@ -258,7 +258,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderstack.Client, issue cind
 	return nil
 }
 
-func (p *Project) setHandoff(ref, title, body, dir, base string, team cinderstack.Team, maxTurns int, forgeKind string, unread bool, session, token string) {
+func (p *Project) setHandoff(ref, title, body, dir, base string, team cinderline.Team, maxTurns int, forgeKind string, unread bool, session, token string) {
 	p.run.mu.Lock()
 	defer p.run.mu.Unlock()
 	p.run.handoff = &runHandoff{
@@ -277,7 +277,7 @@ func (p *Project) takeHandoff() *runHandoff {
 }
 
 // hookPublish is the Publish hook that the scheduler calls.
-func (p *Project) hookPublish(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error {
+func (p *Project) hookPublish(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
 	h := p.takeHandoff()
 	if h == nil {
 		return nil
@@ -311,7 +311,7 @@ func (p *Project) hookPublish(ctx context.Context, c *cinderstack.Client, issue 
 }
 
 // hookReviewBranches is the ReviewBranches hook that the scheduler calls.
-func (p *Project) hookReviewBranches(ctx context.Context, c *cinderstack.Client) error {
+func (p *Project) hookReviewBranches(ctx context.Context, c *cinderline.Client) error {
 	proj, err := c.GetProject(ctx)
 	if err != nil {
 		return err
@@ -328,7 +328,7 @@ func (p *Project) hookReviewBranches(ctx context.Context, c *cinderstack.Client)
 }
 
 // hookMergeCheck is the MergeCheck hook that the scheduler calls.
-func (p *Project) hookMergeCheck(ctx context.Context, c *cinderstack.Client) error {
+func (p *Project) hookMergeCheck(ctx context.Context, c *cinderline.Client) error {
 	proj, err := c.GetProject(ctx)
 	if err != nil {
 		return err

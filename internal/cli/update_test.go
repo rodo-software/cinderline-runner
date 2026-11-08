@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // releaseArchive is this OS's release archive (as GoReleaser names it) holding

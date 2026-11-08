@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 )
 
 // ContinuePrompt is what a run that hit the team's turn limit gets when it
@@ -55,7 +55,7 @@ type Outcome struct {
 
 // newestCommentID is the comment cursor: IDs, not timestamps, so the
 // runner's clock doesn't matter (decision 2026-11-03-comments-during-a-run).
-func newestCommentID(cs []cinderstack.Comment) int {
+func newestCommentID(cs []cinderline.Comment) int {
 	id := 0
 	for _, c := range cs {
 		id = max(id, c.ID)
@@ -65,7 +65,7 @@ func newestCommentID(cs []cinderstack.Comment) int {
 
 // personCommentedAfter reports a person's comment after the cursor; an
 // agent's comments don't count.
-func personCommentedAfter(cs []cinderstack.Comment, cursor int) bool {
+func personCommentedAfter(cs []cinderline.Comment, cursor int) bool {
 	for _, c := range cs {
 		if c.Author.Agent == nil && c.ID > cursor {
 			return true
@@ -87,7 +87,7 @@ func personCommentedAfter(cs []cinderstack.Comment, cursor int) bool {
 // resumes its session to read them; that uses no attempt. A failed resume is
 // retried once in the same session, then the finished work is published with
 // UnreadComments (decision 2026-11-03-comments-during-a-run).
-func (p Project) Attempts(ctx context.Context, c *cinderstack.Client, cl client.Client, j Job) (Outcome, error) {
+func (p Project) Attempts(ctx context.Context, c *cinderline.Client, cl client.Client, j Job) (Outcome, error) {
 	log := p.Log.With("project", p.Config.Key, "issue", j.Ref)
 	t := j.Turn
 	resume := func(session, prompt string) client.Turn {

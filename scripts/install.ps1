@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$base = if ($env:CINDERSTACK_DOWNLOAD_URL) { $env:CINDERSTACK_DOWNLOAD_URL } else { 'https://github.com/rodo-software/cinderstack-runner/releases/latest/download' }
+$base = if ($env:CINDERLINE_DOWNLOAD_URL) { $env:CINDERLINE_DOWNLOAD_URL } else { 'https://github.com/rodo-software/cinderline-runner/releases/latest/download' }
 
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     'AMD64' { 'amd64' }
@@ -8,7 +8,7 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     default { throw "Unsupported architecture: $env:PROCESSOR_ARCHITECTURE; expected AMD64 or ARM64" }
 }
 
-$file = "cinderstack_windows_$arch.zip"
+$file = "cinderline_windows_$arch.zip"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $tmp | Out-Null
@@ -38,12 +38,12 @@ try {
 
     Expand-Archive -Path (Join-Path $tmp $file) -DestinationPath $tmp
 
-    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\cinderstack'
+    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\cinderline'
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    Copy-Item (Join-Path $tmp 'cinderstack.exe') $installDir -Force
+    Copy-Item (Join-Path $tmp 'cinderline.exe') $installDir -Force
 
-    $installed = Join-Path $installDir 'cinderstack.exe'
-    Write-Output "Installed cinderstack to $installed"
+    $installed = Join-Path $installDir 'cinderline.exe'
+    Write-Output "Installed cinderline to $installed"
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($userPath -split ';' -notcontains $installDir) {
@@ -54,7 +54,7 @@ try {
     }
 
     Write-Output ""
-    Write-Output "To check the build provenance: gh attestation verify $file --repo rodo-software/cinderstack-runner"
+    Write-Output "To check the build provenance: gh attestation verify $file --repo rodo-software/cinderline-runner"
     Write-Output "(Download the archive first with: Invoke-WebRequest -UseBasicParsing -OutFile `"$file`" `"$base/$file`")"
 }
 finally {

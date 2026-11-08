@@ -12,7 +12,7 @@ Versions already pushed to the public GitHub mirror under MIT stay MIT. Every co
 
 ## Reason
 
-The runner stays readable, modifiable and runnable by anyone, including against a self-built backend for internal use, but competitors may not ship or host it as part of a commercial product or service that substitutes for CinderStack without a commercial licence from Rodo Software. Each release converts to MIT two years after its publication.
+The runner stays readable, modifiable and runnable by anyone, including against a self-built backend for internal use, but competitors may not ship or host it as part of a commercial product or service that substitutes for Cinderline without a commercial licence from Rodo Software. Each release converts to MIT two years after its publication.
 
 ## Alternatives considered
 

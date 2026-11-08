@@ -93,7 +93,7 @@ func TestGitLabOpenPullRequest(t *testing.T) {
 			t.Errorf("header %s = %q, want %q", h, got, want)
 		}
 	}
-	want := map[string]any{"source_branch": "cinderstack/EMB-3", "target_branch": "develop", "title": "T", "description": "B"}
+	want := map[string]any{"source_branch": "cinderline/EMB-3", "target_branch": "develop", "title": "T", "description": "B"}
 	if !reflect.DeepEqual(r.body, want) {
 		t.Errorf("body = %v, want %v", r.body, want)
 	}
@@ -105,13 +105,13 @@ func TestGitLabOpenPullRequest(t *testing.T) {
 func TestGitLabOpenPullRequestFindsEarlier(t *testing.T) {
 	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
 		reply{409, `{"message":["Another open merge request already exists for this source branch: !5"]}`},
-		reply{200, `[{"iid":4,"web_url":"x","source_branch":"other"},{"iid":5,"web_url":"u","source_branch":"cinderstack/EMB-3"}]`})
+		reply{200, `[{"iid":4,"web_url":"x","source_branch":"other"},{"iid":5,"web_url":"u","source_branch":"cinderline/EMB-3"}]`})
 
 	pr, err := g.OpenPullRequest(context.Background(), input)
 	if err != nil || pr != (PullRequest{Number: 5, URL: "u"}) {
 		t.Errorf("OpenPullRequest = %+v, %v", pr, err)
 	}
-	wantURLs(t, *reqs, "POST "+mrs, "GET "+mrs+"?state=opened&source_branch=cinderstack%2FEMB-3")
+	wantURLs(t, *reqs, "POST "+mrs, "GET "+mrs+"?state=opened&source_branch=cinderline%2FEMB-3")
 }
 
 // The GitLab side of "openPullRequest reports a refusal with the forge's
@@ -138,17 +138,17 @@ func TestGitLabOpenPullRequestRefused(t *testing.T) {
 
 func TestGitLabFindPullRequest(t *testing.T) {
 	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
-		reply{200, `[{"iid":5,"web_url":"u","source_branch":"cinderstack/EMB-3"}]`},
+		reply{200, `[{"iid":5,"web_url":"u","source_branch":"cinderline/EMB-3"}]`},
 		reply{200, `[]`})
 	ctx := context.Background()
 
-	if pr, found, err := g.FindPullRequest(ctx, "cinderstack/EMB-3"); pr != (PullRequest{5, "u"}) || !found || err != nil {
+	if pr, found, err := g.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{5, "u"}) || !found || err != nil {
 		t.Errorf("FindPullRequest = %+v, %v, %v", pr, found, err)
 	}
-	if pr, found, err := g.FindPullRequest(ctx, "cinderstack/EMB-3"); pr != (PullRequest{}) || found || err != nil {
+	if pr, found, err := g.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{}) || found || err != nil {
 		t.Errorf("FindPullRequest without one = %+v, %v, %v", pr, found, err)
 	}
-	wantURLs(t, (*reqs)[:1], "GET "+mrs+"?state=opened&source_branch=cinderstack%2FEMB-3")
+	wantURLs(t, (*reqs)[:1], "GET "+mrs+"?state=opened&source_branch=cinderline%2FEMB-3")
 }
 
 // Ported from "requestMerge asks GitLab to merge when the pipeline
@@ -186,7 +186,7 @@ func TestGitLabRequestMergeRefused(t *testing.T) {
 // Ported from "pullRequestOutcome on GitLab" and "awaitMerge reads GitLab
 // merge requests" (the merge wait reads MergeState by branch, decision 0091).
 func TestGitLabMergeState(t *testing.T) {
-	const list = "GET " + mrs + "?source_branch=cinderstack%2FEMBER-1&state=all"
+	const list = "GET " + mrs + "?source_branch=cinderline%2FEMBER-1&state=all"
 	const one = "GET " + mrs + "/5"
 	mr := func(state string) reply { return reply{200, `[{"iid":5,"state":"` + state + `"}]`} }
 	for _, tt := range []struct {
@@ -205,7 +205,7 @@ func TestGitLabMergeState(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", tt.replies...)
-			s, err := g.MergeState(context.Background(), "cinderstack/EMBER-1")
+			s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
 			if s != tt.want || err != nil {
 				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
 			}
@@ -220,12 +220,12 @@ func TestGitLabMergeState(t *testing.T) {
 // Ported from "pullRequestOutcome throws on an error answer" (GitLab).
 func TestGitLabMergeStateError(t *testing.T) {
 	g, _ := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{401, `{"message":"no"}`})
-	if _, err := g.MergeState(context.Background(), "cinderstack/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401") {
+	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("MergeState = %v, want the 401", err)
 	}
 
 	g, _ = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{502, `<html>Bad Gateway</html>`})
-	if _, err := g.MergeState(context.Background(), "cinderstack/EMBER-1"); err == nil || !strings.Contains(err.Error(), "502: <html>Bad Gateway</html>") {
+	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "502: <html>Bad Gateway</html>") {
 		t.Errorf("MergeState = %v, want the 502", err)
 	}
 }
@@ -235,10 +235,10 @@ func TestGitLabMergeStateError(t *testing.T) {
 // merge status poll sees the merge.
 func TestGitLabMergeStateAfterBranchDeletion(t *testing.T) {
 	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
-		reply{200, `[{"iid":53,"source_branch":"cinderstack/EMBER-1","state":"merged"}]`})
-	s, err := g.MergeState(context.Background(), "cinderstack/EMBER-1")
+		reply{200, `[{"iid":53,"source_branch":"cinderline/EMBER-1","state":"merged"}]`})
+	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
 	if s != MergeMerged || err != nil {
 		t.Errorf("MergeState = %q, %v; want merged", s, err)
 	}
-	wantURLs(t, *reqs, "GET "+mrs+"?source_branch=cinderstack%2FEMBER-1&state=all")
+	wantURLs(t, *reqs, "GET "+mrs+"?source_branch=cinderline%2FEMBER-1&state=all")
 }

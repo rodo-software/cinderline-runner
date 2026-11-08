@@ -15,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 )
 
 var (

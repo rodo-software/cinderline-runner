@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // Docker Desktop's minimum, plan M2 "Local socket on Windows"

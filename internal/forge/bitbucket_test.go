@@ -26,7 +26,7 @@ func recordedBitbucket(t *testing.T, replies ...reply) (*Bitbucket, *[]request) 
 const (
 	bbRepo  = "https://api.bitbucket.org/2.0/repositories/ws/repo"
 	bbPulls = bbRepo + "/pullrequests"
-	bbPR    = `{"id":8,"state":"OPEN","source":{"branch":{"name":"cinderstack/EMB-3"},"commit":{"hash":"abc123"}},"links":{"html":{"href":"https://bitbucket.org/ws/repo/pull-requests/8"}}}`
+	bbPR    = `{"id":8,"state":"OPEN","source":{"branch":{"name":"cinderline/EMB-3"},"commit":{"hash":"abc123"}},"links":{"html":{"href":"https://bitbucket.org/ws/repo/pull-requests/8"}}}`
 )
 
 // Ported from "parseRepository treats bitbucket.org as Bitbucket, in every
@@ -113,7 +113,7 @@ func TestBitbucketOpenPullRequest(t *testing.T) {
 	want := map[string]any{
 		"title":               "T",
 		"description":         "B",
-		"source":              map[string]any{"branch": map[string]any{"name": "cinderstack/EMB-3"}},
+		"source":              map[string]any{"branch": map[string]any{"name": "cinderline/EMB-3"}},
 		"destination":         map[string]any{"branch": map[string]any{"name": "develop"}},
 		"close_source_branch": true,
 	}
@@ -134,7 +134,7 @@ func TestBitbucketOpenPullRequestFindsEarlier(t *testing.T) {
 	if err != nil || pr.Number != 8 {
 		t.Errorf("OpenPullRequest = %+v, %v", pr, err)
 	}
-	wantURLs(t, *reqs, "POST "+bbPulls, "GET "+bbPulls+"?state=OPEN&q=source.branch.name%3D%22cinderstack%2FEMB-3%22")
+	wantURLs(t, *reqs, "POST "+bbPulls, "GET "+bbPulls+"?state=OPEN&q=source.branch.name%3D%22cinderline%2FEMB-3%22")
 }
 
 // Ported from "openPullRequest reports a Bitbucket 400 that is not a
@@ -161,13 +161,13 @@ func TestBitbucketFindPullRequest(t *testing.T) {
 	b, reqs := recordedBitbucket(t, reply{200, `{"values":[` + bbPR + `]}`}, reply{200, `{"values":[]}`})
 	ctx := context.Background()
 
-	if pr, found, err := b.FindPullRequest(ctx, "cinderstack/EMB-3"); pr.Number != 8 || !found || err != nil {
+	if pr, found, err := b.FindPullRequest(ctx, "cinderline/EMB-3"); pr.Number != 8 || !found || err != nil {
 		t.Errorf("FindPullRequest = %+v, %v, %v", pr, found, err)
 	}
-	if pr, found, err := b.FindPullRequest(ctx, "cinderstack/EMB-3"); pr != (PullRequest{}) || found || err != nil {
+	if pr, found, err := b.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{}) || found || err != nil {
 		t.Errorf("FindPullRequest without one = %+v, %v, %v", pr, found, err)
 	}
-	wantURLs(t, (*reqs)[:1], "GET "+bbPulls+"?state=OPEN&q=source.branch.name%3D%22cinderstack%2FEMB-3%22")
+	wantURLs(t, (*reqs)[:1], "GET "+bbPulls+"?state=OPEN&q=source.branch.name%3D%22cinderline%2FEMB-3%22")
 }
 
 // Ported from "requestMerge on Bitbucket asks a person to merge and never
@@ -187,7 +187,7 @@ func TestBitbucketRequestMerge(t *testing.T) {
 // Forgejo route and always failed. This reads the newest pull request of
 // the branch, then the build statuses of its head commit, as the other forges.
 func TestBitbucketMergeState(t *testing.T) {
-	const list = "GET " + bbPulls + "?q=source.branch.name%3D%22cinderstack%2FEMB-3%22&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&sort=-created_on"
+	const list = "GET " + bbPulls + "?q=source.branch.name%3D%22cinderline%2FEMB-3%22&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&sort=-created_on"
 	const statuses = "GET " + bbRepo + "/commit/abc123/statuses"
 	pr := func(state string) reply {
 		return reply{200, `{"values":[` + strings.Replace(bbPR, `"OPEN"`, `"`+state+`"`, 1) + `]}`}
@@ -217,7 +217,7 @@ func TestBitbucketMergeState(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			b, reqs := recordedBitbucket(t, tt.replies...)
-			s, err := b.MergeState(context.Background(), "cinderstack/EMB-3")
+			s, err := b.MergeState(context.Background(), "cinderline/EMB-3")
 			if s != tt.want || err != nil {
 				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
 			}
@@ -229,12 +229,12 @@ func TestBitbucketMergeState(t *testing.T) {
 // The Bitbucket side of "pullRequestOutcome throws on an error answer".
 func TestBitbucketMergeStateError(t *testing.T) {
 	b, _ := recordedBitbucket(t, reply{401, `{"type":"error","error":{"message":"no"}}`})
-	if _, err := b.MergeState(context.Background(), "cinderstack/EMB-3"); err == nil || !strings.Contains(err.Error(), "401: no") {
+	if _, err := b.MergeState(context.Background(), "cinderline/EMB-3"); err == nil || !strings.Contains(err.Error(), "401: no") {
 		t.Errorf("MergeState = %v, want the 401", err)
 	}
 
 	b, _ = recordedBitbucket(t, reply{200, `{"values":[` + bbPR + `]}`}, reply{502, `<html>Bad Gateway</html>`})
-	if _, err := b.MergeState(context.Background(), "cinderstack/EMB-3"); err == nil || !strings.Contains(err.Error(), "502: <html>Bad Gateway</html>") {
+	if _, err := b.MergeState(context.Background(), "cinderline/EMB-3"); err == nil || !strings.Contains(err.Error(), "502: <html>Bad Gateway</html>") {
 		t.Errorf("MergeState = %v, want the 502", err)
 	}
 }

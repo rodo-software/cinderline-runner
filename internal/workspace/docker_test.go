@@ -43,12 +43,12 @@ func helperArgv(labels, env, mounts []string, git ...string) []string {
 }
 
 var (
-	projectLabel = []string{"--label", "cinderstack.project=CSR"}
-	issueLabels  = []string{"--label", "cinderstack.project=CSR", "--label", "cinderstack.issue=CSR-29"}
+	projectLabel = []string{"--label", "cinderline.project=CSR"}
+	issueLabels  = []string{"--label", "cinderline.project=CSR", "--label", "cinderline.issue=CSR-29"}
 	tokenEnv     = []string{"-e", "GIT_TOKEN", "-e", "GIT_ASKPASS=/tmp/askpass", "-e", "GIT_TERMINAL_PROMPT=0"}
 	noTokenEnv   = []string{"-e", "GIT_TERMINAL_PROMPT=0"}
-	repoMount    = []string{"-v", "cinderstack-CSR-repo:/repo"}
-	runsMount    = []string{"-v", "cinderstack-CSR-repo:/repo", "-v", "cinderstack-CSR-runs:/runs:ro"}
+	repoMount    = []string{"-v", "cinderline-CSR-repo:/repo"}
+	runsMount    = []string{"-v", "cinderline-CSR-repo:/repo", "-v", "cinderline-CSR-runs:/runs:ro"}
 	tokenVar     = []string{"GIT_TOKEN=" + token}
 )
 
@@ -58,7 +58,7 @@ func TestDockerFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []execCall{
-		{nil, []string{"docker", "volume", "create", "--label", "cinderstack.project=CSR", "cinderstack-CSR-repo"}},
+		{nil, []string{"docker", "volume", "create", "--label", "cinderline.project=CSR", "cinderline-CSR-repo"}},
 		{nil, helperArgv(projectLabel, noTokenEnv, repoMount, "init", "--quiet", "--bare", "/repo")},
 		{tokenVar, helperArgv(projectLabel, tokenEnv, repoMount,
 			"-C", "/repo", "fetch", "--prune", "--quiet", "--no-tags", "https://git.example.com/o/r.git", "+refs/heads/*:refs/heads/*")},
@@ -71,20 +71,20 @@ func TestDockerFetch(t *testing.T) {
 
 func TestDockerPush(t *testing.T) {
 	d, calls := recorder(nil)
-	if err := d.Push(context.Background(), "/runs/CSR-29", "cinderstack/CSR-29"); err != nil {
+	if err := d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29"); err != nil {
 		t.Fatal(err)
 	}
 	want := []execCall{
 		// The agent's clone is read only and the fetch from it has no token.
 		{nil, helperArgv(issueLabels, noTokenEnv, runsMount,
 			"-c", "safe.directory=/runs/CSR-29", "-C", "/repo", "fetch", "--quiet", "--no-tags",
-			"/runs/CSR-29", "+refs/heads/cinderstack/CSR-29:refs/push/cinderstack/CSR-29")},
+			"/runs/CSR-29", "+refs/heads/cinderline/CSR-29:refs/push/cinderline/CSR-29")},
 		{tokenVar, helperArgv(issueLabels, tokenEnv, repoMount,
-			"-C", "/repo", "push", "--quiet", "https://git.example.com/o/r.git", "refs/push/cinderstack/CSR-29:refs/heads/cinderstack/CSR-29")},
+			"-C", "/repo", "push", "--quiet", "https://git.example.com/o/r.git", "refs/push/cinderline/CSR-29:refs/heads/cinderline/CSR-29")},
 		// After the push, the clone's remote-tracking ref is updated so "ahead of
 		// the remote" is exact without a fetch (decision 2026-11-07-publish-resilience).
 		{nil, agentArgvGit("/runs/CSR-29", "CSR-29",
-			"update-ref", "refs/remotes/origin/cinderstack/CSR-29", "refs/heads/cinderstack/CSR-29")},
+			"update-ref", "refs/remotes/origin/cinderline/CSR-29", "refs/heads/cinderline/CSR-29")},
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
@@ -95,7 +95,7 @@ func TestDockerPush(t *testing.T) {
 func TestDockerPushRefusesDirOutsideRuns(t *testing.T) {
 	for _, dir := range []string{"/repo", "/runs", "/runs/", "/runs/../repo", "--upload-pack=x", "runs/CSR-29"} {
 		d, calls := recorder(nil)
-		if err := d.Push(context.Background(), dir, "cinderstack/CSR-29"); err == nil {
+		if err := d.Push(context.Background(), dir, "cinderline/CSR-29"); err == nil {
 			t.Errorf("Push(%q) = nil, want an error", dir)
 		}
 		if len(*calls) != 0 {
@@ -107,7 +107,7 @@ func TestDockerPushRefusesDirOutsideRuns(t *testing.T) {
 func TestDockerStopsAtFirstFailure(t *testing.T) {
 	boom := errors.New("boom")
 	d, calls := recorder(map[int]error{0: boom})
-	if err := d.Push(context.Background(), "/runs/CSR-29", "cinderstack/CSR-29"); !errors.Is(err, boom) {
+	if err := d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29"); !errors.Is(err, boom) {
 		t.Errorf("Push = %v, want boom", err)
 	}
 	if len(*calls) != 1 {
@@ -188,32 +188,32 @@ const dir = "/runs/CSR-30"
 // agentArgv is the argv of a token-free, networkless git container running
 // git in the clone at dir as the agent's user.
 func agentArgv(git ...string) []string {
-	argv := []string{"docker", "run", "--rm", "--label", "cinderstack.project=CSR", "--label", "cinderstack.issue=CSR-30",
+	argv := []string{"docker", "run", "--rm", "--label", "cinderline.project=CSR", "--label", "cinderline.issue=CSR-30",
 		"--network", "none", "--user", "1000:1000",
 		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
-		"-v", "cinderstack-CSR-repo:/repo:ro", "-v", "cinderstack-CSR-runs:/runs",
+		"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs",
 		"-w", dir, "--entrypoint", "git", GitImage,
 		"-c", "safe.directory=/repo", "-c", "core.autocrlf=false", "-c", "core.fileMode=true",
-		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderstack runner", "-c", "user.email=runner@cinderstack.invalid"}
+		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderline runner", "-c", "user.email=runner@cinderline.invalid"}
 	return append(argv, git...)
 }
 
 // agentArgvGit is like agentArgv but parameterised by dir and the issue label.
 func agentArgvGit(dir, issue string, git ...string) []string {
-	argv := []string{"docker", "run", "--rm", "--label", "cinderstack.project=CSR", "--label", "cinderstack.issue=" + issue,
+	argv := []string{"docker", "run", "--rm", "--label", "cinderline.project=CSR", "--label", "cinderline.issue=" + issue,
 		"--network", "none", "--user", "1000:1000",
 		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
-		"-v", "cinderstack-CSR-repo:/repo:ro", "-v", "cinderstack-CSR-runs:/runs",
+		"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs",
 		"-w", dir, "--entrypoint", "git", GitImage,
 		"-c", "safe.directory=/repo", "-c", "core.autocrlf=false", "-c", "core.fileMode=true",
-		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderstack runner", "-c", "user.email=runner@cinderstack.invalid"}
+		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderline runner", "-c", "user.email=runner@cinderline.invalid"}
 	return append(argv, git...)
 }
 
 // fetchCalls are the helper's Fetch, as Prepare and MergeBase start with it.
 func fetchCalls() []execCall {
 	return []execCall{
-		{nil, []string{"docker", "volume", "create", "--label", "cinderstack.project=CSR", "cinderstack-CSR-repo"}},
+		{nil, []string{"docker", "volume", "create", "--label", "cinderline.project=CSR", "cinderline-CSR-repo"}},
 		{nil, helperArgv(projectLabel, noTokenEnv, repoMount, "init", "--quiet", "--bare", "/repo")},
 		{tokenVar, helperArgv(projectLabel, tokenEnv, repoMount,
 			"-C", "/repo", "fetch", "--prune", "--quiet", "--no-tags", "https://git.example.com/o/r.git", "+refs/heads/*:refs/heads/*")},
@@ -240,24 +240,24 @@ func TestDockerPrepare(t *testing.T) {
 		exists error // the reply to the check for the remote branch
 		start  string
 	}{
-		{"continues the remote branch", nil, "origin/cinderstack/CSR-30"},
+		{"continues the remote branch", nil, "origin/cinderline/CSR-30"},
 		{"starts a new branch from the base", exitErr(1), "origin/main"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d, calls := scripted(nil, map[int]error{6: tt.exists})
-			got, err := d.Prepare(context.Background(), "cinderstack/CSR-30", "main")
+			got, err := d.Prepare(context.Background(), "cinderline/CSR-30", "main")
 			if err != nil || got != dir {
 				t.Fatalf("Prepare = %q, %v; want %q", got, err, dir)
 			}
 			want := append(fetchCalls(),
-				execCall{nil, []string{"docker", "volume", "create", "--label", "cinderstack.project=CSR", "cinderstack-CSR-runs"}},
+				execCall{nil, []string{"docker", "volume", "create", "--label", "cinderline.project=CSR", "cinderline-CSR-runs"}},
 				// As root, a fresh dir for the clone, owned by the agent's user.
-				execCall{nil, []string{"docker", "run", "--rm", "--label", "cinderstack.project=CSR", "--label", "cinderstack.issue=CSR-30",
-					"--network", "none", "-v", "cinderstack-CSR-runs:/runs", "--entrypoint", "sh", GitImage,
+				execCall{nil, []string{"docker", "run", "--rm", "--label", "cinderline.project=CSR", "--label", "cinderline.issue=CSR-30",
+					"--network", "none", "-v", "cinderline-CSR-runs:/runs", "--entrypoint", "sh", GitImage,
 					"-c", `rm -rf -- "$1" && mkdir -- "$1" && chown 1000:1000 -- "$1"`, "sh", dir}},
 				execCall{nil, agentArgv("clone", "--quiet", "--shared", "--no-checkout", "/repo", ".")},
-				execCall{nil, agentArgv("rev-parse", "--verify", "--quiet", "refs/remotes/origin/cinderstack/CSR-30")},
-				execCall{nil, agentArgv("checkout", "--quiet", "--no-track", "-B", "cinderstack/CSR-30", tt.start)},
+				execCall{nil, agentArgv("rev-parse", "--verify", "--quiet", "refs/remotes/origin/cinderline/CSR-30")},
+				execCall{nil, agentArgv("checkout", "--quiet", "--no-track", "-B", "cinderline/CSR-30", tt.start)},
 			)
 			checkCalls(t, *calls, want)
 		})
@@ -265,7 +265,7 @@ func TestDockerPrepare(t *testing.T) {
 }
 
 func TestDockerPrepareRefusesBadBranch(t *testing.T) {
-	for _, branch := range []string{"CSR-30", "cinderstack/", "cinderstack/../repo", "cinderstack/-x", "cinderstack/a/b", "cinderstack/a b"} {
+	for _, branch := range []string{"CSR-30", "cinderline/", "cinderline/../repo", "cinderline/-x", "cinderline/a/b", "cinderline/a b"} {
 		d, calls := scripted(nil, nil)
 		if _, err := d.Prepare(context.Background(), branch, "main"); err == nil {
 			t.Errorf("Prepare(%q) = nil error", branch)
@@ -435,11 +435,11 @@ func TestDockerResetHeadLog(t *testing.T) {
 
 func TestDockerStranded(t *testing.T) {
 	// Clones with unpushed commits are listed.
-	d, calls := scripted([]string{"", "/runs/CSR-5\tcinderstack/CSR-5\n/runs/CSR-8\tcinderstack/CSR-8\n"}, nil)
+	d, calls := scripted([]string{"", "/runs/CSR-5\tcinderline/CSR-5\n/runs/CSR-8\tcinderline/CSR-8\n"}, nil)
 	clones, err := d.Stranded(context.Background())
 	if err != nil || !reflect.DeepEqual(clones, []Clone{
-		{Dir: "/runs/CSR-5", Branch: "cinderstack/CSR-5"},
-		{Dir: "/runs/CSR-8", Branch: "cinderstack/CSR-8"},
+		{Dir: "/runs/CSR-5", Branch: "cinderline/CSR-5"},
+		{Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"},
 	}) {
 		t.Fatalf("Stranded = %v, %v", clones, err)
 	}
@@ -447,7 +447,7 @@ func TestDockerStranded(t *testing.T) {
 		t.Fatalf("calls = %d, want 2", len(*calls))
 	}
 	// First call: create the runs volume.
-	wantVolume := execCall{nil, []string{"docker", "volume", "create", "--label", "cinderstack.project=CSR", "cinderstack-CSR-runs"}}
+	wantVolume := execCall{nil, []string{"docker", "volume", "create", "--label", "cinderline.project=CSR", "cinderline-CSR-runs"}}
 	if !reflect.DeepEqual((*calls)[0], wantVolume) {
 		t.Errorf("volume create =\n%q\nwant\n%q", (*calls)[0], wantVolume)
 	}
@@ -488,10 +488,10 @@ func TestDockerStranded(t *testing.T) {
 	if !strings.Contains(joined, "GIT_CONFIG_VALUE_3=/dev/null") {
 		t.Error("missing core.hooksPath=/dev/null")
 	}
-	if !strings.Contains(joined, "cinderstack-CSR-repo:/repo:ro") {
+	if !strings.Contains(joined, "cinderline-CSR-repo:/repo:ro") {
 		t.Error("missing repo volume")
 	}
-	if !strings.Contains(joined, "cinderstack-CSR-runs:/runs") {
+	if !strings.Contains(joined, "cinderline-CSR-runs:/runs") {
 		t.Error("missing runs volume")
 	}
 	if !strings.Contains(joined, "--entrypoint sh") {
@@ -507,8 +507,8 @@ func TestDockerStranded(t *testing.T) {
 	if !strings.Contains(joined, "branch -r --contains") {
 		t.Error("script missing branch -r --contains")
 	}
-	if !strings.Contains(joined, "cinderstack/*)") {
-		t.Error("script missing cinderstack/* pattern")
+	if !strings.Contains(joined, "cinderline/*)") {
+		t.Error("script missing cinderline/* pattern")
 	}
 	if !strings.Contains(joined, "printf") {
 		t.Error("script missing printf")

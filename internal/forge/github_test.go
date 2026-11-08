@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // The GitHub cases of the app repository's runner/lib.forge.test.mjs at
@@ -96,7 +96,7 @@ func wantURLs(t *testing.T, reqs []request, want ...string) {
 	}
 }
 
-var input = PullRequestInput{Branch: "cinderstack/EMB-3", Base: "main", Title: "T", Body: "B"}
+var input = PullRequestInput{Branch: "cinderline/EMB-3", Base: "main", Title: "T", Body: "B"}
 
 // Ported from "parseRepository treats github.com as GitHub, in every URL
 // form" and "parseRepository keeps an https port for the clone, the push and
@@ -165,7 +165,7 @@ func TestGitHubOpenPullRequest(t *testing.T) {
 			t.Errorf("header %s = %q, want %q", h, got, want)
 		}
 	}
-	if want := map[string]any{"head": "cinderstack/EMB-3", "base": "main", "title": "T", "body": "B"}; !reflect.DeepEqual(r.body, want) {
+	if want := map[string]any{"head": "cinderline/EMB-3", "base": "main", "title": "T", "body": "B"}; !reflect.DeepEqual(r.body, want) {
 		t.Errorf("body = %v, want %v", r.body, want)
 	}
 }
@@ -175,7 +175,7 @@ func TestGitHubOpenPullRequest(t *testing.T) {
 func TestGitHubOpenPullRequestFindsEarlier(t *testing.T) {
 	g, reqs := recorded(t, "https://github.com/willem/ember.git",
 		reply{422, `{"message":"exists"}`},
-		reply{200, `[{"number":2,"html_url":"u","head":{"ref":"cinderstack/EMB-3"}}]`})
+		reply{200, `[{"number":2,"html_url":"u","head":{"ref":"cinderline/EMB-3"}}]`})
 
 	pr, err := g.OpenPullRequest(context.Background(), input)
 	if err != nil || pr != (PullRequest{Number: 2, URL: "u"}) {
@@ -183,13 +183,13 @@ func TestGitHubOpenPullRequestFindsEarlier(t *testing.T) {
 	}
 	wantURLs(t, *reqs,
 		"POST https://api.github.com/repos/willem/ember/pulls",
-		"GET https://api.github.com/repos/willem/ember/pulls?state=open&head=willem%3Acinderstack%2FEMB-3")
+		"GET https://api.github.com/repos/willem/ember/pulls?state=open&head=willem%3Acinderline%2FEMB-3")
 }
 
 // Ported from "openPullRequest reports a refusal with the forge's answer".
 func TestGitHubOpenPullRequestRefused(t *testing.T) {
 	g, _ := recorded(t, "https://github.com/willem/ember.git",
-		reply{422, `{"message":"No commits between main and cinderstack/EMB-3"}`},
+		reply{422, `{"message":"No commits between main and cinderline/EMB-3"}`},
 		reply{200, `[]`})
 
 	_, err := g.OpenPullRequest(context.Background(), input)
@@ -206,17 +206,17 @@ func TestGitHubOpenPullRequestRefused(t *testing.T) {
 
 func TestGitHubFindPullRequest(t *testing.T) {
 	g, reqs := recorded(t, "https://github.com/willem/ember.git",
-		reply{200, `[{"number":2,"html_url":"u","head":{"ref":"cinderstack/EMB-3"}}]`},
+		reply{200, `[{"number":2,"html_url":"u","head":{"ref":"cinderline/EMB-3"}}]`},
 		reply{200, `[]`})
 	ctx := context.Background()
 
-	if pr, found, err := g.FindPullRequest(ctx, "cinderstack/EMB-3"); pr != (PullRequest{2, "u"}) || !found || err != nil {
+	if pr, found, err := g.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{2, "u"}) || !found || err != nil {
 		t.Errorf("FindPullRequest = %+v, %v, %v", pr, found, err)
 	}
-	if pr, found, err := g.FindPullRequest(ctx, "cinderstack/EMB-3"); pr != (PullRequest{}) || found || err != nil {
+	if pr, found, err := g.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{}) || found || err != nil {
 		t.Errorf("FindPullRequest without one = %+v, %v, %v", pr, found, err)
 	}
-	if (*reqs)[0].url != "https://api.github.com/repos/willem/ember/pulls?state=open&head=willem%3Acinderstack%2FEMB-3" {
+	if (*reqs)[0].url != "https://api.github.com/repos/willem/ember/pulls?state=open&head=willem%3Acinderline%2FEMB-3" {
 		t.Errorf("url = %s", (*reqs)[0].url)
 	}
 }
@@ -311,7 +311,7 @@ func TestGitHubRequestMergeRefused(t *testing.T) {
 // Ported from "pullRequestOutcome on GitHub" and "awaitMerge reads GitHub
 // pull requests" (the merge wait reads MergeState by branch, decision 0091).
 func TestGitHubMergeState(t *testing.T) {
-	const list = "GET https://api.github.com/repos/willem/ember/pulls?state=all&head=willem%3Acinderstack%2FEMBER-1"
+	const list = "GET https://api.github.com/repos/willem/ember/pulls?state=all&head=willem%3Acinderline%2FEMBER-1"
 	const checks = "GET https://api.github.com/repos/willem/ember/commits/abc/check-runs"
 	pr := func(fields string) reply {
 		return reply{200, `[{"head":{"sha":"abc"},"merged_at":null,` + fields + `}]`}
@@ -334,7 +334,7 @@ func TestGitHubMergeState(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			g, reqs := recorded(t, "https://github.com/willem/ember.git", tt.replies...)
-			s, err := g.MergeState(context.Background(), "cinderstack/EMBER-1")
+			s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
 			if s != tt.want || err != nil {
 				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
 			}
@@ -349,12 +349,12 @@ func TestGitHubMergeState(t *testing.T) {
 // Ported from "pullRequestOutcome throws on an error answer" (GitHub).
 func TestGitHubMergeStateError(t *testing.T) {
 	g, _ := recorded(t, "https://github.com/willem/ember.git", reply{401, `{"message":"no"}`})
-	if _, err := g.MergeState(context.Background(), "cinderstack/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401") {
+	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("MergeState = %v, want the 401", err)
 	}
 
 	g, _ = recorded(t, "https://github.com/willem/ember.git", reply{502, `<html>Bad Gateway</html>`})
-	if _, err := g.MergeState(context.Background(), "cinderstack/EMBER-1"); err == nil || !strings.Contains(err.Error(), "502") {
+	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "502") {
 		t.Errorf("MergeState = %v, want the 502", err)
 	}
 }
@@ -364,10 +364,10 @@ func TestGitHubMergeStateError(t *testing.T) {
 // the merge status poll sees the merge.
 func TestGitHubMergeStateAfterBranchDeletion(t *testing.T) {
 	g, reqs := recorded(t, "https://github.com/willem/ember.git",
-		reply{200, `[{"number":53,"head":{"ref":"cinderstack/EMBER-1","sha":"abc"},"merged_at":"2026-11-07T09:47:00Z","state":"closed"}]`})
-	s, err := g.MergeState(context.Background(), "cinderstack/EMBER-1")
+		reply{200, `[{"number":53,"head":{"ref":"cinderline/EMBER-1","sha":"abc"},"merged_at":"2026-11-07T09:47:00Z","state":"closed"}]`})
+	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
 	if s != MergeMerged || err != nil {
 		t.Errorf("MergeState = %q, %v; want merged", s, err)
 	}
-	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/ember/pulls?state=all&head=willem%3Acinderstack%2FEMBER-1")
+	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/ember/pulls?state=all&head=willem%3Acinderline%2FEMBER-1")
 }

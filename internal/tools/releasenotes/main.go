@@ -5,7 +5,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
 
 func main() {

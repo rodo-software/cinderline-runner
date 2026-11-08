@@ -1,5 +1,5 @@
 version: 2
-project_name: cinderstack
+project_name: cinderline
 builds:
   - main: ./cmd/...
     env:

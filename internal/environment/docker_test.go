@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	defaultimage "github.com/rodo-software/cinderstack-runner/images/default"
+	defaultimage "github.com/rodo-software/cinderline-runner/images/default"
 )
 
 // execCall is one recorded call through the Exec seam.
@@ -48,8 +48,8 @@ func TestImageExists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(tag, "cinderstack-default:") || len(tag) != len("cinderstack-default:")+12 {
-		t.Errorf("tag = %q, want cinderstack-default:<12 hex of the Dockerfile>", tag)
+	if !strings.HasPrefix(tag, "cinderline-default:") || len(tag) != len("cinderline-default:")+12 {
+		t.Errorf("tag = %q, want cinderline-default:<12 hex of the Dockerfile>", tag)
 	}
 	want := []execCall{{nil, []string{"docker", "image", "inspect", "--format", "{{.Id}}", tag}}}
 	if !reflect.DeepEqual(*calls, want) {
@@ -105,7 +105,7 @@ func TestDefaultDockerfile(t *testing.T) {
 	}
 }
 
-var issueLabels = []string{"--label", "cinderstack.project=CSR", "--label", "cinderstack.issue=CSR-31"}
+var issueLabels = []string{"--label", "cinderline.project=CSR", "--label", "cinderline.issue=CSR-31"}
 
 func TestUp(t *testing.T) {
 	d, calls := scripted(nil, nil)
@@ -113,9 +113,9 @@ func TestUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []execCall{
-		{nil, append(append([]string{"docker", "network", "create"}, issueLabels...), "cinderstack-CSR-CSR-31")},
+		{nil, append(append([]string{"docker", "network", "create"}, issueLabels...), "cinderline-CSR-CSR-31")},
 		{nil, append(append([]string{"docker", "run", "--detach"}, issueLabels...),
-			"--name", "cinderstack-CSR-CSR-31-mysql", "--network", "cinderstack-CSR-CSR-31", "--network-alias", "mysql",
+			"--name", "cinderline-CSR-CSR-31-mysql", "--network", "cinderline-CSR-CSR-31", "--network-alias", "mysql",
 			"-e", "MYSQL_DATABASE=laravel_testing", "-e", "MYSQL_USER=laravel", "-e", "MYSQL_PASSWORD=laravel", "-e", "MYSQL_ROOT_PASSWORD=root",
 			MySQLImage)},
 	}
@@ -141,7 +141,7 @@ func TestUpFailureLeavesNothing(t *testing.T) {
 	if err := d.up(context.Background(), "CSR-31"); !errors.Is(err, boom) {
 		t.Errorf("up = %v, want boom", err)
 	}
-	if got := (*calls)[len(*calls)-1].Argv; !reflect.DeepEqual(got, []string{"docker", "network", "rm", "cinderstack-CSR-CSR-31"}) {
+	if got := (*calls)[len(*calls)-1].Argv; !reflect.DeepEqual(got, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}) {
 		t.Errorf("last call = %q, want the network removed", got)
 	}
 }
@@ -154,8 +154,8 @@ func TestDownRemovesAllEvenAfterAFailure(t *testing.T) {
 	}
 	want := []execCall{
 		// -v removes MySQL's anonymous data volume with it.
-		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderstack-CSR-CSR-31-agent", "cinderstack-CSR-CSR-31-mysql"}},
-		{nil, []string{"docker", "network", "rm", "cinderstack-CSR-CSR-31"}},
+		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderline-CSR-CSR-31-agent", "cinderline-CSR-CSR-31-mysql"}},
+		{nil, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}},
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
@@ -168,9 +168,9 @@ func TestCleanupRemovesStaleContainersAndNetworks(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []execCall{
-		{nil, []string{"docker", "ps", "--all", "--quiet", "--filter", "label=cinderstack.project=CSR"}},
+		{nil, []string{"docker", "ps", "--all", "--quiet", "--filter", "label=cinderline.project=CSR"}},
 		{nil, []string{"docker", "rm", "--force", "--volumes", "c1", "c2"}},
-		{nil, []string{"docker", "network", "ls", "--quiet", "--filter", "label=cinderstack.project=CSR"}},
+		{nil, []string{"docker", "network", "ls", "--quiet", "--filter", "label=cinderline.project=CSR"}},
 		{nil, []string{"docker", "network", "rm", "n1"}},
 	}
 	if !reflect.DeepEqual(*calls, want) {
@@ -253,8 +253,8 @@ const secret = "sk-ant-secret"
 var turn = Spec{
 	Issue:  "CSR-31",
 	Dir:    "/runs/CSR-31",
-	Mounts: []string{"-v", "cinderstack-CSR-runs:/runs"},
-	Env:    []string{"ANTHROPIC_API_KEY=" + secret, "CINDERSTACK_TOKEN=tok=en"},
+	Mounts: []string{"-v", "cinderline-CSR-runs:/runs"},
+	Env:    []string{"ANTHROPIC_API_KEY=" + secret, "CINDERLINE_TOKEN=tok=en"},
 	Cmd:    []string{"claude", "-p"},
 	Stdin:  "the prompt",
 }
@@ -274,12 +274,12 @@ func TestRun(t *testing.T) {
 	}
 	image := imageTag()
 	agent := append(append([]string{"docker", "run", "--rm", "--interactive"}, issueLabels...),
-		"--name", "cinderstack-CSR-CSR-31-agent", "--network", "cinderstack-CSR-CSR-31",
+		"--name", "cinderline-CSR-CSR-31-agent", "--network", "cinderline-CSR-CSR-31",
 		"--add-host", "host.docker.internal:host-gateway", "--user", "1000:1000", "--workdir", "/runs/CSR-31",
 		"-e", "DB_HOST=mysql", "-e", "DB_PORT=3306", "-e", "DB_DATABASE=laravel_testing", "-e", "DB_USERNAME=laravel", "-e", "DB_PASSWORD=laravel",
 		// Secrets by name only: their values travel in the docker command's environment.
-		"-e", "ANTHROPIC_API_KEY", "-e", "CINDERSTACK_TOKEN",
-		"-v", "cinderstack-CSR-runs:/runs", image, "claude", "-p", "<stdin:the prompt>")
+		"-e", "ANTHROPIC_API_KEY", "-e", "CINDERLINE_TOKEN",
+		"-v", "cinderline-CSR-runs:/runs", image, "claude", "-p", "<stdin:the prompt>")
 	got := calls()
 	if len(got) != 6 {
 		t.Fatalf("calls =\n%q", got)
@@ -288,8 +288,8 @@ func TestRun(t *testing.T) {
 		t.Errorf("agent call =\n%q\nwant\n%q", got[3], want)
 	}
 	wantAfter := []execCall{
-		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderstack-CSR-CSR-31-agent", "cinderstack-CSR-CSR-31-mysql"}},
-		{nil, []string{"docker", "network", "rm", "cinderstack-CSR-CSR-31"}},
+		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderline-CSR-CSR-31-agent", "cinderline-CSR-CSR-31-mysql"}},
+		{nil, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}},
 	}
 	if !reflect.DeepEqual(got[0].Argv[:3], []string{"docker", "image", "inspect"}) || got[1].Argv[1] != "network" || got[2].Argv[1] != "run" {
 		t.Errorf("before the agent: %q, want image, network, MySQL", got[:3])
@@ -341,7 +341,7 @@ func TestRunStopsAtTheTimeout(t *testing.T) {
 			stop = c.Argv
 		}
 	}
-	if !reflect.DeepEqual(stop, []string{"docker", "stop", "cinderstack-CSR-CSR-31-agent"}) {
+	if !reflect.DeepEqual(stop, []string{"docker", "stop", "cinderline-CSR-CSR-31-agent"}) {
 		t.Errorf("stop = %q", stop)
 	}
 }

@@ -14,10 +14,10 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // No test here may use t.Parallel: keyring.MockInit replaces a global provider.

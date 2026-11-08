@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/kardianos/service"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // service installs or removes the user-level service that runs the daemon at login.
@@ -40,8 +40,8 @@ func (c *CLI) service(args []string) int {
 func serviceConfig(exe, path string) *service.Config {
 	return &service.Config{
 		Name:        name.Name,
-		DisplayName: "CinderStack runner",
-		Description: "The CinderStack runner, a native daemon for issue-driven development.",
+		DisplayName: "Cinderline runner",
+		Description: "The Cinderline runner, a native daemon for issue-driven development.",
 		Executable:  exe,
 		Arguments:   []string{"run"},
 		// Restart on failure only, so "stop" really stops (decision 2026-11-07-service-restart).

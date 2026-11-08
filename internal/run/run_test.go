@@ -19,12 +19,12 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // fakeAPI answers "METHOD path" with handle, when it is set and answers, or
@@ -44,7 +44,7 @@ type reply struct {
 	body   string
 }
 
-func (f *fakeAPI) client(t *testing.T) *cinderstack.Client {
+func (f *fakeAPI) client(t *testing.T) *cinderline.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Method + " " + strings.TrimPrefix(r.URL.Path, "/api/runner/v1")
@@ -75,7 +75,7 @@ func (f *fakeAPI) client(t *testing.T) *cinderstack.Client {
 		_, _ = io.WriteString(w, rep.body)
 	}))
 	t.Cleanup(srv.Close)
-	c := cinderstack.New(srv.URL, "tok", "0.0.0")
+	c := cinderline.New(srv.URL, "tok", "0.0.0")
 	c.HTTP = srv.Client()
 	c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	return c
@@ -271,7 +271,7 @@ func TestCheck(t *testing.T) {
 				}
 			}
 			api := &fakeAPI{routes: map[string]reply{"GET /teams/1": tt.team}}
-			issue := cinderstack.Issue{Ref: "CSR-1", Team: &cinderstack.IssueTeam{ID: 1, Name: "Dev"}}
+			issue := cinderline.Issue{Ref: "CSR-1", Team: &cinderline.IssueTeam{ID: 1, Name: "Dev"}}
 			err := p.Check(context.Background(), api.client(t), issue)
 			if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
 				t.Fatalf("Check = %v, want an error with %q", err, tt.err)
@@ -294,10 +294,10 @@ func TestRecoverPushesStrandedBranches(t *testing.T) {
 	p.Log = slog.New(slog.NewTextHandler(&log, nil))
 	ws := &workspace.Fake{
 		Strandeds: []workspace.StrandedReply{{Clones: []workspace.Clone{
-			{Dir: "/runs/CSR-5", Branch: "cinderstack/CSR-5"}, // Review, no pull request: push, open
-			{Dir: "/runs/CSR-6", Branch: "cinderstack/CSR-6"}, // Done: left alone
-			{Dir: "/runs/CSR-7", Branch: "cinderstack/CSR-7"}, // To do, merged: left alone
-			{Dir: "/runs/CSR-8", Branch: "cinderstack/CSR-8"}, // Review, push refused: no pull request
+			{Dir: "/runs/CSR-5", Branch: "cinderline/CSR-5"}, // Review, no pull request: push, open
+			{Dir: "/runs/CSR-6", Branch: "cinderline/CSR-6"}, // Done: left alone
+			{Dir: "/runs/CSR-7", Branch: "cinderline/CSR-7"}, // To do, merged: left alone
+			{Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"}, // Review, push refused: no pull request
 		}}},
 		Pushes: []error{nil, errors.New("rejected: non-fast-forward")},
 	}
@@ -320,17 +320,17 @@ func TestRecoverPushesStrandedBranches(t *testing.T) {
 	}
 	wantWS := []workspace.Call{
 		{Method: "Stranded"},
-		{Method: "Push", Args: []any{"/runs/CSR-5", "cinderstack/CSR-5"}},
-		{Method: "Push", Args: []any{"/runs/CSR-8", "cinderstack/CSR-8"}},
+		{Method: "Push", Args: []any{"/runs/CSR-5", "cinderline/CSR-5"}},
+		{Method: "Push", Args: []any{"/runs/CSR-8", "cinderline/CSR-8"}},
 	}
 	if got := ws.Calls(); !reflect.DeepEqual(got, wantWS) {
 		t.Errorf("workspace calls =\n%+v, want\n%+v", got, wantWS)
 	}
 	wantForge := []forge.Call{
-		{Method: "MergeState", Args: []any{"cinderstack/CSR-5"}},
-		{Method: "OpenPullRequest", Args: []any{forge.PullRequestInput{Branch: "cinderstack/CSR-5", Base: "main", Title: "CSR-5: T", Body: "Resolves CSR-5 in CinderStack."}}},
-		{Method: "MergeState", Args: []any{"cinderstack/CSR-7"}},
-		{Method: "MergeState", Args: []any{"cinderstack/CSR-8"}},
+		{Method: "MergeState", Args: []any{"cinderline/CSR-5"}},
+		{Method: "OpenPullRequest", Args: []any{forge.PullRequestInput{Branch: "cinderline/CSR-5", Base: "main", Title: "CSR-5: T", Body: "Resolves CSR-5 in Cinderline."}}},
+		{Method: "MergeState", Args: []any{"cinderline/CSR-7"}},
+		{Method: "MergeState", Args: []any{"cinderline/CSR-8"}},
 	}
 	if got := fg.Calls(); !reflect.DeepEqual(got, wantForge) {
 		t.Errorf("forge calls =\n%+v, want\n%+v", got, wantForge)

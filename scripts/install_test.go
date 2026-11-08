@@ -18,10 +18,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
-var binary = []byte("#!/bin/sh\necho fake cinderstack\n")
+var binary = []byte("#!/bin/sh\necho fake cinderline\n")
 
 // release serves an archive for this machine's OS and arch plus checksums.txt.
 // With tamper, checksums.txt lists a hash that does not match the archive.

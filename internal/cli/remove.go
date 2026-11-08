@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // remove deletes a project's four secrets and its config entry.

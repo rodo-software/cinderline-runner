@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 var _ Forge = (*Bitbucket)(nil)

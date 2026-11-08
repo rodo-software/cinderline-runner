@@ -7,7 +7,7 @@
 #   3. Check the release page: six archives, checksums.txt, and release notes
 #      that start with the pinned Claude Code, OpenCode and ponytail versions,
 #      followed by the commits since the previous tag. Check the attestation
-#      with: gh attestation verify <archive> --repo rodo-software/cinderstack-runner
+#      with: gh attestation verify <archive> --repo rodo-software/cinderline-runner
 # The release runs on GitHub Actions, not Forgejo, because artifact
 # attestations exist only there (decision 2026-11-05-ci; decision
 # 2026-11-05-runner-rewrite-details item 16). There is no signing key: the

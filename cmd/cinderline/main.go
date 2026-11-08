@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cli"
+	"github.com/rodo-software/cinderline-runner/internal/cli"
 )
 
 // Release builds set version with -ldflags "-X main.version=<v>".

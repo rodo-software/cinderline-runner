@@ -9,7 +9,7 @@ import (
 	"github.com/kardianos/service"
 )
 
-// nopService satisfies service.Interface; the unit runs the ordinary cinderstack run.
+// nopService satisfies service.Interface; the unit runs the ordinary cinderline run.
 type nopService struct{}
 
 func (nopService) Start(service.Service) error { return nil }

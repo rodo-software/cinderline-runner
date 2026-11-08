@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // uninstall removes the service, the runner's containers, networks, volumes
@@ -78,7 +78,7 @@ func (c *CLI) uninstall(args []string) int {
 	}
 	fmt.Fprintf(c.Stdout, "Removed %s's service, containers, volumes, images, config and secrets\n", name.Name)
 	if len(cfg.Projects) > 0 {
-		fmt.Fprintln(c.Stdout, "Revoke the runner token of each project in CinderStack:")
+		fmt.Fprintln(c.Stdout, "Revoke the runner token of each project in Cinderline:")
 		for _, p := range cfg.Projects {
 			fmt.Fprintf(c.Stdout, "  %s at %s\n", p.Key, p.URL)
 		}

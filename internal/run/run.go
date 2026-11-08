@@ -14,10 +14,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // PausedDir is the folder of a project's paused notes, one <REF>.json per
@@ -32,7 +32,7 @@ func PausedDir(state string, p config.Project) string {
 // issues is really being worked on. First it removes the containers and
 // networks a previous process left (review item 9), then it drops the paused
 // notes of issues a person has since closed (0114).
-func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
+func (p Project) Recover(ctx context.Context, c *cinderline.Client) error {
 	if err := p.Env.Cleanup(ctx); err != nil {
 		// Only hygiene: a failure must not keep the project from working.
 		p.Log.Warn("stale containers and networks not removed", "project", p.Config.Key, "err", err)
@@ -73,8 +73,8 @@ func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
 		return err
 	}
 	for _, issue := range issues {
-		var conflict *cinderstack.ConflictError
-		_, err := c.UpdateIssue(ctx, issue.Ref, cinderstack.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"})
+		var conflict *cinderline.ConflictError
+		_, err := c.UpdateIssue(ctx, issue.Ref, cinderline.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"})
 		if errors.As(err, &conflict) {
 			continue // someone moved it meanwhile; nothing to put back
 		}
@@ -90,7 +90,7 @@ func (p Project) Recover(ctx context.Context, c *cinderstack.Client) error {
 
 // pushStranded pushes any stranded branches and opens pull requests for
 // Review issues (decision 2026-11-07-publish-resilience point 3).
-func (p Project) pushStranded(ctx context.Context, c *cinderstack.Client) error {
+func (p Project) pushStranded(ctx context.Context, c *cinderline.Client) error {
 	if p.Workspace == nil || p.Forge == nil {
 		return nil
 	}
@@ -186,18 +186,18 @@ func (p Project) pushStranded(ctx context.Context, c *cinderstack.Client) error 
 	return nil
 }
 
-// Pin refuses a repository from CinderStack other than the one configured on
+// Pin refuses a repository from Cinderline other than the one configured on
 // this machine, so the git token never follows a changed URL (0114).
-func (p Project) Pin(ctx context.Context, c *cinderstack.Client) error {
+func (p Project) Pin(ctx context.Context, c *cinderline.Client) error {
 	proj, err := c.GetProject(ctx)
 	if err != nil {
 		return err
 	}
 	if proj.RepositoryURL == "" {
-		return fmt.Errorf("CinderStack names no repository for %s; this runner is configured for %s", p.Config.Key, p.Config.Repository)
+		return fmt.Errorf("the project in Cinderline names no repository for %s; this runner is configured for %s", p.Config.Key, p.Config.Repository)
 	}
 	if !config.SameRepository(proj.RepositoryURL, p.Config.Repository) {
-		return fmt.Errorf("CinderStack names the repository %s, but this runner is configured for %s", proj.RepositoryURL, p.Config.Repository)
+		return fmt.Errorf("the project in Cinderline names the repository %s, but this runner is configured for %s", proj.RepositoryURL, p.Config.Repository)
 	}
 	return nil
 }
@@ -205,7 +205,7 @@ func (p Project) Pin(ctx context.Context, c *cinderstack.Client) error {
 // Check refuses, before the claim, an issue whose team has an agent this
 // runner cannot run: an unsupported client, or a client without its key, so
 // such a team does not drain To do (decision 0122).
-func (p Project) Check(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error {
+func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
 	if issue.Team == nil {
 		return errors.New("the issue has no team")
 	}

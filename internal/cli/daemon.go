@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/daemon"
-	"github.com/rodo-software/cinderstack-runner/internal/localapi"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/daemon"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 var drainPoll = time.Second // how often stop --drain asks the daemon what it still runs; tests shorten it

@@ -18,11 +18,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/localapi"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 func (c *CLI) update(args []string) int {

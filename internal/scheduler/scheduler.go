@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 )
 
 // ErrNotStarted marks a Run error from before the first agent turn (tools,
@@ -31,20 +31,20 @@ const maxStartBackoff = 10 * time.Minute
 
 // Hooks are the steps M3 fills. A nil hook is skipped.
 type Hooks struct {
-	Recover        func(ctx context.Context, c *cinderstack.Client) error                          // once at slot start, before the first Work
-	Pin            func(ctx context.Context, c *cinderstack.Client) error                          // before the claims of each poll; an error is a slot failure, so nothing is claimed
-	Check          func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error // before each claim; an error skips the issue, unclaimed
-	Run            func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error
-	Publish        func(ctx context.Context, c *cinderstack.Client, issue cinderstack.Issue) error
-	ReviewBranches func(ctx context.Context, c *cinderstack.Client) error // keep Review branches current, on a timer
-	MergeCheck     func(ctx context.Context, c *cinderstack.Client) error // merge checks, on a timer
+	Recover        func(ctx context.Context, c *cinderline.Client) error                         // once at slot start, before the first Work
+	Pin            func(ctx context.Context, c *cinderline.Client) error                         // before the claims of each poll; an error is a slot failure, so nothing is claimed
+	Check          func(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error // before each claim; an error skips the issue, unclaimed
+	Run            func(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error
+	Publish        func(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error
+	ReviewBranches func(ctx context.Context, c *cinderline.Client) error // keep Review branches current, on a timer
+	MergeCheck     func(ctx context.Context, c *cinderline.Client) error // merge checks, on a timer
 }
 
 // Slot is one project's slot. One per project (plan section 2); a per-project
 // slot count would start several of these for one project.
 type Slot struct {
 	Project string // the project key, for log lines
-	Client  *cinderstack.Client
+	Client  *cinderline.Client
 	Hooks   Hooks
 }
 
@@ -199,7 +199,7 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 	for work.Err() == nil {
 		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 		issue, err := c.Work(work)
-		noChange := errors.Is(err, cinderstack.ErrNoChange)
+		noChange := errors.Is(err, cinderline.ErrNoChange)
 		if err != nil && !noChange {
 			return polled, err
 		}
@@ -249,14 +249,14 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 // passes Check: first (Work's answer, nil when re-walking), then the board in
 // order. An issue that is skipped or not claimed does not block the ones
 // behind it. It returns nil when nothing was claimed.
-func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderstack.Issue) (*cinderstack.Issue, error) {
+func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline.Issue) (*cinderline.Issue, error) {
 	c, h := slot.Client, slot.Hooks
 	if h.Pin != nil {
 		if err := h.Pin(work, c); err != nil {
 			return nil, fmt.Errorf("repository: %w", err)
 		}
 	}
-	var queue []cinderstack.Issue
+	var queue []cinderline.Issue
 	if first != nil {
 		queue = append(queue, *first)
 	}
@@ -289,7 +289,7 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderstac
 				continue
 			}
 		}
-		var conflict *cinderstack.ConflictError
+		var conflict *cinderline.ConflictError
 		if _, err := c.ClaimIssue(work, issue.Ref, "todo"); errors.As(err, &conflict) {
 			s.Log.Info("claim conflict, moving on", "project", slot.Project, "issue", issue.Ref, "status", conflict.Status)
 			continue
@@ -316,7 +316,7 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderstac
 // strike is how many times in a row this issue has then failed to start;
 // wait is the wait the caller will take next, logged as retry_in.
 // Returns whether cycle should wait (ErrNotStarted was handled).
-func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Issue, strike int, wait time.Duration) (notStarted bool) {
+func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderline.Issue, strike int, wait time.Duration) (notStarted bool) {
 	c, h := slot.Client, slot.Hooks
 	err := s.step(slot, issue, func() error { return h.Run(ctx, c, issue) })
 	// Phase 9's gate goes here, between run and publish (plan section 5); nothing yet.
@@ -338,7 +338,7 @@ func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Iss
 				s.Log.Error("failure comment not added", "project", slot.Project, "issue", ref, "err", cerr)
 			}
 		}
-		todo := cinderstack.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"}
+		todo := cinderline.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"}
 		if _, cerr := c.UpdateIssue(ctx, ref, todo); cerr != nil {
 			s.Log.Error("not moved to To do", "project", slot.Project, "issue", ref, "err", cerr)
 		}
@@ -349,7 +349,7 @@ func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Iss
 		s.Log.Error("failure comment not added", "project", slot.Project, "issue", issue.Ref, "err", cerr)
 	}
 	// Refused when the issue is no longer In progress, for example after a question (decision 0116).
-	review := cinderstack.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}
+	review := cinderline.UpdateIssueRequest{Status: "review", ExpectedStatus: "in_progress"}
 	if _, cerr := c.UpdateIssue(ctx, issue.Ref, review); cerr != nil {
 		s.Log.Error("not moved to Review", "project", slot.Project, "issue", issue.Ref, "err", cerr)
 	}
@@ -358,7 +358,7 @@ func (s *Scheduler) finish(ctx context.Context, slot Slot, issue cinderstack.Iss
 
 // step calls f and turns a panic into an error, logging its stack, so a
 // panicking hook still ends its issue in Review.
-func (s *Scheduler) step(slot Slot, issue cinderstack.Issue, f func() error) (err error) {
+func (s *Scheduler) step(slot Slot, issue cinderline.Issue, f func() error) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			s.Log.Error("panic", "project", slot.Project, "issue", issue.Ref, "stack", string(debug.Stack()))
@@ -387,7 +387,7 @@ func (s *Scheduler) timers(work context.Context, slot Slot) {
 }
 
 // tick calls hook, if any, and logs its error or panic; neither stops the timers.
-func (s *Scheduler) tick(work context.Context, slot Slot, msg string, hook func(context.Context, *cinderstack.Client) error) {
+func (s *Scheduler) tick(work context.Context, slot Slot, msg string, hook func(context.Context, *cinderline.Client) error) {
 	if hook == nil {
 		return
 	}

@@ -1,4 +1,4 @@
-module github.com/rodo-software/cinderstack-runner
+module github.com/rodo-software/cinderline-runner
 
 go 1.27.3
 

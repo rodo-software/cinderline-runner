@@ -15,12 +15,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 	"github.com/zalando/go-keyring"
 )
 

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // OpenCode is the OpenCode Client: one container per turn through the
@@ -21,7 +21,7 @@ type OpenCode struct {
 	Env     environment.Environment // where the turn runs
 	Exec    workspace.Exec          // prepares the state volume; nil means workspace.RunCommand
 	Key     string                  // the project's OpenRouter key
-	MCPURL  string                  // CinderStack's MCP endpoint, as the agent container reaches it
+	MCPURL  string                  // Cinderline's MCP endpoint, as the agent container reaches it
 	Tools   tools.Mount             // from tools.Tools.Mount for the Environment's image
 }
 
@@ -70,7 +70,7 @@ func opencodeArgs(t Turn) []string {
 
 // opencodeConfig is OpenCode's inline config (OPENCODE_CONFIG_CONTENT): the
 // OpenRouter key and the scoped token read from the environment, the
-// cinderstack MCP server only for agents with a token, and the team's
+// cinderline MCP server only for agents with a token, and the team's
 // max_turns as the steps of the default build agent. After that many steps
 // OpenCode asks the model for a text-only answer, so a turn ends with a
 // report instead of an error.
@@ -96,7 +96,7 @@ func opencodeConfig(t Turn, mcpURL string) string {
 
 // opencodeEnv is the agent container's environment for an OpenCode turn:
 // its data dir (the sessions) and config dir on the state volume, the
-// project's OpenRouter key, the config and, for agents with CinderStack
+// project's OpenRouter key, the config and, for agents with Cinderline
 // access, the scoped token. Agents without it skip the project's AGENTS.md
 // and opencode.json (app repository decision
 // 2026-11-05-workers-skip-project-files); the config above still applies.

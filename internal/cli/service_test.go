@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // TestServiceUsage: service without install or uninstall, or with extra arguments, is a usage error.
@@ -30,11 +30,11 @@ func TestServiceUsage(t *testing.T) {
 // TestServiceConfig: the kardianos/service config is a user-level unit that runs
 // "<binary> run" at login, restarts it only on failure and carries the installer's PATH.
 func TestServiceConfig(t *testing.T) {
-	cfg := serviceConfig("/home/ann/.local/bin/cinderstack", "/opt/homebrew/bin:/usr/bin")
+	cfg := serviceConfig("/home/ann/.local/bin/cinderline", "/opt/homebrew/bin:/usr/bin")
 	if cfg.Name != name.Name {
 		t.Errorf("Name %q, want %q", cfg.Name, name.Name)
 	}
-	if cfg.Executable != "/home/ann/.local/bin/cinderstack" {
+	if cfg.Executable != "/home/ann/.local/bin/cinderline" {
 		t.Errorf("Executable %q", cfg.Executable)
 	}
 	if !reflect.DeepEqual(cfg.Arguments, []string{"run"}) {
@@ -45,7 +45,7 @@ func TestServiceConfig(t *testing.T) {
 			t.Errorf("Option %s = %v, want true", opt, cfg.Option[opt])
 		}
 	}
-	// Restart on failure only, so "cinderstack stop" really stops (decision 2026-11-07-service-restart).
+	// Restart on failure only, so "cinderline stop" really stops (decision 2026-11-07-service-restart).
 	if v, ok := cfg.Option["KeepAlive"].(bool); !ok || v {
 		t.Errorf("Option KeepAlive = %v, want false", cfg.Option["KeepAlive"])
 	}
@@ -92,7 +92,7 @@ type task struct {
 // TestTaskXML: the Windows task runs "<binary> run" as the current user at logon,
 // restarts on failure, has no time limit and ignores a second start.
 func TestTaskXML(t *testing.T) {
-	exe := `C:\Users\Ann Lee\AppData\Local\Programs\cinderstack\cinderstack.exe`
+	exe := `C:\Users\Ann Lee\AppData\Local\Programs\cinderline\cinderline.exe`
 	b := taskXML(exe, `PC\Ann Lee`)
 	if !strings.HasPrefix(string(b), `<?xml version="1.0" encoding="UTF-8"?>`) {
 		t.Errorf("XML declaration must say UTF-8, the encoding it is written in: %.60q", b)

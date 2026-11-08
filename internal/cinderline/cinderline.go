@@ -1,4 +1,4 @@
-// Package cinderstack is the runner's REST client for the issue tracker's runner
+// Package cinderline is the runner's REST client for the issue tracker's runner
 // API, as specified in docs/runner-api/openapi.yaml. It sends the runner version
 // on every request, records the API version of every response, long-polls for
 // work and sends heartbeats.
@@ -6,7 +6,7 @@
 // The runner token and issued agent tokens never appear in its logs or errors:
 // it logs only method, path and status, and errors carry only the operation,
 // the status code and the server's message.
-package cinderstack
+package cinderline
 
 import (
 	"bytes"
@@ -23,7 +23,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // WorkWait is how many seconds the app holds a Work long-poll open.
@@ -32,7 +32,7 @@ const WorkWait = 25
 // HeartbeatInterval is how often the runner sends a heartbeat.
 const HeartbeatInterval = 60 * time.Second
 
-// Header names. Go canonicalises them to Cinderstack-…, which HTTP treats as equal to CinderStack-….
+// Header names.
 var (
 	runnerVersionHeader = name.Name + "-Runner-Version"
 	apiVersionHeader    = name.Name + "-Api-Version"
@@ -81,7 +81,7 @@ type Client struct {
 	apiVersion string
 }
 
-// New returns a client for the instance at baseURL, e.g. https://cinderstack.example.com.
+// New returns a client for the instance at baseURL, e.g. https://cinderline.example.com.
 func New(baseURL, token, version string) *Client {
 	return &Client{
 		HTTP:        &http.Client{},

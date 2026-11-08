@@ -10,11 +10,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // errEOF is stdin ending before an answer.
@@ -50,7 +50,7 @@ func (c *CLI) add(args []string) int {
 
 	// URL and token, re-asking the token when it is rejected and the URL when it is not an instance.
 	var instance, token string
-	var proj cinderstack.Project
+	var proj cinderline.Project
 	for {
 		for instance == "" {
 			v, err := ask("URL of the " + name.Name + " instance: ")
@@ -68,8 +68,8 @@ func (c *CLI) add(args []string) int {
 				return c.fail(err)
 			}
 		}
-		proj, err = cinderstack.New(instance, token, c.Version).GetProject(context.Background())
-		var apiErr *cinderstack.APIError
+		proj, err = cinderline.New(instance, token, c.Version).GetProject(context.Background())
+		var apiErr *cinderline.APIError
 		if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
 			say("The instance rejected this runner token.")
 			token = ""

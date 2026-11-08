@@ -8,7 +8,7 @@
 
 The default image (`images/default/Dockerfile`) holds Go 1.27.3 with staticcheck and govulncheck, the same pins as today's runner image and with `GOTOOLCHAIN=local`, besides PHP 8.4, Composer, Node 22 and git.
 
-This is a stopgap. One image cannot hold every project's toolchain, certainly not once CinderStack is offered as SaaS, so a more flexible solution is needed later. It is tracked as an issue at the end of the backlog (CSR-77).
+This is a stopgap. One image cannot hold every project's toolchain, certainly not once Cinderline is offered as SaaS, so a more flexible solution is needed later. It is tracked as an issue at the end of the backlog (CSR-77).
 
 Rejected: keeping the image as planned and switching the runner project only in M6 (B), and pulling M6's per-project image forward for the runner project (C).
 

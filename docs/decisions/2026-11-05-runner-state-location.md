@@ -6,7 +6,7 @@
 
 ## Decision
 
-- **Host state folder** beside the config (`os.UserConfigDir()/cinderstack/state`): the daemon's rotating log and the paused notes, one set per project.
+- **Host state folder** beside the config (`os.UserConfigDir()/cinderline/state`): the daemon's rotating log and the paused notes, one set per project.
 - **Per-project state volume** (Docker): client sessions and client config dirs (0116), mounted into the agent container.
 - Workflow state still lives only in issues (0091); both places hold caches the runner can lose.
 

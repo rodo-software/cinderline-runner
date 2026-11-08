@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/localapi"
-	"github.com/rodo-software/cinderstack-runner/internal/run"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/run"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // Options configure Run.
@@ -172,19 +172,19 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			projects = append(projects, st)
 			continue
 		}
-		c := cinderstack.New(p.URL, token, o.Version)
+		c := cinderline.New(p.URL, token, o.Version)
 		c.Log = log.With("project", p.Key)
 		wg.Go(func() {
 			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
 			// Clients stay empty until their detection in M7 (CSR-59); only the default environment exists yet.
-			r := cinderstack.Report{RunnerVersion: o.Version, Clients: []cinderstack.ReportClient{}, Environments: []string{"default"}}
+			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}
 			if err := c.PutReport(ctx, r); err != nil && ctx.Err() == nil {
 				c.Log.Warn("report failed", "err", err)
 			}
 			if err := c.Heartbeat(ctx); err != nil && ctx.Err() == nil {
 				c.Log.Warn("heartbeat failed", "err", err)
 			}
-			t := time.NewTicker(cinderstack.HeartbeatInterval)
+			t := time.NewTicker(cinderline.HeartbeatInterval)
 			defer t.Stop()
 			c.RunHeartbeats(ctx, t.C)
 		})

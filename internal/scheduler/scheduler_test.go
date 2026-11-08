@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 )
 
 // events is an ordered, concurrency-safe log of what a server and the hooks saw.
@@ -61,7 +61,7 @@ type app struct {
 	rewind      bool // a PATCH to To do changes the ETag, so the next /work answers the issue again (CSR-81)
 }
 
-func (a app) start(t *testing.T) *cinderstack.Client {
+func (a app) start(t *testing.T) *cinderline.Client {
 	t.Helper()
 	if a.ev == nil {
 		t.Fatal("app needs events")
@@ -111,7 +111,7 @@ func (a app) start(t *testing.T) *cinderstack.Client {
 		}
 	}))
 	t.Cleanup(srv.Close)
-	c := cinderstack.New(srv.URL, "tok", "0.0.0")
+	c := cinderline.New(srv.URL, "tok", "0.0.0")
 	c.HTTP = srv.Client()
 	c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	return c
@@ -185,12 +185,12 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func record(ev *events, what string) func(context.Context, *cinderstack.Client) error {
-	return func(context.Context, *cinderstack.Client) error { ev.add(what); return nil }
+func record(ev *events, what string) func(context.Context, *cinderline.Client) error {
+	return func(context.Context, *cinderline.Client) error { ev.add(what); return nil }
 }
 
-func recordIssue(ev *events, what string) func(context.Context, *cinderstack.Client, cinderstack.Issue) error {
-	return func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+func recordIssue(ev *events, what string) func(context.Context, *cinderline.Client, cinderline.Issue) error {
+	return func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 		ev.add(what + " " + i.Ref)
 		return nil
 	}
@@ -276,9 +276,9 @@ func TestSkipWithoutRunStep(t *testing.T) {
 }
 
 func TestFailingSlotDoesNotStopOthers(t *testing.T) {
-	fails := map[string]func(context.Context, *cinderstack.Client) error{
-		"panic": func(context.Context, *cinderstack.Client) error { panic("boom") },
-		"error": func(context.Context, *cinderstack.Client) error { return errors.New("boom") },
+	fails := map[string]func(context.Context, *cinderline.Client) error{
+		"panic": func(context.Context, *cinderline.Client) error { panic("boom") },
+		"error": func(context.Context, *cinderline.Client) error { return errors.New("boom") },
 	}
 	for n, fail := range fails {
 		t.Run(n, func(t *testing.T) {
@@ -287,7 +287,7 @@ func TestFailingSlotDoesNotStopOthers(t *testing.T) {
 			a := app{issue: issue, claimStatus: 200, hold: 20 * time.Millisecond, ev: evA}.start(t)
 			b := app{issue: issue, claimStatus: 200, hold: 20 * time.Millisecond, ev: evB}.start(t)
 			start(t, s, []Slot{
-				{Project: "A", Client: a, Hooks: Hooks{Recover: func(ctx context.Context, c *cinderstack.Client) error {
+				{Project: "A", Client: a, Hooks: Hooks{Recover: func(ctx context.Context, c *cinderline.Client) error {
 					evA.add("recover")
 					return fail(ctx, c)
 				}}},
@@ -315,7 +315,7 @@ func TestTimersFire(t *testing.T) {
 	c := app{issue: "null", hold: 10 * time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
 		Recover: record(ev, "recover"),
-		ReviewBranches: func(context.Context, *cinderstack.Client) error {
+		ReviewBranches: func(context.Context, *cinderline.Client) error {
 			ev.add("review")
 			return errors.New("review broke")
 		},
@@ -351,7 +351,7 @@ func TestStopAtOnce(t *testing.T) {
 		ev := &events{}
 		c := app{issue: "null", hold: 10 * time.Second, ev: ev}.start(t)
 		stop := start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-			Recover: func(context.Context, *cinderstack.Client) error { ev.add("recover"); return errors.New("down") },
+			Recover: func(context.Context, *cinderline.Client) error { ev.add("recover"); return errors.New("down") },
 		}}})
 		waitFor(t, "the first failure", func() bool { return ev.count("recover") == 1 })
 		time.Sleep(20 * time.Millisecond) // into the backoff
@@ -368,7 +368,7 @@ func TestStatus(t *testing.T) {
 	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	running, release := make(chan struct{}), make(chan struct{})
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Run: func(context.Context, *cinderstack.Client, cinderstack.Issue) error {
+		Run: func(context.Context, *cinderline.Client, cinderline.Issue) error {
 			running <- struct{}{}
 			<-release
 			return errors.New("boom")
@@ -392,7 +392,7 @@ func TestStatusAfterSlotFailure(t *testing.T) {
 	ev := &events{}
 	c := app{issue: "null", hold: time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Recover: func(context.Context, *cinderstack.Client) error { return errors.New("down") },
+		Recover: func(context.Context, *cinderline.Client) error { return errors.New("down") },
 	}}})
 	waitFor(t, "the failure in the status", func() bool { return s.Status()["CSR"].LastError != "" })
 	st := s.Status()["CSR"]
@@ -404,10 +404,10 @@ func TestStatusAfterSlotFailure(t *testing.T) {
 // Ported from legacy runner.test.mjs "an error after the claim ends in a
 // comment and Review", for Run and Publish, as an error and as a panic.
 func TestErrorAfterClaimEndsInCommentAndReview(t *testing.T) {
-	fail := func(ctx context.Context, c *cinderstack.Client, i cinderstack.Issue) error {
+	fail := func(ctx context.Context, c *cinderline.Client, i cinderline.Issue) error {
 		return errors.New("Issue not found.")
 	}
-	panics := func(context.Context, *cinderstack.Client, cinderstack.Issue) error { panic("Issue not found.") }
+	panics := func(context.Context, *cinderline.Client, cinderline.Issue) error { panic("Issue not found.") }
 	for _, tt := range []struct {
 		name  string
 		hooks func(ev *events) Hooks
@@ -455,7 +455,7 @@ func TestStopDuringRunLeavesIssueInProgress(t *testing.T) {
 	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	running := make(chan struct{})
 	stop := start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Run: func(ctx context.Context, _ *cinderstack.Client, _ cinderstack.Issue) error {
+		Run: func(ctx context.Context, _ *cinderline.Client, _ cinderline.Issue) error {
 			close(running)
 			<-ctx.Done()
 			return ctx.Err()
@@ -480,11 +480,11 @@ func TestPinRefusalClaimsNothing(t *testing.T) {
 	ev := &events{}
 	c := app{issue: issue, todo: "[" + issue + "]", claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Pin: func(context.Context, *cinderstack.Client) error {
+		Pin: func(context.Context, *cinderline.Client) error {
 			ev.add("pin")
-			return errors.New("CinderStack names another repository")
+			return errors.New("Cinderline names another repository")
 		},
-		Check: func(context.Context, *cinderstack.Client, cinderstack.Issue) error { ev.add("check"); return nil },
+		Check: func(context.Context, *cinderline.Client, cinderline.Issue) error { ev.add("check"); return nil },
 		Run:   recordIssue(ev, "run"),
 	}}})
 	waitFor(t, "the pin", func() bool { return ev.count("pin") == 1 })
@@ -495,7 +495,7 @@ func TestPinRefusalClaimsNothing(t *testing.T) {
 	if st := s.Status()["CSR"]; !strings.Contains(st.LastError, "another repository") {
 		t.Errorf("status %+v does not show the refusal", st)
 	}
-	if l := buf.String(); !strings.Contains(l, `"msg":"slot failed","project":"CSR","err":"repository: CinderStack names another repository"`) {
+	if l := buf.String(); !strings.Contains(l, `"msg":"slot failed","project":"CSR","err":"repository: Cinderline names another repository"`) {
 		t.Errorf("no failure line:\n%s", l)
 	}
 }
@@ -509,7 +509,7 @@ func TestCheckRefusalSkipsBeforeClaim(t *testing.T) {
 	ev := &events{}
 	c := app{issue: issue, todo: "[" + issue + "]", claimStatus: 200, hold: 200 * time.Millisecond, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Check: func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+		Check: func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 			ev.add("check " + i.Ref)
 			return errors.New("agent Ada runs on codex")
 		},
@@ -539,7 +539,7 @@ func TestSkippedIssueDoesNotBlockNext(t *testing.T) {
 	next := `{"ref":"CSR-10","title":"U","status":{"value":"todo","label":"To do"},"team":{"id":2,"name":"B"}}`
 	c := app{issue: issue, todo: "[" + issue + "," + next + "]", claimStatus: 200, hold: time.Second, ev: ev}.start(t)
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Check: func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+		Check: func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 			if i.Ref == "CSR-9" {
 				return errors.New("Unknown team.")
 			}
@@ -594,7 +594,7 @@ func TestNotStartedGoesBackToTodoWithoutComment(t *testing.T) {
 	ev := &events{}
 	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev, rewind: true}.start(t)
 	var runs atomic.Int32
-	run := func(_ context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+	run := func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 		if runs.Add(1) == 1 {
 			return fmt.Errorf("%w: git fetch: Forgejo unreachable", ErrNotStarted)
 		}
@@ -627,7 +627,7 @@ func TestNotStartedThriceComments(t *testing.T) {
 	s.StartBackoff = time.Millisecond
 	ev := &events{}
 	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev, rewind: true}.start(t)
-	run := func(context.Context, *cinderstack.Client, cinderstack.Issue) error {
+	run := func(context.Context, *cinderline.Client, cinderline.Issue) error {
 		return fmt.Errorf("%w: no git token", ErrNotStarted)
 	}
 	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{Run: run}}})
@@ -675,7 +675,7 @@ func TestDrainFinishesRunInFlight(t *testing.T) {
 	running, release := make(chan struct{}), make(chan struct{})
 	var runCtxErr error
 	drain, done := runDraining(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
-		Run: func(ctx context.Context, _ *cinderstack.Client, i cinderstack.Issue) error {
+		Run: func(ctx context.Context, _ *cinderline.Client, i cinderline.Issue) error {
 			ev.add("run " + i.Ref)
 			close(running)
 			<-release

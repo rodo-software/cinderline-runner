@@ -6,7 +6,7 @@
 
 ## Decision
 
-- `internal/cli` uses `github.com/kardianos/service` for `cinderstack service install|uninstall` on macOS (LaunchAgent) and Linux (systemd `--user` unit).
+- `internal/cli` uses `github.com/kardianos/service` for `cinderline service install|uninstall` on macOS (LaunchAgent) and Linux (systemd `--user` unit).
 - On Windows the runner registers a logon scheduled task from generated XML with `schtasks /create /xml` instead, so it runs as the user who owns the keychain and Docker Desktop and is restarted on failure.
 
 ## Reason

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rodo-software/cinderstack-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 )
 
 // The legacy suites have no test of their own for attempts: runner.test.mjs
@@ -29,7 +29,7 @@ func turns(f *client.Fake) []client.Turn {
 
 var job = Job{Ref: "CSR-7", Client: "claude", Turn: first}
 
-// working is CinderStack while the agent works: the issue stays In progress
+// working is Cinderline while the agent works: the issue stays In progress
 // and nobody comments.
 func working() *fakeAPI {
 	return &fakeAPI{routes: map[string]reply{
@@ -180,7 +180,7 @@ func TestAttemptsReportsTheRetry(t *testing.T) {
 	}
 }
 
-// A progress line is cut to CinderStack's 200 characters, as legacy
+// A progress line is cut to Cinderline's 200 characters, as legacy
 // progress() does: a sub-issue title alone may be that long.
 func TestProgressIsCutTo200Characters(t *testing.T) {
 	api := &fakeAPI{routes: map[string]reply{"POST /issues/CSR-7/progress": {204, ""}}}

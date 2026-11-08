@@ -19,13 +19,13 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/localapi"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
-	"github.com/rodo-software/cinderstack-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
-// app is a fake CinderStack: the first /work answers an issue, a repeated one is
+// app is a fake Cinderline: the first /work answers an issue, a repeated one is
 // held until the client goes away. polls counts the first ones, one per client.
 type app struct {
 	url                 string

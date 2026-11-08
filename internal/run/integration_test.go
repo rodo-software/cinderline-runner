@@ -3,7 +3,7 @@
 package run
 
 // The Linux integration test of plan M4: one issue end to end against real
-// Docker, a throwaway Forgejo and an httptest CinderStack, with a scripted
+// Docker, a throwaway Forgejo and an httptest Cinderline, with a scripted
 // agent in place of the model. It needs Docker and the network (the tools
 // volume downloads the pinned CLIs), so it sits behind the integration tag:
 //
@@ -23,14 +23,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/cinderstack"
-	"github.com/rodo-software/cinderstack-runner/internal/client"
-	"github.com/rodo-software/cinderstack-runner/internal/config"
-	"github.com/rodo-software/cinderstack-runner/internal/environment"
-	"github.com/rodo-software/cinderstack-runner/internal/forge"
-	"github.com/rodo-software/cinderstack-runner/internal/name"
-	"github.com/rodo-software/cinderstack-runner/internal/tools"
-	"github.com/rodo-software/cinderstack-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // forgejoImage is the throwaway Forgejo, pinned by digest (17.0.1,
@@ -116,7 +116,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 		case "POST /issues/" + ref + "/progress":
 			return reply{204, ""}, true
 		case "PATCH /issues/" + ref:
-			var r cinderstack.UpdateIssueRequest
+			var r cinderline.UpdateIssueRequest
 			_ = json.Unmarshal([]byte(body), &r)
 			if r.Status != "" {
 				status = r.Status
@@ -127,9 +127,9 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	}}
 	c := api.client(t)
 
-	p := Project{Config: config.Project{URL: "http://cinderstack.invalid", Key: project, Repository: repo}, State: t.TempDir(), Env: env, Log: log}
+	p := Project{Config: config.Project{URL: "http://cinderline.invalid", Key: project, Repository: repo}, State: t.TempDir(), Env: env, Log: log}
 	ws := &workspace.Docker{Project: project, Repository: repo + ".git", Token: token}
-	team := cinderstack.Team{ID: 1, Name: "Dev", MaxMinutes: 10, Agents: []cinderstack.TeamAgent{{Name: "Coder", Role: "coder", Client: "claude"}}}
+	team := cinderline.Team{ID: 1, Name: "Dev", MaxMinutes: 10, Agents: []cinderline.TeamAgent{{Name: "Coder", Role: "coder", Client: "claude"}}}
 	branch := name.Name + "/" + ref
 
 	base, err := BaseBranch(ctx, c, fg)

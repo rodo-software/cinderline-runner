@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rodo-software/cinderstack-runner/internal/daemon"
-	"github.com/rodo-software/cinderstack-runner/internal/localapi"
-	"github.com/rodo-software/cinderstack-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/daemon"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 )
 
 // daemonCLI is newCLI with a socket and log in a short temp folder: macOS limits socket paths to 104 bytes.
@@ -195,7 +195,7 @@ func TestNotRunning(t *testing.T) {
 	}
 }
 
-// app is a fake CinderStack for the M2 check: it knows goodToken's project
+// app is a fake Cinderline for the M2 check: it knows goodToken's project
 // WEB, has no work, and counts the reports and heartbeats it gets.
 type app struct {
 	url                 string

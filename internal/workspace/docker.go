@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rodo-software/cinderstack-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // GitImage is the helper's git image, pinned by digest (alpine/git 2.54.0,
@@ -204,7 +204,7 @@ func checkDir(dir string) error {
 }
 
 // Prepare fetches, then makes a fresh clone for branch (always
-// cinderstack/<REF>), continuing the remote branch if a run pushed one, else
+// cinderline/<REF>), continuing the remote branch if a run pushed one, else
 // starting from base. A clone left from before is removed, as today's runner
 // does with old worktrees; a paused run keeps its clone by not preparing.
 func (d *Docker) Prepare(ctx context.Context, branch, base string) (string, error) {
