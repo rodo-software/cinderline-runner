@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
 
@@ -88,5 +90,8 @@ func (c *CLI) login(args []string) int {
 	}
 
 	fmt.Fprintf(c.Stdout, "%s is signed in for project %s; the credentials are on its state volume\n", clientName, key)
+	if err := (localapi.Client{Socket: c.Paths.Socket}).Reload(context.Background()); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
+		fmt.Fprintf(c.Stdout, "Warning: daemon reload failed: %v.\n", err)
+	}
 	return 0
 }

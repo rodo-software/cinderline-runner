@@ -216,7 +216,9 @@ func stripURL(s string) string {
 // Check refuses, before the claim, an issue whose team has an agent this
 // runner cannot run: an unsupported client, or a client without its key, so
 // such a team does not drain To do (decision 0122).
-func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
+// CSR-137: uses the detection result instead of the keychain lookup; detection
+// is cached in-memory and runs once when Check finds no result yet.
+func (p *Project) Check(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
 	if issue.Team == nil {
 		return errors.New("the issue has no team")
 	}
@@ -224,13 +226,33 @@ func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderli
 	if err != nil {
 		return err
 	}
+
+	detected := p.detected(ctx)
+
 	for _, a := range team.Agents {
 		kind, ok := keys[a.Client]
 		if !ok {
 			return &cinderline.ReportError{Kind: cinderline.KindUnsupportedClient, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + "; this runner supports only claude, codex, gemini and opencode"}
 		}
-		if _, _, err := p.Secrets.Get(p.Config, kind); err != nil {
-			return &cinderline.ReportError{Kind: cinderline.KindMissingKey, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + ", which needs this project's " + string(kind) + " key: " + err.Error()}
+		if detected == nil {
+			continue
+		}
+		for _, rc := range detected {
+			if rc.Name != a.Client {
+				continue
+			}
+			switch rc.State {
+			case "missing_binary":
+				return &cinderline.ReportError{Kind: cinderline.KindUnsupportedClient, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + ", which is not in the tools volume"}
+			case "missing_credential":
+				msg := "agent " + a.Name + " runs on " + a.Client + ", which needs this project's " + string(kind) + " key or a login"
+				if a.Client == "opencode" {
+					msg = "agent " + a.Name + " runs on " + a.Client + ", which needs this project's " + string(kind) + " key"
+				}
+				return &cinderline.ReportError{Kind: cinderline.KindMissingKey, Issue: issue.Ref, Message: msg}
+			case "invalid_credential":
+				return &cinderline.ReportError{Kind: cinderline.KindMissingKey, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + ", whose " + string(kind) + " key the provider refused"}
+			}
 		}
 	}
 	return nil

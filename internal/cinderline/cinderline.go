@@ -87,6 +87,10 @@ type Client struct {
 
 	errors     map[string]ReportError // key: issue ref for issue errors, kind for runner-wide errors
 	lastReport []byte                 // JSON of the last report the server accepted; nil at start
+
+	// heldClients replaces base.Clients in SyncReport when set by
+	// SetClients (CSR-137). Nil means use base.Clients.
+	heldClients []ReportClient
 }
 
 // New returns a client for the instance at baseURL, e.g. https://cinderline.example.com.
@@ -256,6 +260,14 @@ func (c *Client) ClearError(key string) {
 	delete(c.errors, key)
 }
 
+// SetClients stores the detection result in memory so the next SyncReport
+// sends it (CSR-137). The caller must keep the version strings alive.
+func (c *Client) SetClients(cs []ReportClient) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.heldClients = cs
+}
+
 // KeepIssueErrors drops every issue error whose ref is not in refs.
 // Runner-wide errors (empty Issue) stay.
 func (c *Client) KeepIssueErrors(refs map[string]bool) {
@@ -281,6 +293,13 @@ func (c *Client) SyncReport(ctx context.Context, base Report) error {
 		return cmp.Or(cmp.Compare(a.Kind, b.Kind), cmp.Compare(a.Issue, b.Issue))
 	})
 	base.Errors = errs
+	// When SetClients was called, use held clients instead of base.Clients
+	// so the detection result replaces the default empty list.
+	clients := base.Clients
+	if c.heldClients != nil {
+		clients = c.heldClients
+	}
+	base.Clients = clients
 	encoded, err := json.Marshal(base)
 	if err != nil {
 		c.mu.Unlock()

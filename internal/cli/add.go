@@ -13,6 +13,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
@@ -170,6 +171,9 @@ func (c *CLI) add(args []string) int {
 	}
 
 	say("Added %s at %s", p.Key, p.URL)
+	if err := (localapi.Client{Socket: c.Paths.Socket}).Reload(context.Background()); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
+		say("Warning: daemon reload failed: %v.", err)
+	}
 	return 0
 }
 

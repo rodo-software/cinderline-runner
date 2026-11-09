@@ -40,6 +40,12 @@ type Project struct {
 	// prepare fills the tools mount on the first agent run, set only by
 	// NewProject as a closure over the Docker environment. Nil in tests.
 	prepare func(ctx context.Context) error
+
+	// detect is overridden by tests; nil means detectClients is called.
+	detect func(ctx context.Context) []cinderline.ReportClient
+
+	// clients caches the last detection result; nil before the first run.
+	clients *clientCache
 }
 
 // runState is the per-slot state shared by the seven hooks.
@@ -75,6 +81,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		Env:       env,
 		Log:       log,
 		Clients:   map[string]client.Client{},
+		clients:   &clientCache{},
 		Workspace: &workspace.Docker{Project: cfg.Key, Repository: cfg.Repository, Token: gitToken},
 	}
 	mcpURL := strings.TrimRight(cfg.URL, "/") + "/mcp"
@@ -121,6 +128,23 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 			}
 		}
 		return nil
+	}
+	exec := env.Exec
+	if exec == nil {
+		exec = workspace.RunCommand
+	}
+	p.detect = func(ctx context.Context) []cinderline.ReportClient {
+		image, err := env.Image(ctx)
+		if err != nil {
+			p.Log.Warn("detection: no image", "project", cfg.Key, "err", err)
+			return allMissingBinary()
+		}
+		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
+		if err != nil {
+			p.Log.Warn("detection: no tools mount", "project", cfg.Key, "err", err)
+			return allMissingBinary()
+		}
+		return detectClients(ctx, exec, cfg, sec, image, mount, p.Log)
 	}
 	return p, nil
 }

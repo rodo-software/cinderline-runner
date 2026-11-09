@@ -33,6 +33,9 @@ type Options struct {
 // errStopping answers a reload that arrives while the daemon stops.
 var errStopping = errors.New("stopping")
 
+// detectInterval is how often client detection reruns (CSR-59).
+const detectInterval = time.Hour
+
 // daemon is the state Run shares with the local API handlers.
 type daemon struct {
 	sched *scheduler.Scheduler
@@ -176,7 +179,6 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		c.Log = log.With("project", p.Key)
 		wg.Go(func() {
 			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
-			// Clients stay empty until their detection in M7 (CSR-59); only the default environment exists yet.
 			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}
 			if err := c.SyncReport(ctx, r); err != nil && ctx.Err() == nil {
 				c.Log.Warn("report failed", "err", err)
@@ -187,6 +189,20 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			t := time.NewTicker(cinderline.HeartbeatInterval)
 			defer t.Stop()
 			c.RunHeartbeats(ctx, t.C, r)
+		})
+		wg.Go(func() {
+			// CSR-137: detection runs at slot start, then every hour.
+			t := time.NewTicker(detectInterval)
+			defer t.Stop()
+			c.SetClients(proj.Detect(ctx))
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					c.SetClients(proj.Detect(ctx))
+				}
+			}
 		})
 		slots = append(slots, scheduler.Slot{Project: p.Key, Client: c, Hooks: proj.Hooks()})
 		projects = append(projects, st)

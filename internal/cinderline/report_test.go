@@ -119,3 +119,52 @@ func TestSyncReportOncePerChange(t *testing.T) {
 		t.Error("an error that was cleared and came back is not a change")
 	}
 }
+
+// CSR-59: detection hands its result to SetClients; the next SyncReport sends
+// it, and an unchanged result sends no report.
+func TestSyncReportSendsClientsOnlyWhenChanged(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var rep struct {
+			Clients json.RawMessage `json:"clients"`
+		}
+		if err := json.Unmarshal(b, &rep); err != nil {
+			t.Errorf("report body %s", b)
+		}
+		mu.Lock()
+		got = append(got, string(rep.Clients))
+		mu.Unlock()
+		w.WriteHeader(204)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, runnerToken, version)
+	c.HTTP = srv.Client()
+	ctx := context.Background()
+	base := Report{RunnerVersion: version, Clients: []ReportClient{}, Environments: []string{"default"}}
+	v := "2.1.316"
+	sync := func(want ...string) {
+		t.Helper()
+		mu.Lock()
+		before := len(got)
+		mu.Unlock()
+		if err := c.SyncReport(ctx, base); err != nil {
+			t.Fatalf("SyncReport: %v", err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if sent := got[before:]; len(sent) != len(want) || len(want) == 1 && sent[0] != want[0] {
+			t.Fatalf("clients sent = %q, want %q", sent, want)
+		}
+	}
+
+	sync(`[]`) // before any detection: the base report's empty list
+	c.SetClients([]ReportClient{{Name: "claude", Version: &v, State: "ready"}, {Name: "codex", State: "missing_credential"}})
+	sync(`[{"name":"claude","version":"2.1.316","state":"ready"},{"name":"codex","version":null,"state":"missing_credential"}]`)
+	c.SetClients([]ReportClient{{Name: "claude", Version: &v, State: "ready"}, {Name: "codex", State: "missing_credential"}})
+	sync() // unchanged result sends no report
+	c.SetClients([]ReportClient{{Name: "claude", Version: &v, State: "invalid_credential"}, {Name: "codex", State: "missing_credential"}})
+	sync(`[{"name":"claude","version":"2.1.316","state":"invalid_credential"},{"name":"codex","version":null,"state":"missing_credential"}]`)
+	sync()
+}

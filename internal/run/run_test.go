@@ -268,6 +268,9 @@ func checkKind(t *testing.T, err error, kind, issue string) {
 // team cases, plus "an issue that fails before its claim does not block the
 // next" (a team that cannot be read). A Claude agent needs this project's
 // Anthropic credential, as an OpenCode agent needs its OpenRouter key.
+// CSR-59: skip-before-claim uses the detection result, not the keychain: a
+// login counts as configured, a refused key or a missing binary skips the
+// issue too, and detection runs once when Check finds no result yet.
 func TestCheck(t *testing.T) {
 	agent := func(name, client string) map[string]any {
 		return map[string]any{"name": name, "role": "orchestrator", "client": client, "model": "m", "instructions": nil}
@@ -276,43 +279,55 @@ func TestCheck(t *testing.T) {
 		b, _ := json.Marshal(map[string]any{"id": 1, "name": "Dev", "max_minutes": 1, "trusted": false, "agents": agents})
 		return reply{200, string(b)}
 	}
+	all := func(state string, except map[string]string) []cinderline.ReportClient {
+		var cs []cinderline.ReportClient
+		for _, n := range []string{"claude", "codex", "gemini", "opencode"} {
+			st := state
+			if s, ok := except[n]; ok {
+				st = s
+			}
+			cs = append(cs, cinderline.ReportClient{Name: n, State: st})
+		}
+		return cs
+	}
 	for _, tt := range []struct {
-		name string
-		team reply
-		keys []secrets.Kind
-		err  string
-		kind string
+		name     string
+		team     reply
+		detected []cinderline.ReportClient
+		err      string
+		kind     string
 	}{
-		{"claude and opencode with both keys", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, "", ""},
-		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential}, "Qwen runs on opencode, which needs this project's openrouter", cinderline.KindMissingKey},
-		{"a Codex agent with an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.OpenAIKey}, "", ""},
-		{"a Codex agent without an OpenAI key", team(agent("C", "codex")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, "C runs on codex, which needs this project's openai", cinderline.KindMissingKey},
-		{"a Gemini agent with a Gemini key", team(agent("G", "gemini")), []secrets.Kind{secrets.GeminiKey}, "", ""},
-		{"a Gemini agent without a Gemini key", team(agent("G", "gemini")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey}, "G runs on gemini, which needs this project's gemini", cinderline.KindMissingKey},
-		{"an orchestrator on another client", team(agent("A", "aider")), nil, "A runs on aider; this runner supports only claude, codex, gemini and opencode", cinderline.KindUnsupportedClient},
-		{"a Claude agent without an Anthropic credential", team(agent("Boss", "claude")), nil, "Boss runs on claude, which needs this project's anthropic", cinderline.KindMissingKey},
-		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, nil, "Unknown team.", ""},
+		{"claude and opencode both ready", team(agent("Boss", "claude"), agent("Qwen", "opencode")), all("ready", nil), "", ""},
+		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), all("ready", map[string]string{"opencode": "missing_credential"}), "Qwen runs on opencode, which needs this project's openrouter", cinderline.KindMissingKey},
+		{"a Codex agent without an OpenAI key or login", team(agent("C", "codex")), all("ready", map[string]string{"codex": "missing_credential"}), "C runs on codex, which needs this project's openai", cinderline.KindMissingKey},
+		{"a Gemini agent whose key the provider refused", team(agent("G", "gemini")), all("ready", map[string]string{"gemini": "invalid_credential"}), "G runs on gemini, whose gemini key the provider refused", cinderline.KindMissingKey},
+		{"a Claude agent whose binary is missing", team(agent("Boss", "claude")), all("ready", map[string]string{"claude": "missing_binary"}), "Boss runs on claude, which is not in the tools volume", cinderline.KindUnsupportedClient},
+		{"a Claude agent on a login, no keychain key", team(agent("Boss", "claude")), all("ready", nil), "", ""},
+		{"an orchestrator on another client", team(agent("A", "aider")), all("ready", nil), "A runs on aider; this runner supports only claude, codex, gemini and opencode", cinderline.KindUnsupportedClient},
+		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, all("ready", nil), "Unknown team.", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := project(t)
-			for _, k := range tt.keys {
-				if _, err := p.Secrets.Set(cfg, k, "s3cr3t-value"); err != nil {
-					t.Fatal(err)
-				}
+			detections := 0
+			p.detect = func(context.Context) []cinderline.ReportClient {
+				detections++
+				return tt.detected
 			}
 			api := &fakeAPI{routes: map[string]reply{"GET /teams/1": tt.team}}
 			issue := cinderline.Issue{Ref: "CSR-1", Team: &cinderline.IssueTeam{ID: 1, Name: "Dev"}}
-			err := p.Check(context.Background(), api.client(t), issue)
-			if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
-				t.Fatalf("Check = %v, want an error with %q", err, tt.err)
+			for range 2 {
+				err := p.Check(context.Background(), api.client(t), issue)
+				if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
+					t.Fatalf("Check = %v, want an error with %q", err, tt.err)
+				}
+				if tt.kind != "" {
+					checkKind(t, err, tt.kind, "CSR-1")
+				} else {
+					checkKind(t, err, "", "")
+				}
 			}
-			if tt.kind != "" {
-				checkKind(t, err, tt.kind, "CSR-1")
-			} else {
-				checkKind(t, err, "", "")
-			}
-			if err != nil && strings.Contains(err.Error(), "s3cr3t-value") {
-				t.Errorf("error %q carries a secret", err)
+			if tt.team.status == 200 && detections != 1 {
+				t.Errorf("detection ran %d times over two checks, want once (the result is cached)", detections)
 			}
 		})
 	}
