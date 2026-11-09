@@ -297,11 +297,24 @@ func TestUpdateRestartsServiceAfterDrain(t *testing.T) {
 	c, exe, _ := updateCLI(t, "9.9.9", nil)
 	saveConfig(t, c)
 	done := startDaemon(t, c)
+	// CSR-109: the socket closes before the daemon's process exits, so update
+	// must wait until the daemon's process is gone; here that is "Run returned".
+	var asked []int
+	exited := false // done is buffered: receive it once and remember
+	c.processGone = func(pid int) bool {
+		asked = append(asked, pid)
+		if !exited {
+			select {
+			case <-done:
+				exited = true
+			default:
+			}
+		}
+		return exited
+	}
 	var started []string
 	c.startService = func(path string) (bool, error) {
-		select {
-		case <-done:
-		default:
+		if !exited {
 			t.Error("service started before the daemon exited")
 		}
 		started = append(started, path)
@@ -313,6 +326,9 @@ func TestUpdateRestartsServiceAfterDrain(t *testing.T) {
 	}
 	if len(started) != 1 || started[0] != exe {
 		t.Fatalf("startService calls %q, want one with %q", started, exe)
+	}
+	if len(asked) == 0 || asked[0] != os.Getpid() {
+		t.Errorf("processGone asked about %v, want the daemon's pid %d from its status", asked, os.Getpid())
 	}
 	if !strings.Contains(out.String(), "service") {
 		t.Errorf("stdout %q, want it to say the service was started", out.String())

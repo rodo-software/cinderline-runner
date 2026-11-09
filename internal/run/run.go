@@ -7,7 +7,6 @@ package run
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -194,18 +193,32 @@ func (p Project) Pin(ctx context.Context, c *cinderline.Client) error {
 		return err
 	}
 	if proj.RepositoryURL == "" {
-		return fmt.Errorf("the project in Cinderline names no repository for %s; this runner is configured for %s", p.Config.Key, p.Config.Repository)
+		return &cinderline.ReportError{Kind: cinderline.KindRepositoryMismatch, Message: "the project in Cinderline names no repository for " + p.Config.Key + "; this runner is configured for " + stripURL(p.Config.Repository)}
 	}
 	if !config.SameRepository(proj.RepositoryURL, p.Config.Repository) {
-		return fmt.Errorf("the project in Cinderline names the repository %s, but this runner is configured for %s", proj.RepositoryURL, p.Config.Repository)
+		return &cinderline.ReportError{Kind: cinderline.KindRepositoryMismatch, Message: "the project in Cinderline names the repository " + stripURL(proj.RepositoryURL) + ", but this runner is configured for " + stripURL(p.Config.Repository)}
 	}
 	return nil
+}
+
+// stripURL removes user info from a URL string. scp-form git@host:o/r stays
+// as it is. A string that is not a valid URL is returned unchanged.
+func stripURL(s string) string {
+	if strings.Contains(s, "://") {
+		if u, err := url.Parse(s); err == nil && u.User != nil {
+			u.User = nil
+			return u.String()
+		}
+	}
+	return s
 }
 
 // Check refuses, before the claim, an issue whose team has an agent this
 // runner cannot run: an unsupported client, or a client without its key, so
 // such a team does not drain To do (decision 0122).
-func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
+// CSR-137: uses the detection result instead of the keychain lookup; detection
+// is cached in-memory and runs once when Check finds no result yet.
+func (p *Project) Check(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
 	if issue.Team == nil {
 		return errors.New("the issue has no team")
 	}
@@ -213,13 +226,33 @@ func (p Project) Check(ctx context.Context, c *cinderline.Client, issue cinderli
 	if err != nil {
 		return err
 	}
+
+	detected := p.detected(ctx)
+
 	for _, a := range team.Agents {
 		kind, ok := keys[a.Client]
 		if !ok {
-			return fmt.Errorf("agent %s runs on %s; this runner supports only claude and opencode", a.Name, a.Client)
+			return &cinderline.ReportError{Kind: cinderline.KindUnsupportedClient, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + "; this runner supports only claude, codex, gemini and opencode"}
 		}
-		if _, _, err := p.Secrets.Get(p.Config, kind); err != nil {
-			return fmt.Errorf("agent %s runs on %s, which needs this project's %s key: %w", a.Name, a.Client, kind, err)
+		if detected == nil {
+			continue
+		}
+		for _, rc := range detected {
+			if rc.Name != a.Client {
+				continue
+			}
+			switch rc.State {
+			case "missing_binary":
+				return &cinderline.ReportError{Kind: cinderline.KindUnsupportedClient, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + ", which is not in the tools volume"}
+			case "missing_credential":
+				msg := "agent " + a.Name + " runs on " + a.Client + ", which needs this project's " + string(kind) + " key or a login"
+				if a.Client == "opencode" {
+					msg = "agent " + a.Name + " runs on " + a.Client + ", which needs this project's " + string(kind) + " key"
+				}
+				return &cinderline.ReportError{Kind: cinderline.KindMissingKey, Issue: issue.Ref, Message: msg}
+			case "invalid_credential":
+				return &cinderline.ReportError{Kind: cinderline.KindMissingKey, Issue: issue.Ref, Message: "agent " + a.Name + " runs on " + a.Client + ", whose " + string(kind) + " key the provider refused"}
+			}
 		}
 	}
 	return nil

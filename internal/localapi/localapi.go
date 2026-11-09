@@ -44,6 +44,7 @@ func Listen(path string) (net.Listener, error) {
 // Status is the answer of GET /status.
 type Status struct {
 	Version  string                    `json:"version"`
+	PID      int                       `json:"pid"` // the daemon's process id; stop --drain and update wait for it to exit
 	Projects []scheduler.ProjectStatus `json:"projects"`
 }
 
@@ -65,7 +66,7 @@ func Handler(h Handlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(Status{Version: h.Version, Projects: h.Status()})
+		json.NewEncoder(w).Encode(Status{Version: h.Version, PID: os.Getpid(), Projects: h.Status()})
 	})
 	mux.HandleFunc("GET /logs", func(w http.ResponseWriter, r *http.Request) {
 		n := 100

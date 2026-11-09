@@ -58,7 +58,9 @@ type app struct {
 	claimStatus int
 	hold        time.Duration
 	ev          *events
-	rewind      bool // a PATCH to To do changes the ETag, so the next /work answers the issue again (CSR-81)
+	rewind      bool          // a PATCH to To do changes the ETag, so the next /work answers the issue again (CSR-81)
+	workFails   *atomic.Bool  // while true, /work answers 500
+	etagBump    *atomic.Int32 // added to the ETag's version: a change on the board
 }
 
 func (a app) start(t *testing.T) *cinderline.Client {
@@ -67,12 +69,30 @@ func (a app) start(t *testing.T) *cinderline.Client {
 		t.Fatal("app needs events")
 	}
 	var version atomic.Int32
-	etag := func() string { return fmt.Sprintf(`"v%d"`, version.Load()+1) }
+	etag := func() string {
+		v := version.Load() + 1
+		if a.etagBump != nil {
+			v += a.etagBump.Load()
+		}
+		return fmt.Sprintf(`"v%d"`, v)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/runner/v1")
+		raw, _ := io.ReadAll(r.Body)
 		var in map[string]string // the request body, if any
-		_ = json.NewDecoder(r.Body).Decode(&in)
+		_ = json.Unmarshal(raw, &in)
 		switch {
+		case r.Method == "GET" && path == "/work" && a.workFails != nil && a.workFails.Load():
+			a.ev.add("GET /work failed")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"message":"Server error."}`)
+		case r.Method == "PUT" && path == "/report":
+			var rep struct {
+				Errors json.RawMessage `json:"errors"`
+			}
+			_ = json.Unmarshal(raw, &rep)
+			a.ev.add("PUT /report " + string(rep.Errors))
+			w.WriteHeader(http.StatusNoContent)
 		case r.Method == "GET" && path == "/work" && r.Header.Get("If-None-Match") == etag():
 			a.ev.add("GET /work cached")
 			select {
@@ -145,6 +165,8 @@ func sched() (*Scheduler, *logBuf) {
 		ReviewInterval: 10 * time.Millisecond,
 		MergeInterval:  10 * time.Millisecond,
 		MaxBackoff:     20 * time.Millisecond,
+		IdleWait:       time.Millisecond,
+		MaxIdleWait:    10 * time.Millisecond,
 	}, buf
 }
 
@@ -730,5 +752,266 @@ func TestDrainWhileIdleReturnsAtOnce(t *testing.T) {
 	}
 	if l := buf.String(); strings.Contains(l, `"level":"ERROR"`) {
 		t.Errorf("the drain was logged as a failure:\n%s", l)
+	}
+}
+
+// pacedWork is a runner API whose /work answers at once (CSR-113): answers(n)
+// gives the body of the nth call, from 1, each with a new ETag. It records when
+// each /work call came.
+func pacedWork(t *testing.T, answers func(n int) string) (*cinderline.Client, func() []time.Time) {
+	t.Helper()
+	var mu sync.Mutex
+	var at []time.Time
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/runner/v1/work" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		mu.Lock()
+		at = append(at, time.Now())
+		n := len(at)
+		mu.Unlock()
+		w.Header().Set("ETag", fmt.Sprintf(`"v%d"`, n))
+		_, _ = io.WriteString(w, `{"issue":`+answers(n)+`}`)
+	}))
+	t.Cleanup(srv.Close)
+	c := cinderline.New(srv.URL, "tok", "0.0.0")
+	c.HTTP = srv.Client()
+	c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	return c, func() []time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Time(nil), at...)
+	}
+}
+
+// A server that answers at once with no work gets one GET /work per
+// IdleWait, not a tight loop (CSR-113).
+func TestEmptyAnswersArePaced(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 50*time.Millisecond, 50*time.Millisecond
+	c, calls := pacedWork(t, func(int) string { return "null" })
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	time.Sleep(300 * time.Millisecond)
+	stop(time.Second)
+	if n := len(calls()); n < 3 || n > 8 {
+		t.Fatalf("%d GET /work in 300ms at one per 50ms, want about 6", n)
+	}
+}
+
+// Unchanged answers (304) are paced too.
+func TestUnchangedAnswersArePaced(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 50*time.Millisecond, 50*time.Millisecond
+	ev := &events{}
+	c := app{issue: "null", ev: ev}.start(t) // hold 0: the 304 comes at once
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	time.Sleep(300 * time.Millisecond)
+	stop(time.Second)
+	if n := ev.count("GET /work") + ev.count("GET /work cached"); n < 3 || n > 8 {
+		t.Fatalf("%d GET /work in 300ms at one per 50ms, want about 6", n)
+	}
+}
+
+// The wait doubles per empty answer up to MaxIdleWait.
+func TestIdleWaitDoubles(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 20*time.Millisecond, 80*time.Millisecond
+	c, calls := pacedWork(t, func(int) string { return "null" })
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "six calls", func() bool { return len(calls()) >= 6 })
+	stop(time.Second)
+	at := calls()
+	// waits 20, 40, 80, 80, 80 ms
+	for i, min := range []time.Duration{20, 40, 80, 80, 80} {
+		if gap := at[i+1].Sub(at[i]); gap < min*time.Millisecond {
+			t.Errorf("gap %d = %v, want at least %v", i+1, gap, min*time.Millisecond)
+		}
+	}
+	if gap := at[5].Sub(at[4]); gap > 150*time.Millisecond {
+		t.Errorf("gap 5 = %v, want about 80ms (the ceiling)", gap)
+	}
+}
+
+// A 200 with an issue resets the wait to IdleWait.
+func TestAnswerWithWorkResetsIdleWait(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 20*time.Millisecond, time.Second
+	c, calls := pacedWork(t, func(n int) string {
+		if n == 5 {
+			return issue // skipped: no run step
+		}
+		return "null"
+	})
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "six calls", func() bool { return len(calls()) >= 6 })
+	stop(time.Second)
+	at := calls()
+	// before the issue the wait grew to 160ms; after it, back to 20ms
+	if gap := at[5].Sub(at[4]); gap < 20*time.Millisecond || gap > 100*time.Millisecond {
+		t.Fatalf("wait after the answer with an issue = %v, want 20ms (reset)", gap)
+	}
+}
+
+// Stopping during an idle wait returns at once, not after the wait (CSR-113).
+func TestStopDuringIdleWait(t *testing.T) {
+	s, _ := sched()
+	s.IdleWait, s.MaxIdleWait = 10*time.Second, 10*time.Second
+	c, calls := pacedWork(t, func(int) string { return "null" })
+	stop := start(t, s, []Slot{{Project: "CSR", Client: c}})
+	waitFor(t, "the first call", func() bool { return len(calls()) == 1 })
+	stop(500 * time.Millisecond)
+}
+
+// prefixed returns the events that start with p.
+func prefixed(ev *events, p string) []string {
+	var got []string
+	for _, e := range ev.all() {
+		if strings.HasPrefix(e, p) {
+			got = append(got, e)
+		}
+	}
+	return got
+}
+
+var base = cinderline.Report{RunnerVersion: "0.0.0", Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}
+
+// syncReport sends the report as the heartbeat loop would and returns the
+// PUT /report events it caused.
+func syncReport(t *testing.T, c *cinderline.Client, ev *events) []string {
+	t.Helper()
+	before := len(prefixed(ev, "PUT /report"))
+	if err := c.SyncReport(context.Background(), base); err != nil {
+		t.Fatalf("SyncReport: %v", err)
+	}
+	return prefixed(ev, "PUT /report")[before:]
+}
+
+// CSR-60 and the M7 check "a missing key shows up in Cinderline" (decision
+// 2026-11-08-errors-reach-cinderline): an issue skipped before the claim for
+// a missing key or an unsupported client gets one comment per change, never
+// one per poll, and the error is in the next report; once the issue passes
+// Check, the report drops it.
+func TestSkipErrorShowsUpInCinderlineOncePerChange(t *testing.T) {
+	for _, tt := range []struct{ name, kind, first, second string }{
+		{"missing key", cinderline.KindMissingKey, "agent Ada runs on codex, which needs this project's openai key", "agent Ada runs on gemini, which needs this project's gemini key"},
+		{"unsupported client", cinderline.KindUnsupportedClient, "agent Ada runs on aider", "agent Bob runs on cursor"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s, _ := sched()
+			ev := &events{}
+			c := app{issue: issue, todo: "[" + issue + "]", claimStatus: 200, hold: 20 * time.Millisecond, ev: ev}.start(t)
+			var msg atomic.Value
+			msg.Store(tt.first)
+			var refuse atomic.Bool
+			refuse.Store(true)
+			start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
+				Check: func(_ context.Context, _ *cinderline.Client, i cinderline.Issue) error {
+					ev.add("check " + i.Ref)
+					if !refuse.Load() {
+						return nil
+					}
+					return &cinderline.ReportError{Kind: tt.kind, Issue: i.Ref, Message: msg.Load().(string)}
+				},
+				Run: recordIssue(ev, "run"),
+			}}})
+			comments := func() []string { return prefixed(ev, "POST /issues/CSR-9/comments") }
+
+			waitFor(t, "three checks", func() bool { return ev.count("check CSR-9") >= 3 })
+			if got := comments(); len(got) != 1 || !strings.Contains(got[0], tt.first) {
+				t.Fatalf("comments after three skips = %q, want one naming %q", got, tt.first)
+			}
+			if got := prefixed(ev, "PUT"); len(got) != 0 {
+				t.Fatalf("polls wrote reports: %q", got)
+			}
+			want := `PUT /report [{"kind":"` + tt.kind + `","issue":"CSR-9","message":"` + tt.first + `"}]`
+			if got := syncReport(t, c, ev); len(got) != 1 || got[0] != want {
+				t.Fatalf("report = %q, want %q", got, want)
+			}
+
+			msg.Store(tt.second)
+			waitFor(t, "the second comment", func() bool { return len(comments()) == 2 })
+			n := ev.count("check CSR-9")
+			waitFor(t, "three more checks", func() bool { return ev.count("check CSR-9") >= n+3 })
+			if got := comments(); len(got) != 2 || !strings.Contains(got[1], tt.second) {
+				t.Fatalf("comments = %q, want a second one naming %q and no more", got, tt.second)
+			}
+
+			refuse.Store(false)
+			waitFor(t, "the run", func() bool { return ev.count("run CSR-9") == 1 })
+			if got := syncReport(t, c, ev); len(got) != 1 || got[0] != "PUT /report []" {
+				t.Fatalf("report after the issue passed = %q, want an empty list", got)
+			}
+			if got := comments(); len(got) != 2 {
+				t.Errorf("comments = %q, want still two", got)
+			}
+		})
+	}
+}
+
+// CSR-60: a repository mismatch has no issue to comment on; it stays a slot
+// failure (status and log as before) and goes into the next report only. It
+// leaves the report once a later poll pins the repository again.
+func TestRepositoryMismatchGoesIntoTheReport(t *testing.T) {
+	s, _ := sched()
+	ev := &events{}
+	var bump atomic.Int32
+	c := app{issue: issue, todo: "[" + issue + "]", claimStatus: 200, hold: 20 * time.Millisecond, ev: ev, etagBump: &bump}.start(t)
+	var mismatch atomic.Bool
+	mismatch.Store(true)
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
+		Pin: func(context.Context, *cinderline.Client) error {
+			ev.add("pin")
+			if mismatch.Load() {
+				return &cinderline.ReportError{Kind: cinderline.KindRepositoryMismatch, Message: "Cinderline names https://evil.example/o/r"}
+			}
+			return nil
+		},
+		Run: recordIssue(ev, "run"),
+	}}})
+	waitFor(t, "the slot failure", func() bool { return strings.Contains(s.Status()["CSR"].LastError, "evil.example") })
+	waitFor(t, "two more polls", func() bool { return ev.count("GET /work cached") >= 2 })
+	if got := append(writes(ev), prefixed(ev, "PUT")...); len(got) != 0 {
+		t.Fatalf("a repository mismatch wrote %q", got)
+	}
+	want := `PUT /report [{"kind":"repository_mismatch","message":"Cinderline names https://evil.example/o/r"}]`
+	if got := syncReport(t, c, ev); len(got) != 1 || got[0] != want {
+		t.Fatalf("report = %q, want %q", got, want)
+	}
+	mismatch.Store(false)
+	bump.Add(1) // the board changes, so the next poll answers the issue and pins again
+	waitFor(t, "the run", func() bool { return ev.count("run CSR-9") == 1 })
+	if got := syncReport(t, c, ev); len(got) != 1 || got[0] != "PUT /report []" {
+		t.Fatalf("report after the pin passed = %q, want an empty list", got)
+	}
+}
+
+// CSR-60, "no write per poll": failing polls write nothing, neither a comment
+// nor a report; the failure rides on the next report, is not sent twice, and
+// leaves the report after the next successful poll.
+func TestFailedPollsRideOnTheNextReport(t *testing.T) {
+	s, _ := sched()
+	ev := &events{}
+	var fails atomic.Bool
+	fails.Store(true)
+	c := app{issue: "null", claimStatus: 200, hold: 20 * time.Millisecond, ev: ev, workFails: &fails}.start(t)
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{Run: recordIssue(ev, "run")}}})
+	waitFor(t, "three failed polls", func() bool { return ev.count("GET /work failed") >= 3 })
+	if got := append(writes(ev), prefixed(ev, "PUT")...); len(got) != 0 {
+		t.Fatalf("failed polls wrote %q", got)
+	}
+	got := syncReport(t, c, ev)
+	if len(got) != 1 || !strings.HasPrefix(got[0], `PUT /report [{"kind":"poll_failed","message":"`) || !strings.Contains(got[0], "500") {
+		t.Fatalf("report = %q, want one poll_failed error naming the 500", got)
+	}
+	n := ev.count("GET /work failed")
+	waitFor(t, "more failed polls", func() bool { return ev.count("GET /work failed") >= n+2 })
+	if got := syncReport(t, c, ev); len(got) != 0 {
+		t.Fatalf("an unchanged failure was reported again: %q", got)
+	}
+	fails.Store(false)
+	waitFor(t, "a successful poll", func() bool { return s.Status()["CSR"].Connected })
+	if got := syncReport(t, c, ev); len(got) != 1 || got[0] != "PUT /report []" {
+		t.Fatalf("report after a successful poll = %q, want an empty list", got)
 	}
 }

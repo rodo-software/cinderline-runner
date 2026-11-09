@@ -162,8 +162,18 @@ func runPs(t *testing.T, srv *httptest.Server) (string, string, error) {
 		}
 	}
 	local := t.TempDir()
+	// pwsh's PSModulePath stops Windows PowerShell 5.1 from finding Get-FileHash.
+	env := make([]string, 0, len(os.Environ()))
+	for _, e := range os.Environ() {
+		key, _, _ := strings.Cut(e, "=")
+		if strings.EqualFold(key, "PSModulePath") {
+			continue
+		}
+		env = append(env, e)
+	}
+	env = append(env, "LOCALAPPDATA="+local, urlEnv+"="+srv.URL)
 	cmd := exec.Command(ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "install.ps1")
-	cmd.Env = append(os.Environ(), "LOCALAPPDATA="+local, urlEnv+"="+srv.URL)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	return filepath.Join(local, "Programs", name.Name, name.Name+".exe"), string(out), err
 }

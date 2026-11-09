@@ -112,9 +112,13 @@ var operations = []operation{
 	{"claimIssue", func(ctx context.Context, c *Client) (any, error) { return c.ClaimIssue(ctx, "CSR-9", "todo") },
 		"POST", "/api/runner/v1/issues/CSR-9/claim", "", `{"expected_status":"todo"}`, 200, issueWithCommentsJSON},
 	{"listComments", func(ctx context.Context, c *Client) (any, error) {
-		cs, err := c.ListComments(ctx, "CSR-9")
+		cs, err := c.ListComments(ctx, "CSR-9", 0)
 		return map[string]any{"comments": cs}, err
 	}, "GET", "/api/runner/v1/issues/CSR-9/comments", "", "", 200, `{"comments":[` + commentJSON + `]}`},
+	{"listComments after", func(ctx context.Context, c *Client) (any, error) {
+		cs, err := c.ListComments(ctx, "CSR-9", 250)
+		return map[string]any{"comments": cs}, err
+	}, "GET", "/api/runner/v1/issues/CSR-9/comments", "after=250", "", 200, `{"comments":[` + commentJSON + `]}`},
 	{"addComment", func(ctx context.Context, c *Client) (any, error) { return c.AddComment(ctx, "CSR-9", "hi") },
 		"POST", "/api/runner/v1/issues/CSR-9/comments", "", `{"body":"hi"}`, 201, commentJSON},
 	{"addProgress", func(ctx context.Context, c *Client) (any, error) { return nil, c.AddProgress(ctx, "CSR-9", "step 2") },
@@ -128,7 +132,7 @@ var operations = []operation{
 			{Name: "claude", Version: &v, State: "ready"}, {Name: "opencode", State: "missing_binary"},
 		}, Environments: []string{"default", "docker"}})
 	}, "PUT", "/api/runner/v1/report", "",
-		`{"runner_version":"1.2.0","clients":[{"name":"claude","version":"2.0.1","state":"ready"},{"name":"opencode","version":null,"state":"missing_binary"}],"environments":["default","docker"]}`,
+		`{"runner_version":"1.2.0","clients":[{"name":"claude","version":"2.0.1","state":"ready"},{"name":"opencode","version":null,"state":"missing_binary"}],"environments":["default","docker"],"errors":[]}`,
 		204, ""},
 	{"heartbeat", func(ctx context.Context, c *Client) (any, error) { return nil, c.Heartbeat(ctx) },
 		"POST", "/api/runner/v1/heartbeat", "", "", 204, ""},
@@ -212,6 +216,27 @@ func TestWorkETag(t *testing.T) {
 	}
 }
 
+// A weak ETag goes back verbatim (CSR-113: weak forms match on the server).
+func TestWorkWeakETagVerbatim(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("If-None-Match"))
+		w.Header().Set(name.Name+"-Api-Version", "1.0.0")
+		w.Header().Set("ETag", `W/"a-1"`)
+		_, _ = io.WriteString(w, `{"issue":null}`)
+	}))
+	defer srv.Close()
+	c := New(srv.URL, runnerToken, version)
+	for range 2 {
+		if _, err := c.Work(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []string{"", `W/"a-1"`}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("If-None-Match = %q, want %q", seen, want)
+	}
+}
+
 func TestUpgradeRequired(t *testing.T) {
 	c, _ := server(t, 426, `{"message":"Upgrade the runner.","minimum_runner_version":"1.3.0"}`,
 		map[string]string{name.Name + "-Api-Version": "1.4.0"})
@@ -272,11 +297,22 @@ func TestWorkTimeout(t *testing.T) {
 	}
 }
 
+// RunHeartbeats sends one heartbeat per tick and, after it, the report when
+// it changed since the last one the server accepted (decision
+// 2026-11-08-errors-reach-cinderline): a failed heartbeat is logged, and an
+// unchanged report is not sent again.
 func TestRunHeartbeats(t *testing.T) {
 	hits := make(chan struct{}, 10)
 	var mu sync.Mutex
-	n := 0
+	n, reports := 0, 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "PUT" && r.URL.Path == "/api/runner/v1/report" {
+			mu.Lock()
+			reports++
+			mu.Unlock()
+			w.WriteHeader(204)
+			return
+		}
 		mu.Lock()
 		n++
 		first := n == 1
@@ -300,19 +336,27 @@ func TestRunHeartbeats(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ticks := make(chan time.Time)
 	done := make(chan struct{})
-	go func() { c.RunHeartbeats(ctx, ticks); close(done) }()
+	base := Report{RunnerVersion: version, Clients: []ReportClient{}, Environments: []string{"default"}}
+	go func() { c.RunHeartbeats(ctx, ticks, base); close(done) }()
 	for range 3 {
 		ticks <- time.Now()
 		<-hits
 	}
+	ticks <- time.Now() // the loop has finished the third tick's report once it takes the fourth
+	<-hits
 	cancel()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunHeartbeats did not stop after cancel")
 	}
-	if n != 3 {
-		t.Errorf("heartbeats = %d, want 3", n)
+	mu.Lock()
+	defer mu.Unlock()
+	if n != 4 {
+		t.Errorf("heartbeats = %d, want 4", n)
+	}
+	if reports != 1 {
+		t.Errorf("reports = %d, want 1: the first tick sends it, unchanged ones do not", reports)
 	}
 	if got := strings.Count(buf.String(), "level=WARN"); got != 1 {
 		t.Errorf("warn lines = %d, want 1:\n%s", got, buf.String())
@@ -350,5 +394,28 @@ func TestNoTokensInLogsOrErrors(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "path=/api/runner/v1/runs/CSR-9/agent-token") {
 		t.Errorf("log has no request lines:\n%s", buf.String())
+	}
+}
+
+// GET /issues returns at most 200 rows: a full page logs one warning naming
+// the status and is used as it is; a page below the cap logs nothing.
+func TestListIssuesWarnsAtTheCap(t *testing.T) {
+	for n, warn := range map[int]bool{199: false, 200: true} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(name.Name+"-Api-Version", "1.0.0")
+			_, _ = io.WriteString(w, `{"issues":[`+strings.Repeat(issueJSON+",", n-1)+issueJSON+`]}`)
+		}))
+		c := New(srv.URL, runnerToken, version)
+		var buf bytes.Buffer
+		c.Log = slog.New(slog.NewTextHandler(&buf, nil))
+		is, err := c.ListIssues(context.Background(), "todo")
+		srv.Close()
+		if err != nil || len(is) != n {
+			t.Fatalf("%d: ListIssues = %d issues, %v", n, len(is), err)
+		}
+		got := strings.Count(buf.String(), "more than 200 todo issues; only the first 200 are handled")
+		if want := map[bool]int{false: 0, true: 1}[warn]; got != want {
+			t.Errorf("%d issues: %d warnings, want %d; log:\n%s", n, got, want, buf.String())
+		}
 	}
 }

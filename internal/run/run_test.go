@@ -216,16 +216,21 @@ func TestPausedDirIsPerProject(t *testing.T) {
 // Ported from legacy runner.test.mjs "<x> is skipped before the claim", the
 // repository cases, and lib.test.mjs "assertRepository accepts only the
 // configured repository".
+// CSR-60: a mismatch or a missing repository is a repository_mismatch
+// error for the report, its text without the credentials of either URL; a
+// project that cannot be read is a plain error (a failed poll).
 func TestPin(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		rep  reply
 		err  string
+		kind string
 	}{
-		{"the configured repository", reply{200, `{"key":"CSR","repository_url":"git@git.example:o/r.git"}`}, ""},
-		{"a repository other than the configured one", reply{200, `{"key":"CSR","repository_url":"https://evil.example/o/r.git"}`}, "evil.example"},
-		{"a project without a repository", reply{200, `{"key":"CSR","repository_url":""}`}, "no repository"},
-		{"no project", reply{500, `{"message":"Server error."}`}, "500"},
+		{"the configured repository", reply{200, `{"key":"CSR","repository_url":"git@git.example:o/r.git"}`}, "", ""},
+		{"a repository other than the configured one", reply{200, `{"key":"CSR","repository_url":"https://evil.example/o/r.git"}`}, "evil.example", cinderline.KindRepositoryMismatch},
+		{"another repository with credentials in its URL", reply{200, `{"key":"CSR","repository_url":"https://bob:s3cr3t-value@evil.example/o/r.git"}`}, "evil.example", cinderline.KindRepositoryMismatch},
+		{"a project without a repository", reply{200, `{"key":"CSR","repository_url":""}`}, "no repository", cinderline.KindRepositoryMismatch},
+		{"no project", reply{500, `{"message":"Server error."}`}, "500", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := project(t)
@@ -234,7 +239,27 @@ func TestPin(t *testing.T) {
 			if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
 				t.Fatalf("Pin = %v, want an error with %q", err, tt.err)
 			}
+			checkKind(t, err, tt.kind, "")
+			if err != nil && strings.Contains(err.Error(), "s3cr3t-value") {
+				t.Errorf("error %q carries a credential", err)
+			}
 		})
+	}
+}
+
+// checkKind fails unless err is a *cinderline.ReportError of kind for issue,
+// or, when kind is empty, not a ReportError at all.
+func checkKind(t *testing.T, err error, kind, issue string) {
+	t.Helper()
+	var re *cinderline.ReportError
+	if !errors.As(err, &re) {
+		if kind != "" {
+			t.Errorf("error %v is not a ReportError of kind %s", err, kind)
+		}
+		return
+	}
+	if re.Kind != kind || re.Issue != issue || re.Message != err.Error() {
+		t.Errorf("ReportError = %+v (Error() %q), want kind %q, issue %q and Message equal to Error()", *re, err.Error(), kind, issue)
 	}
 }
 
@@ -243,6 +268,9 @@ func TestPin(t *testing.T) {
 // team cases, plus "an issue that fails before its claim does not block the
 // next" (a team that cannot be read). A Claude agent needs this project's
 // Anthropic credential, as an OpenCode agent needs its OpenRouter key.
+// CSR-59: skip-before-claim uses the detection result, not the keychain: a
+// login counts as configured, a refused key or a missing binary skips the
+// issue too, and detection runs once when Check finds no result yet.
 func TestCheck(t *testing.T) {
 	agent := func(name, client string) map[string]any {
 		return map[string]any{"name": name, "role": "orchestrator", "client": client, "model": "m", "instructions": nil}
@@ -251,33 +279,55 @@ func TestCheck(t *testing.T) {
 		b, _ := json.Marshal(map[string]any{"id": 1, "name": "Dev", "max_minutes": 1, "trusted": false, "agents": agents})
 		return reply{200, string(b)}
 	}
+	all := func(state string, except map[string]string) []cinderline.ReportClient {
+		var cs []cinderline.ReportClient
+		for _, n := range []string{"claude", "codex", "gemini", "opencode"} {
+			st := state
+			if s, ok := except[n]; ok {
+				st = s
+			}
+			cs = append(cs, cinderline.ReportClient{Name: n, State: st})
+		}
+		return cs
+	}
 	for _, tt := range []struct {
-		name string
-		team reply
-		keys []secrets.Kind
-		err  string
+		name     string
+		team     reply
+		detected []cinderline.ReportClient
+		err      string
+		kind     string
 	}{
-		{"claude and opencode with both keys", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, ""},
-		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), []secrets.Kind{secrets.AnthropicCredential}, "Qwen runs on opencode, which needs this project's openrouter"},
-		{"an orchestrator on another client", team(agent("C", "codex")), nil, "C runs on codex; this runner supports only claude and opencode"},
-		{"a Claude agent without an Anthropic credential", team(agent("Boss", "claude")), nil, "Boss runs on claude, which needs this project's anthropic"},
-		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, nil, "Unknown team."},
+		{"claude and opencode both ready", team(agent("Boss", "claude"), agent("Qwen", "opencode")), all("ready", nil), "", ""},
+		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), all("ready", map[string]string{"opencode": "missing_credential"}), "Qwen runs on opencode, which needs this project's openrouter", cinderline.KindMissingKey},
+		{"a Codex agent without an OpenAI key or login", team(agent("C", "codex")), all("ready", map[string]string{"codex": "missing_credential"}), "C runs on codex, which needs this project's openai", cinderline.KindMissingKey},
+		{"a Gemini agent whose key the provider refused", team(agent("G", "gemini")), all("ready", map[string]string{"gemini": "invalid_credential"}), "G runs on gemini, whose gemini key the provider refused", cinderline.KindMissingKey},
+		{"a Claude agent whose binary is missing", team(agent("Boss", "claude")), all("ready", map[string]string{"claude": "missing_binary"}), "Boss runs on claude, which is not in the tools volume", cinderline.KindUnsupportedClient},
+		{"a Claude agent on a login, no keychain key", team(agent("Boss", "claude")), all("ready", nil), "", ""},
+		{"an orchestrator on another client", team(agent("A", "aider")), all("ready", nil), "A runs on aider; this runner supports only claude, codex, gemini and opencode", cinderline.KindUnsupportedClient},
+		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, all("ready", nil), "Unknown team.", ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := project(t)
-			for _, k := range tt.keys {
-				if _, err := p.Secrets.Set(cfg, k, "s3cr3t-value"); err != nil {
-					t.Fatal(err)
-				}
+			detections := 0
+			p.detect = func(context.Context) []cinderline.ReportClient {
+				detections++
+				return tt.detected
 			}
 			api := &fakeAPI{routes: map[string]reply{"GET /teams/1": tt.team}}
 			issue := cinderline.Issue{Ref: "CSR-1", Team: &cinderline.IssueTeam{ID: 1, Name: "Dev"}}
-			err := p.Check(context.Background(), api.client(t), issue)
-			if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
-				t.Fatalf("Check = %v, want an error with %q", err, tt.err)
+			for range 2 {
+				err := p.Check(context.Background(), api.client(t), issue)
+				if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
+					t.Fatalf("Check = %v, want an error with %q", err, tt.err)
+				}
+				if tt.kind != "" {
+					checkKind(t, err, tt.kind, "CSR-1")
+				} else {
+					checkKind(t, err, "", "")
+				}
 			}
-			if err != nil && strings.Contains(err.Error(), "s3cr3t-value") {
-				t.Errorf("error %q carries a secret", err)
+			if tt.team.status == 200 && detections != 1 {
+				t.Errorf("detection ran %d times over two checks, want once (the result is cached)", detections)
 			}
 		})
 	}

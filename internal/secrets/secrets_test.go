@@ -206,7 +206,7 @@ func TestRepresentativeValuesFit(t *testing.T) {
 func TestCopyModelCredentials(t *testing.T) {
 	keyring.MockInit()
 	s := New(t.TempDir())
-	for kind, v := range map[Kind]string{AnthropicCredential: "ant", OpenRouterKey: "or", RunnerToken: "run"} {
+	for kind, v := range map[Kind]string{AnthropicCredential: "ant", OpenRouterKey: "or", OpenAIKey: "oa", GeminiKey: "gm", RunnerToken: "run"} {
 		if _, err := s.Set(projectA, kind, v); err != nil {
 			t.Fatal(err)
 		}
@@ -214,7 +214,7 @@ func TestCopyModelCredentials(t *testing.T) {
 	if err := s.CopyModelCredentials(projectA, projectB); err != nil {
 		t.Fatal(err)
 	}
-	for kind, want := range map[Kind]string{AnthropicCredential: "ant", OpenRouterKey: "or"} {
+	for kind, want := range map[Kind]string{AnthropicCredential: "ant", OpenRouterKey: "or", OpenAIKey: "oa", GeminiKey: "gm"} {
 		if v, _, err := s.Get(projectB, kind); err != nil || v != want {
 			t.Errorf("B %s = %q, %v", kind, v, err)
 		}

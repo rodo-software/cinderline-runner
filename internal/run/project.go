@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -19,7 +20,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "opencode": secrets.OpenRouterKey}
+var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "codex": secrets.OpenAIKey, "opencode": secrets.OpenRouterKey, "gemini": secrets.GeminiKey}
 
 // Project is what the steps of one configured project need.
 type Project struct {
@@ -39,6 +40,12 @@ type Project struct {
 	// prepare fills the tools mount on the first agent run, set only by
 	// NewProject as a closure over the Docker environment. Nil in tests.
 	prepare func(ctx context.Context) error
+
+	// detect is overridden by tests; nil means detectClients is called.
+	detect func(ctx context.Context) []cinderline.ReportClient
+
+	// clients caches the last detection result; nil before the first run.
+	clients *clientCache
 }
 
 // runState is the per-slot state shared by the seven hooks.
@@ -74,19 +81,26 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		Env:       env,
 		Log:       log,
 		Clients:   map[string]client.Client{},
+		clients:   &clientCache{},
 		Workspace: &workspace.Docker{Project: cfg.Key, Repository: cfg.Repository, Token: gitToken},
 	}
 	mcpURL := strings.TrimRight(cfg.URL, "/") + "/mcp"
 	for name, kind := range keys {
 		cred, _, err := sec.Get(cfg, kind)
-		if err != nil {
+		// Without a keychain key, Claude Code, Codex and Gemini CLI use the
+		// login that `login` stored on the state volume (CSR-58).
+		if err != nil && !(errors.Is(err, secrets.ErrNotFound) && (name == "claude" || name == "codex" || name == "gemini")) {
 			continue
 		}
 		switch name {
 		case "claude":
 			p.Clients["claude"] = &client.Claude{Project: cfg.Key, Env: env, Credential: cred, MCPURL: mcpURL}
+		case "codex":
+			p.Clients["codex"] = &client.Codex{Project: cfg.Key, Env: env, Key: cred, BaseURL: cfg.OpenAIBaseURL, MCPURL: mcpURL}
 		case "opencode":
 			p.Clients["opencode"] = &client.OpenCode{Project: cfg.Key, Env: env, Key: cred, MCPURL: mcpURL}
+		case "gemini":
+			p.Clients["gemini"] = &client.Gemini{Project: cfg.Key, Env: env, Key: cred, Vertex: cfg.GeminiVertex, MCPURL: mcpURL}
 		}
 	}
 	p.Forge = func(kind string) (forge.Forge, error) {
@@ -105,11 +119,32 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 			switch c := cl.(type) {
 			case *client.Claude:
 				c.Tools = mount
+			case *client.Codex:
+				c.Tools = mount
 			case *client.OpenCode:
+				c.Tools = mount
+			case *client.Gemini:
 				c.Tools = mount
 			}
 		}
 		return nil
+	}
+	exec := env.Exec
+	if exec == nil {
+		exec = workspace.RunCommand
+	}
+	p.detect = func(ctx context.Context) []cinderline.ReportClient {
+		image, err := env.Image(ctx)
+		if err != nil {
+			p.Log.Warn("detection: no image", "project", cfg.Key, "err", err)
+			return allMissingBinary()
+		}
+		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
+		if err != nil {
+			p.Log.Warn("detection: no tools mount", "project", cfg.Key, "err", err)
+			return allMissingBinary()
+		}
+		return detectClients(ctx, exec, cfg, sec, image, mount, p.Log)
 	}
 	return p, nil
 }

@@ -103,7 +103,7 @@ func (p Project) Attempts(ctx context.Context, c *cinderline.Client, cl client.C
 	// An answer to ask_person is in already, so it is never delivered twice.
 	var cursor int
 	if !j.NoComments {
-		cs, err := c.ListComments(ctx, j.Ref)
+		cs, err := c.ListComments(ctx, j.Ref, 0)
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -142,7 +142,7 @@ func (p Project) Attempts(ctx context.Context, c *cinderline.Client, cl client.C
 			if j.NoComments {
 				return Outcome{Result: res}, nil
 			}
-			cs, err := c.ListComments(ctx, j.Ref)
+			cs, err := c.ListComments(ctx, j.Ref, cursor)
 			if err != nil {
 				return Outcome{Result: res}, err
 			}

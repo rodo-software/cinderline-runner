@@ -28,6 +28,7 @@ type CLI struct {
 	exec          workspace.Exec                                            // nil means workspace.RunCommand
 	removeService func(exe string) error                                    // nil means uninstallService
 	startService  func(exe string) (bool, error)                            // nil means startService; update restarts the service with it
+	processGone   func(pid int) bool                                        // nil means processGone; drainAndWait waits with it until the daemon's process has exited
 	Forge         func(kind, repository, token string) (forge.Forge, error) // nil: forge.New
 	pathsErr      error                                                     // from config.DefaultPaths; only commands that need the paths fail on it
 	WindowsBuild  uint32                                                    // OS build on Windows, 0 elsewhere; Main sets it
@@ -52,6 +53,7 @@ func commands() []command {
 		{"update", "[--refresh]", "update to the latest release, then stop the running " + name.Name + " once its runs have finished", (*CLI).update},
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
+		{"login", "CLIENT --project KEY", "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

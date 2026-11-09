@@ -40,17 +40,23 @@ func hooksSet(h scheduler.Hooks) []string {
 }
 
 // A client is built only when its model credential is in the keychain
-// (decision 0122); all seven hooks are set either way.
+// (decision 0122), except Claude Code, Codex and Gemini CLI: without a key
+// they use the login on the state volume (CSR-58, decisions A and B). All
+// seven hooks are set either way.
 func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		keys []secrets.Kind
 		want []string
 	}{
-		{"both keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, []string{"claude", "opencode"}},
-		{"anthropic only", []secrets.Kind{secrets.AnthropicCredential}, []string{"claude"}},
-		{"openrouter only", []secrets.Kind{secrets.OpenRouterKey}, []string{"opencode"}},
-		{"no model key", nil, nil},
+		{"both keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
+		{"anthropic only", []secrets.Kind{secrets.AnthropicCredential}, []string{"claude", "codex", "gemini"}},
+		{"openrouter only", []secrets.Kind{secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
+		{"openai only", []secrets.Kind{secrets.OpenAIKey}, []string{"claude", "codex", "gemini"}},
+		{"all three keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey, secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
+		{"gemini only", []secrets.Kind{secrets.GeminiKey}, []string{"claude", "codex", "gemini"}},
+		{"all four keys", []secrets.Kind{secrets.AnthropicCredential, secrets.OpenAIKey, secrets.GeminiKey, secrets.OpenRouterKey}, []string{"claude", "codex", "gemini", "opencode"}},
+		{"no model key", nil, []string{"claude", "codex", "gemini"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keyring.MockInit()
@@ -83,6 +89,58 @@ func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 				t.Errorf("nil hooks: %v", missing)
 			}
 		})
+	}
+}
+
+// The Codex client gets the project's OpenAI key, Cinderline's MCP endpoint
+// and the project's optional OpenAI-compatible base URL from the local config.
+func TestNewProjectCodexFromConfig(t *testing.T) {
+	keyring.MockInit()
+	state := t.TempDir()
+	sec := secrets.New(state)
+	pc := cfg
+	pc.OpenAIBaseURL = "http://host.docker.internal:11434/v1"
+	for _, k := range []secrets.Kind{secrets.GitToken, secrets.OpenAIKey} {
+		if _, err := sec.Set(pc, k, "secret-"+string(k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := NewProject(pc, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
+	if err != nil {
+		t.Fatalf("NewProject: %v", err)
+	}
+	c, ok := p.Clients["codex"].(*client.Codex)
+	if !ok {
+		t.Fatalf("codex client = %T", p.Clients["codex"])
+	}
+	if c.Key != "secret-openai" || c.BaseURL != pc.OpenAIBaseURL || c.Project != pc.Key || !strings.HasSuffix(c.MCPURL, "/mcp") {
+		t.Errorf("codex client = %+v", c)
+	}
+}
+
+// The Gemini client gets the project's Gemini key, Cinderline's MCP endpoint
+// and, from the local config, whether that key is a Vertex AI express-mode key.
+func TestNewProjectGeminiFromConfig(t *testing.T) {
+	keyring.MockInit()
+	state := t.TempDir()
+	sec := secrets.New(state)
+	pc := cfg
+	pc.GeminiVertex = true
+	for _, k := range []secrets.Kind{secrets.GitToken, secrets.GeminiKey} {
+		if _, err := sec.Set(pc, k, "secret-"+string(k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p, err := NewProject(pc, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
+	if err != nil {
+		t.Fatalf("NewProject: %v", err)
+	}
+	c, ok := p.Clients["gemini"].(*client.Gemini)
+	if !ok {
+		t.Fatalf("gemini client = %T", p.Clients["gemini"])
+	}
+	if c.Key != "secret-gemini" || !c.Vertex || c.Project != pc.Key || !strings.HasSuffix(c.MCPURL, "/mcp") {
+		t.Errorf("gemini client = %+v", c)
 	}
 }
 

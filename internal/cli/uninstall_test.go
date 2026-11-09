@@ -20,7 +20,7 @@ import (
 var (
 	uninstallA     = config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
 	uninstallB     = config.Project{URL: "https://b.example.com", Key: "API", Repository: "https://git.example.com/o/b"}
-	uninstallKinds = []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey}
+	uninstallKinds = []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey, secrets.GeminiKey}
 )
 
 // fakeDocker records every docker argv and answers the list commands with ids.

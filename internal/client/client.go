@@ -1,6 +1,6 @@
-// Package client defines Client, the agent CLI (Claude Code or OpenCode) that
-// runs one agent turn, and Fake, its in-memory stand-in for tests. It is not
-// the REST client of the issue tracker, which is its own package.
+// Package client defines Client, the agent CLI (Claude Code, Codex, OpenCode or
+// Gemini CLI) that runs one agent turn, and Fake, its in-memory stand-in for
+// tests. It is not the REST client of the issue tracker, which is its own package.
 package client
 
 import "context"

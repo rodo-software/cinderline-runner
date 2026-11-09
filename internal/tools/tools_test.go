@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,18 @@ func TestPinsCoverEveryPlatform(t *testing.T) {
 			if len(s.ClaudeSHA256) != 64 || !strings.HasPrefix(s.OpenCodeSRI, "sha512-") {
 				t.Fatalf("%s musl=%v: bad pins %+v", arch, musl, s)
 			}
+			// Codex ships static musl builds only, from its GitHub release;
+			// glibc and musl images share them.
+			target := map[string]string{"amd64": "x86_64", "arm64": "aarch64"}[arch] + "-unknown-linux-musl"
+			if s.CodexBinary != "codex-"+target || len(s.CodexSHA256) != 64 ||
+				s.CodexURL != "https://github.com/openai/codex/releases/download/rust-v"+CodexVersion+"/codex-"+target+".tar.gz" {
+				t.Fatalf("%s musl=%v: bad Codex pins %+v", arch, musl, s)
+			}
+			// Codex runs code mode in this host, which it looks for next to itself.
+			if s.CodexHostBinary != "codex-code-mode-host-"+target || len(s.CodexHostSHA256) != 64 ||
+				s.CodexHostURL != "https://github.com/openai/codex/releases/download/rust-v"+CodexVersion+"/codex-code-mode-host-"+target+".tar.gz" {
+				t.Fatalf("%s musl=%v: bad Codex code-mode host pins %+v", arch, musl, s)
+			}
 		}
 	}
 	if _, err := pinned("riscv64", false); err == nil {
@@ -210,14 +223,144 @@ func TestLockExcludes(t *testing.T) {
 	}
 }
 
-// pinsServer serves the claude binary and the opencode tarball of s.
+// pinsServer serves the claude binary, the opencode tarball, the codex
+// tarballs and the gemini tarball of the musl arm64 set, which takes node
+// from the musl libraries image instead of a download.
 func pinsServer(t *testing.T, claude, oc []byte) (string, set) {
 	s, _ := pinned("arm64", true)
+	codex := tgz(t, map[string]string{s.CodexBinary: "CODEX"})
+	host := tgz(t, map[string]string{s.CodexHostBinary: "HOST"})
+	gemini := tgz(t, map[string]string{"package/bundle/gemini.js": "GEMINI"})
 	s.ClaudeSHA256 = sha256Hex(claude)
 	s.OpenCodeSRI = sriSHA512(oc)
-	base := serve(t, map[string][]byte{"/claude": claude, "/oc.tgz": oc})
-	s.ClaudeURL, s.OpenCodeURL = base+"/claude", base+"/oc.tgz"
+	s.CodexSHA256 = sha256Hex(codex)
+	s.CodexHostSHA256 = sha256Hex(host)
+	s.GeminiSRI = sriSHA512(gemini)
+	base := serve(t, map[string][]byte{"/claude": claude, "/oc.tgz": oc, "/codex.tgz": codex, "/host.tgz": host, "/gemini.tgz": gemini})
+	s.ClaudeURL, s.OpenCodeURL, s.CodexURL, s.CodexHostURL, s.GeminiURL = base+"/claude", base+"/oc.tgz", base+"/codex.tgz", base+"/host.tgz", base+"/gemini.tgz"
 	return base, s
+}
+
+// Gemini CLI is the npm package, the same tarball on every platform, checked
+// by its npm integrity. Node comes from nodejs.org on glibc, checked by the
+// SHA-256 of its SHASUMS256.txt, and from the pinned musl libraries image on
+// musl, so a musl set downloads none (decision 2026-11-08-gemini-node-in-tools-volume).
+func TestGeminiPins(t *testing.T) {
+	for _, arch := range []string{"amd64", "arm64"} {
+		a := map[string]string{"amd64": "x64", "arm64": "arm64"}[arch]
+		for _, musl := range []bool{false, true} {
+			s, err := pinned(arch, musl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.GeminiURL != "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-"+GeminiVersion+".tgz" || !strings.HasPrefix(s.GeminiSRI, "sha512-") {
+				t.Fatalf("%s musl=%v: bad Gemini pins %+v", arch, musl, s)
+			}
+			if musl {
+				if s.NodeURL != "" || s.NodeSHA256 != "" || s.NodeBinary != "" {
+					t.Fatalf("%s musl: node is downloaded, want it from the musl libraries image: %+v", arch, s)
+				}
+				continue
+			}
+			dir := "node-v" + NodeVersion + "-linux-" + a
+			if s.NodeURL != "https://nodejs.org/dist/v"+NodeVersion+"/"+dir+".tar.gz" || len(s.NodeSHA256) != 64 || s.NodeBinary != dir+"/bin/node" {
+				t.Fatalf("%s glibc: bad Node pins %+v", arch, s)
+			}
+		}
+	}
+}
+
+// The fill script unpacks the gemini package into gemini/ (gemini/bundle/gemini.js)
+// and installs a downloaded node next to the other CLIs.
+func TestFillScriptInstallsGemini(t *testing.T) {
+	for _, want := range []string{"/s/gemini.tgz", "gemini", "/s/node", "bin/node"} {
+		if !strings.Contains(fillScript, want) {
+			t.Fatalf("fill script lacks %q:\n%s", want, fillScript)
+		}
+	}
+}
+
+// On glibc the checked node binary from the nodejs.org tarball and the
+// gemini tarball are staged for the fill script, and no musl step runs.
+func TestMountStagesGlibcNode(t *testing.T) {
+	_, s := pinsServer(t, []byte("CLAUDE"), tgz(t, map[string]string{"package/bin/opencode": "OC"}))
+	nodeTgz := tgz(t, map[string]string{"node-v" + NodeVersion + "-linux-arm64/bin/node": "NODE"})
+	base := serve(t, map[string][]byte{"/node.tgz": nodeTgz})
+	s.Musl, s.Platform = false, "linux-arm64"
+	s.NodeURL, s.NodeSHA256, s.NodeBinary = base+"/node.tgz", sha256Hex(nodeTgz), "node-v"+NodeVersion+"-linux-arm64/bin/node"
+	staging := ""
+	var node, gemini []byte
+	f := &fakeDocker{answers: map[string]string{"docker version --format": "arm64\n", "docker run --rm": "glibc\n"}}
+	exec := func(ctx context.Context, env []string, argv ...string) (string, error) {
+		out, err := f.exec(ctx, env, argv...)
+		if len(f.calls) == 3 {
+			return "", errors.New("exit status 1")
+		}
+		for i, a := range argv {
+			if strings.HasSuffix(a, ":/s:ro") {
+				staging = strings.TrimSuffix(argv[i], ":/s:ro")
+				node, _ = os.ReadFile(filepath.Join(staging, "node"))
+				gemini, _ = os.ReadFile(filepath.Join(staging, "gemini.tgz"))
+			}
+		}
+		return out, err
+	}
+	tl := &Tools{State: t.TempDir(), Exec: exec, pins: func(string, bool) (set, error) { return s, nil }}
+	if _, err := tl.Mount(context.Background(), "img"); err != nil {
+		t.Fatal(err)
+	}
+	if staging == "" || string(node) != "NODE" || len(gemini) == 0 {
+		t.Fatalf("staged node %q, gemini %d bytes, staging %q", node, len(gemini), staging)
+	}
+	for _, c := range f.calls {
+		if slices.Contains(c, muslLibsImage) {
+			t.Fatalf("musl step on glibc: %q", c)
+		}
+	}
+}
+
+func TestMountRefusesTamperedGemini(t *testing.T) {
+	_, s := pinsServer(t, []byte("CLAUDE"), tgz(t, map[string]string{"package/bin/opencode": "OC"}))
+	s.GeminiSRI = sriSHA512([]byte("something else"))
+	f := &fakeDocker{answers: map[string]string{"docker version --format": "arm64\n", "docker run --rm": "musl\n"}}
+	exec := func(ctx context.Context, env []string, argv ...string) (string, error) {
+		out, err := f.exec(ctx, env, argv...)
+		if len(f.calls) == 3 {
+			return "", errors.New("exit status 1")
+		}
+		return out, err
+	}
+	tl := &Tools{State: t.TempDir(), Exec: exec, pins: func(string, bool) (set, error) { return s, nil }}
+	if _, err := tl.Mount(context.Background(), "img"); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("tampered gemini accepted: %v", err)
+	}
+}
+
+// The fill script puts codex and its code-mode host next to claude and opencode.
+func TestFillScriptInstallsCodex(t *testing.T) {
+	if !strings.Contains(fillScript, "/s/codex") || !strings.Contains(fillScript, "bin/codex") ||
+		!strings.Contains(fillScript, "/s/codex-code-mode-host") || !strings.Contains(fillScript, "bin/codex-code-mode-host") {
+		t.Fatalf("fill script does not install codex:\n%s", fillScript)
+	}
+}
+
+func TestMountRefusesTamperedCodex(t *testing.T) {
+	_, s := pinsServer(t, []byte("CLAUDE"), tgz(t, map[string]string{"package/bin/opencode": "OC"}))
+	s.CodexSHA256 = sha256Hex([]byte("something else"))
+	f := &fakeDocker{answers: map[string]string{"docker version --format": "arm64\n", "docker run --rm": "musl\n"}}
+	n := 0
+	exec := func(ctx context.Context, env []string, argv ...string) (string, error) {
+		n++
+		out, err := f.exec(ctx, env, argv...)
+		if n == 3 {
+			return "", errors.New("exit status 1")
+		}
+		return out, err
+	}
+	tl := &Tools{State: t.TempDir(), Exec: exec, pins: func(string, bool) (set, error) { return s, nil }}
+	if _, err := tl.Mount(context.Background(), "img"); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("tampered codex accepted: %v", err)
+	}
 }
 
 func TestMountFillsMissingVolume(t *testing.T) {
@@ -250,7 +393,7 @@ func TestMountFillsMissingVolume(t *testing.T) {
 		{"docker", "volume", "rm", "--force", vol},
 		{"docker", "volume", "create", vol},
 		{"docker", "run", "--rm", "--platform", "linux/arm64", "--network", "none", "-v", vol + ":/t", "--entrypoint", "sh", muslLibsImage,
-			"-c", "mkdir -p /t/lib && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/"},
+			"-c", "mkdir -p /t/lib /t/bin && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/ && cp /usr/local/bin/node /t/bin/node"},
 		{"docker", "run", "--rm", "-v", vol + ":/t", "-v", staging + ":/s:ro", "--entrypoint", "sh", workspace.GitImage, "-c", fillScript,
 			"sh", PonytailRepo, s.PonytailTag, s.PonytailCommit},
 	}

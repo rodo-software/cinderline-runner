@@ -344,7 +344,7 @@ func TestRemove(t *testing.T) {
 	a := config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
 	b := config.Project{URL: "https://b.example.com", Key: "WEB", Repository: "https://git.example.com/o/b"}
 	api := config.Project{URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
-	kinds := []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey}
+	kinds := []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey, secrets.GeminiKey}
 	setup := func() (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		c, out, errb := newCLI(t, "")
 		saveConfig(t, c, a, b, api)

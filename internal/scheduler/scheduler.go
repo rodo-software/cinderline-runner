@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,6 +56,8 @@ type Scheduler struct {
 	MergeInterval  time.Duration // default 60 seconds; the daemon sets config.json's merge_poll_seconds (legacy MERGE_POLL_SECONDS)
 	MaxBackoff     time.Duration // default 60 seconds; the first wait after a failure is 1s or this, if less
 	StartBackoff   time.Duration // default 60 seconds: the wait before the next claim after a run that did not start (ErrNotStarted); doubles per failure in a row, up to 10 minutes
+	IdleWait       time.Duration // default 5 seconds: the wait before the next GET /work after an answer that started no run; doubles per such answer in a row, up to MaxIdleWait (CSR-113; CSR-93 replaces both with server-set intervals)
+	MaxIdleWait    time.Duration // default 60 seconds
 
 	// Drain, when non-nil, is closed to begin draining: every slot takes no new
 	// work, lets the run in flight finish and publish, and then Run returns.
@@ -114,6 +117,12 @@ func (s *Scheduler) Run(ctx context.Context, slots []Slot) {
 	if cfg.StartBackoff <= 0 {
 		cfg.StartBackoff = 60 * time.Second
 	}
+	if cfg.IdleWait <= 0 {
+		cfg.IdleWait = 5 * time.Second
+	}
+	if cfg.MaxIdleWait <= 0 {
+		cfg.MaxIdleWait = 60 * time.Second
+	}
 	statusMu.Lock()
 	if s.status == nil {
 		s.status = map[string]*ProjectStatus{}
@@ -154,6 +163,17 @@ func (s *Scheduler) slot(ctx context.Context, work context.Context, slot Slot) {
 		if ctx.Err() != nil || work.Err() != nil {
 			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 			return
+		}
+		c := slot.Client
+		var re *cinderline.ReportError
+		if errors.As(err, &re) && re.Issue == "" {
+			c.SetError(*re)
+		} else {
+			msg := err.Error()
+			if i := strings.Index(msg, "\n"); i >= 0 {
+				msg = msg[:i]
+			}
+			c.SetError(cinderline.ReportError{Kind: cinderline.KindPollFailed, Message: msg})
 		}
 		s.setStatus(slot.Project, func(st *ProjectStatus) {
 			st.Connected, st.Issue, st.LastError, st.LastErrorAt = false, "", err.Error(), time.Now()
@@ -196,6 +216,16 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 		wait  time.Duration
 	}
 	strikes.wait = s.StartBackoff
+	idle := s.IdleWait
+	// waitIdle paces the next Work after an answer that started no run; the
+	// loop condition ends the slot if work is done meanwhile.
+	waitIdle := func() {
+		select {
+		case <-work.Done():
+		case <-time.After(idle):
+			idle = min(idle*2, s.MaxIdleWait)
+		}
+	}
 	for work.Err() == nil {
 		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 		issue, err := c.Work(work)
@@ -204,18 +234,25 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 			return polled, err
 		}
 		polled = true
+		c.ClearError(cinderline.KindPollFailed)
 		s.setStatus(slot.Project, func(st *ProjectStatus) {
 			st.Connected, st.LastPoll, st.LastError, st.LastErrorAt = true, time.Now(), "", time.Time{}
 		})
 		if !noChange && issue == nil {
 			stuck = false
+			waitIdle()
 			continue // no work
 		}
+		if !noChange && issue != nil {
+			idle = s.IdleWait
+		}
 		if noChange && !stuck {
-			continue // the long-poll already waited
+			waitIdle()
+			continue // unchanged
 		}
 		if h.Run == nil {
 			s.Log.Info("no run step yet, skipping", "project", slot.Project, "issue", issue.Ref)
+			waitIdle()
 			continue // not claimed, so it stays To do; the ETag keeps this from spinning
 		}
 		claimed, err := s.claimNext(work, slot, issue)
@@ -223,6 +260,7 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 			return polled, err
 		}
 		if stuck = claimed == nil; stuck {
+			waitIdle()
 			continue
 		}
 		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = claimed.Ref })
@@ -255,6 +293,7 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline
 		if err := h.Pin(work, c); err != nil {
 			return nil, fmt.Errorf("repository: %w", err)
 		}
+		c.ClearError(cinderline.KindRepositoryMismatch)
 	}
 	var queue []cinderline.Issue
 	if first != nil {
@@ -264,6 +303,7 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline
 	for {
 		if len(queue) == 0 {
 			if listed {
+				c.KeepIssueErrors(tried)
 				return nil, nil
 			}
 			// shortcut: one page of To do issues, as the API returns them; page if a board outgrows it.
@@ -286,8 +326,17 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline
 					return nil, work.Err()
 				}
 				s.Log.Warn("skipped before the claim", "project", slot.Project, "issue", issue.Ref, "err", err)
+				var re *cinderline.ReportError
+				if errors.As(err, &re) && re.Issue != "" {
+					if c.SetError(*re) {
+						if _, cerr := c.AddComment(work, issue.Ref, "The runner skipped this issue before claiming it: "+re.Message); cerr != nil {
+							s.Log.Warn("failed to add comment for skipped issue", "project", slot.Project, "issue", issue.Ref, "err", cerr)
+						}
+					}
+				}
 				continue
 			}
+			c.ClearError(issue.Ref)
 		}
 		var conflict *cinderline.ConflictError
 		if _, err := c.ClaimIssue(work, issue.Ref, "todo"); errors.As(err, &conflict) {

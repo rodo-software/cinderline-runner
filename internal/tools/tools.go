@@ -1,8 +1,8 @@
-// Package tools fills and mounts the tools volume: the pinned agent CLIs,
-// downloaded on the user's machine from their official sources and checked
-// by hash (EMBER-57), in a read-only volume per pinned set that every agent
-// container mounts. No image of ours carries them, so Claude Code is never
-// redistributed (2026-11-04-licences-before-publishing).
+// Package tools fills and mounts the tools volume: the pinned agent CLIs (Claude
+// Code, OpenCode, Codex), downloaded on the user's machine from their official
+// sources and checked by hash (EMBER-57), in a read-only volume per pinned set
+// that every agent container mounts. No image of ours carries them, so Claude
+// Code is never redistributed (2026-11-04-licences-before-publishing).
 package tools
 
 import (
@@ -26,9 +26,9 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// Path is where agent containers see the volume: the CLIs in Path/bin, the
-// ponytail plugin in Path/ponytail and, on musl, OpenCode's libraries in
-// Path/lib.
+// Path is where agent containers see the volume: the CLIs (Claude Code, OpenCode,
+// Codex) in Path/bin, Gemini CLI in Path/gemini, node in Path/bin, the ponytail
+// plugin in Path/ponytail and, on musl, OpenCode's and Gemini's libraries in Path/lib.
 const Path = "/opt/" + name.Name
 
 // fillScript fills the volume at /t from the checked downloads at /s, then
@@ -37,8 +37,10 @@ const Path = "/opt/" + name.Name
 const fillScript = `set -e
 cd /t
 mkdir -p bin
-cp /s/claude /s/opencode bin/
-chmod 755 bin/claude bin/opencode
+cp /s/claude /s/opencode /s/codex /s/codex-code-mode-host bin/
+chmod 755 bin/claude bin/opencode bin/codex bin/codex-code-mode-host
+if [ -f /s/node ]; then cp /s/node bin/ && chmod 755 bin/node; fi
+tar -xzf /s/gemini.tgz && mv package gemini
 git clone --quiet --depth 1 --branch "$2" "$1" ponytail
 test "$(git -C ponytail rev-parse HEAD)" = "$3"
 rm -rf ponytail/.git
@@ -51,8 +53,8 @@ type Mount struct {
 	// Code from updating itself on every run from a read-only volume
 	// (review item 11).
 	Env []string
-	// OpenCodeEnv is added for OpenCode runs: on musl, the libraries it
-	// needs from the volume. Only for those runs, so the image's own
+	// OpenCodeEnv is added for OpenCode and Gemini runs: on musl, the libraries
+	// they need from the volume. Only for those runs, so the image's own
 	// programs keep their libraries.
 	OpenCodeEnv []string
 }
@@ -142,6 +144,33 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	if err := extract(tgz, "package/bin/opencode", filepath.Join(staging, "opencode")); err != nil {
 		return err
 	}
+	codexTgz := filepath.Join(staging, "codex.tgz")
+	if err := download(ctx, hc, s.CodexURL, codexTgz, s.CodexSHA256); err != nil {
+		return err
+	}
+	if err := extract(codexTgz, s.CodexBinary, filepath.Join(staging, "codex")); err != nil {
+		return err
+	}
+	hostTgz := filepath.Join(staging, "codex-code-mode-host.tgz")
+	if err := download(ctx, hc, s.CodexHostURL, hostTgz, s.CodexHostSHA256); err != nil {
+		return err
+	}
+	if err := extract(hostTgz, s.CodexHostBinary, filepath.Join(staging, "codex-code-mode-host")); err != nil {
+		return err
+	}
+	geminiTgz := filepath.Join(staging, "gemini.tgz")
+	if err := download(ctx, hc, s.GeminiURL, geminiTgz, s.GeminiSRI); err != nil {
+		return err
+	}
+	if s.NodeURL != "" {
+		nodeTgz := filepath.Join(staging, "node.tgz")
+		if err := download(ctx, hc, s.NodeURL, nodeTgz, s.NodeSHA256); err != nil {
+			return err
+		}
+		if err := extract(nodeTgz, s.NodeBinary, filepath.Join(staging, "node")); err != nil {
+			return err
+		}
+	}
 
 	steps := [][]string{
 		{"docker", "volume", "rm", "--force", vol},
@@ -149,7 +178,7 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	}
 	if s.Musl {
 		steps = append(steps, []string{"docker", "run", "--rm", "--platform", "linux/" + s.Arch, "--network", "none", "-v", vol + ":/t",
-			"--entrypoint", "sh", muslLibsImage, "-c", "mkdir -p /t/lib && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/"})
+			"--entrypoint", "sh", muslLibsImage, "-c", "mkdir -p /t/lib /t/bin && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/ && cp /usr/local/bin/node /t/bin/node"})
 	}
 	steps = append(steps, []string{"docker", "run", "--rm", "-v", vol + ":/t", "-v", staging + ":/s:ro",
 		"--entrypoint", "sh", workspace.GitImage, "-c", fillScript, "sh", PonytailRepo, s.PonytailTag, s.PonytailCommit})
@@ -163,12 +192,16 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 
 // set is the pinned tools for one platform; its hash names its volume.
 type set struct {
-	Arch, Platform            string
-	Musl                      bool
-	ClaudeURL, ClaudeSHA256   string
-	OpenCodeURL, OpenCodeSRI  string
-	PonytailTag               string
-	PonytailCommit, LibsImage string
+	Arch, Platform                                 string
+	Musl                                           bool
+	ClaudeURL, ClaudeSHA256                        string
+	OpenCodeURL, OpenCodeSRI                       string
+	CodexURL, CodexSHA256, CodexBinary             string
+	CodexHostURL, CodexHostSHA256, CodexHostBinary string
+	GeminiURL, GeminiSRI                           string
+	NodeURL, NodeSHA256, NodeBinary                string
+	PonytailTag                                    string
+	PonytailCommit, LibsImage                      string
 }
 
 // pinned is the set for a Docker engine arch (amd64 or arm64) and libc.
@@ -181,14 +214,32 @@ func pinned(arch string, musl bool) (set, error) {
 	if musl {
 		p += "-musl"
 	}
-	return set{
+	target := map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}[arch]
+	cb := "codex-" + target
+	chb := "codex-code-mode-host-" + target
+	s := set{
 		Arch: arch, Platform: p, Musl: musl,
-		ClaudeURL:    "https://downloads.claude.ai/claude-code-releases/" + ClaudeVersion + "/" + p + "/claude",
-		ClaudeSHA256: claudeSHA256[p],
-		OpenCodeURL:  "https://registry.npmjs.org/opencode-" + p + "/-/opencode-" + p + "-" + OpenCodeVersion + ".tgz",
-		OpenCodeSRI:  openCodeSRI[p],
-		PonytailTag:  PonytailTag, PonytailCommit: PonytailCommit, LibsImage: muslLibsImage,
-	}, nil
+		ClaudeURL:       "https://downloads.claude.ai/claude-code-releases/" + ClaudeVersion + "/" + p + "/claude",
+		ClaudeSHA256:    claudeSHA256[p],
+		OpenCodeURL:     "https://registry.npmjs.org/opencode-" + p + "/-/opencode-" + p + "-" + OpenCodeVersion + ".tgz",
+		OpenCodeSRI:     openCodeSRI[p],
+		CodexURL:        "https://github.com/openai/codex/releases/download/rust-v" + CodexVersion + "/" + cb + ".tar.gz",
+		CodexSHA256:     codexSHA256[arch],
+		CodexBinary:     cb,
+		CodexHostURL:    "https://github.com/openai/codex/releases/download/rust-v" + CodexVersion + "/" + chb + ".tar.gz",
+		CodexHostSHA256: codexHostSHA256[arch],
+		CodexHostBinary: chb,
+		GeminiURL:       "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-" + GeminiVersion + ".tgz",
+		GeminiSRI:       geminiSRI,
+		PonytailTag:     PonytailTag, PonytailCommit: PonytailCommit, LibsImage: muslLibsImage,
+	}
+	if !musl {
+		dir := "node-v" + NodeVersion + "-linux-" + a
+		s.NodeURL = "https://nodejs.org/dist/v" + NodeVersion + "/" + dir + ".tar.gz"
+		s.NodeSHA256 = nodeSHA256[arch]
+		s.NodeBinary = dir + "/bin/node"
+	}
+	return s, nil
 }
 
 func (s set) volume() string {

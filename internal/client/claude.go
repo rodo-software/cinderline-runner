@@ -37,7 +37,7 @@ var errTurnLimit = errors.New("claude: stopped at the turn limit")
 // Run runs one turn. The turn limit is an error with HitTurnLimit set, so
 // Attempts continues the session (CSR-21).
 func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := prepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
 		return Result{}, err
 	}
 	session := t.SessionID
@@ -74,11 +74,11 @@ func agentMounts(project string, t tools.Mount) []string {
 	}, t.Args...)
 }
 
-// prepareState makes the project's state volume and hands its root to the
+// PrepareState makes the project's state volume and hands its root to the
 // agent user: a new volume belongs to root, and the CLIs write their config
 // dirs and sessions in it. Every turn, as it costs a second and repairs
 // itself. A nil x means workspace.RunCommand.
-func prepareState(ctx context.Context, x workspace.Exec, project string) error {
+func PrepareState(ctx context.Context, x workspace.Exec, project string) error {
 	if x == nil {
 		x = workspace.RunCommand
 	}
@@ -149,11 +149,13 @@ func claudeArgs(t Turn, session, mcpURL string) []string {
 // sub-issue (app repository decision 2026-11-05-workers-skip-project-files).
 func claudeEnv(credential string, t Turn) []string {
 	env := []string{"CLAUDE_CONFIG_DIR=" + StatePath + "/claude"}
-	// A `claude setup-token` token is an OAuth token; anything else is an API key.
-	if strings.HasPrefix(credential, "sk-ant-oat") {
-		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+credential)
-	} else {
-		env = append(env, "ANTHROPIC_API_KEY="+credential)
+	if credential != "" {
+		// A `claude setup-token` token is an OAuth token; anything else is an API key.
+		if strings.HasPrefix(credential, "sk-ant-oat") {
+			env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+credential)
+		} else {
+			env = append(env, "ANTHROPIC_API_KEY="+credential)
+		}
 	}
 	if t.Token != "" {
 		return append(env, tokenVar+"="+t.Token)

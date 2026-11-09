@@ -191,7 +191,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 
 	var finished *client.Result // the work done while its session reads comments
 	for {
-		cs, err := c.ListComments(ctx, j.Ref)
+		cs, err := c.ListComments(ctx, j.Ref, 0)
 		if err != nil {
 			return Outcome{}, err
 		}
@@ -238,7 +238,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 			return res, err
 		}
 		if len(subIssuesToRun(after.SubIssues, false)) == 0 {
-			cs, err := c.ListComments(ctx, j.Ref)
+			cs, err := c.ListComments(ctx, j.Ref, cursor)
 			if err != nil {
 				return res, err
 			}
