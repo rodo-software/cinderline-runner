@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
@@ -26,6 +27,7 @@ type CLI struct {
 	Stderr  io.Writer
 
 	exec          workspace.Exec                                            // nil means workspace.RunCommand
+	http          *http.Client                                              // the tools downloads; nil means http.DefaultClient
 	removeService func(exe string) error                                    // nil means uninstallService
 	startService  func(exe string) (bool, error)                            // nil means startService; update restarts the service with it
 	processGone   func(pid int) bool                                        // nil means processGone; drainAndWait waits with it until the daemon's process has exited

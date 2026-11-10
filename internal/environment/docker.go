@@ -76,6 +76,9 @@ type Docker struct {
 	Allow []string
 	// OnRefused is called with each host:port the run's proxy refused; nil: none.
 	OnRefused func(hostPort string)
+	// OnFetch is called before the default image is pulled or built, a slow
+	// first-time step; nil: none. A failed pull calls it again for the build.
+	OnFetch func()
 }
 
 var _ Environment = (*Docker)(nil)
@@ -243,13 +246,16 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 		if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref); err == nil {
 			return ref, nil
 		}
+		if d.OnFetch != nil {
+			d.OnFetch()
+		}
 		_, err := d.exec(ctx, "docker", "pull", "--quiet", ref)
 		if err == nil {
 			return ref, nil
 		}
 		d.log().Warn("default image pull failed, building it locally", "image", ref, "err", err)
 	}
-	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile})
+	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile}, d.OnFetch)
 }
 
 // ProxyImage returns the egress proxy's image, built locally from the
@@ -257,11 +263,12 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 func (d *Docker) ProxyImage(ctx context.Context) (string, error) {
 	sum := sha256.Sum256(append(append(slices.Clip(proxyimage.Dockerfile), 0), proxyimage.Main...))
 	tag := name.Name + "-proxy:" + hex.EncodeToString(sum[:6])
-	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": proxyimage.Dockerfile, "main.go": proxyimage.Main})
+	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": proxyimage.Dockerfile, "main.go": proxyimage.Main}, nil)
 }
 
-// localImage returns tag, built from files when Docker does not have it.
-func (d *Docker) localImage(ctx context.Context, tag string, files map[string][]byte) (string, error) {
+// localImage returns tag, built from files when Docker does not have it;
+// onBuild, if set, is called before the build.
+func (d *Docker) localImage(ctx context.Context, tag string, files map[string][]byte, onBuild func()) (string, error) {
 	if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", tag); err == nil {
 		return tag, nil
 	}
@@ -274,6 +281,9 @@ func (d *Docker) localImage(ctx context.Context, tag string, files map[string][]
 		if err := os.WriteFile(filepath.Join(dir, f), b, 0o600); err != nil {
 			return "", err
 		}
+	}
+	if onBuild != nil {
+		onBuild()
 	}
 	_, err = d.exec(ctx, "docker", "build", "--quiet", "--tag", tag, dir)
 	return tag, err

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -60,11 +61,7 @@ func (c *CLI) login(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	image, err := (&environment.Docker{Project: key, BuildImage: cfg.BuildImage}).Image(ctx)
-	if err != nil {
-		return c.fail(err)
-	}
-	mount, err := (&tools.Tools{State: c.Paths.State}).Mount(ctx, image)
+	image, mount, err := c.agentImage(ctx, key, cfg.BuildImage)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -94,4 +91,26 @@ func (c *CLI) login(args []string) int {
 		fmt.Fprintf(c.Stdout, "Warning: daemon reload failed: %v.\n", err)
 	}
 	return 0
+}
+
+// agentImage returns the default image and the tools mount for it, with a
+// line on Stdout before each slow first-time step and the image's warnings
+// on Stderr, so an interactive command doesn't look hung (CSR-149).
+func (c *CLI) agentImage(ctx context.Context, project string, build bool) (string, tools.Mount, error) {
+	env := &environment.Docker{
+		Project: project, BuildImage: build, Exec: c.exec,
+		Log: slog.New(slog.NewTextHandler(c.Stderr, nil)),
+		OnFetch: func() {
+			fmt.Fprintln(c.Stdout, "Building the agent image (first time only, this can take a few minutes)…")
+		},
+	}
+	image, err := env.Image(ctx)
+	if err != nil {
+		return "", tools.Mount{}, err
+	}
+	t := &tools.Tools{State: c.Paths.State, Exec: c.exec, HTTP: c.http, OnFill: func() {
+		fmt.Fprintln(c.Stdout, "Installing the agent tools (first time only)…")
+	}}
+	mount, err := t.Mount(ctx, image)
+	return image, mount, err
 }

@@ -18,10 +18,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/name"
-	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -52,11 +50,7 @@ func (c *CLI) updateRefresh() int {
 		return c.fail(err)
 	}
 
-	image, err := (&environment.Docker{BuildImage: cfg.BuildImage}).Image(ctx)
-	if err != nil {
-		return c.fail(err)
-	}
-	if _, err := (&tools.Tools{State: c.Paths.State}).Mount(ctx, image); err != nil {
+	if _, _, err := c.agentImage(ctx, "", cfg.BuildImage); err != nil {
 		return c.fail(err)
 	}
 	fmt.Fprintln(c.Stdout, "Refreshed the tools volume and the default image")
