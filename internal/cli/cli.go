@@ -56,6 +56,7 @@ func commands() []command {
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
 		{"login", "CLIENT --project KEY", "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
+		{"key", "set CLIENT --project KEY [-url URL]", "set or replace a project's model key for a client (claude, opencode, codex, gemini), read from stdin; it wins over a login", (*CLI).key},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

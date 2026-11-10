@@ -33,6 +33,9 @@ const (
 	GeminiKey Kind = "gemini"
 )
 
+// ClientKeys is the model credential each agent client runs with.
+var ClientKeys = map[string]Kind{"claude": AnthropicCredential, "codex": OpenAIKey, "opencode": OpenRouterKey, "gemini": GeminiKey}
+
 // modelCredentials are the kinds CopyModelCredentials copies.
 var modelCredentials = []Kind{AnthropicCredential, OpenRouterKey, OpenAIKey, GeminiKey}
 

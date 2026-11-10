@@ -20,7 +20,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-var keys = map[string]secrets.Kind{"claude": secrets.AnthropicCredential, "codex": secrets.OpenAIKey, "opencode": secrets.OpenRouterKey, "gemini": secrets.GeminiKey}
+var keys = secrets.ClientKeys
 
 // Project is what the steps of one configured project need.
 type Project struct {
