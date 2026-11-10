@@ -90,13 +90,19 @@ func TestImagePulledByPinnedDigest(t *testing.T) {
 	}
 }
 
-// CSR-49: offline, a failed pull falls back to the local build.
+// CSR-49: offline, a failed pull falls back to the local build; CSR-151:
+// announcing the slow step once, not again before the build.
 func TestImageBuiltWhenPullFails(t *testing.T) {
 	pin(t, testDigest, dockerfileSum())
 	d, calls := scripted(nil, map[int]error{0: errors.New("no such image"), 1: errors.New("offline"), 2: errors.New("no such image")})
+	fetches := 0
+	d.OnFetch = func() { fetches++ }
 	ref, err := d.Image(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if fetches != 1 {
+		t.Errorf("OnFetch called %d times, want 1", fetches)
 	}
 	if ref != localTag() {
 		t.Errorf("image = %q, want %q", ref, localTag())

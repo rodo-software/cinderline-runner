@@ -65,7 +65,7 @@ func TestLoginClientWithoutLogin(t *testing.T) {
 // and tools volume are already there. The fake docker stops login at the
 // state volume, before the real interactive docker run.
 func TestLoginFirstTimeLines(t *testing.T) {
-	const imageLine, toolsLine = "Building the agent image", "Installing the agent tools"
+	const imageLine, toolsLine = "Fetching the agent image", "Installing the agent tools"
 	for _, tc := range []struct {
 		name                       string
 		imageMissing, toolsMissing bool
@@ -73,7 +73,7 @@ func TestLoginFirstTimeLines(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, out, _ := newCLI(t, "")
 			saveConfig(t, c, config.Project{URL: "https://cinderline.test", Key: "WEB", Repository: "https://git.test/o/r.git"})
-			var built, downloaded bool
+			var fetched, downloaded bool
 			c.exec = func(_ context.Context, _ []string, argv ...string) (string, error) {
 				cmd := strings.Join(argv, " ")
 				switch {
@@ -81,10 +81,10 @@ func TestLoginFirstTimeLines(t *testing.T) {
 					if tc.imageMissing {
 						return "", errors.New("no such image")
 					}
-				case strings.HasPrefix(cmd, "docker build"):
-					built = true
+				case strings.HasPrefix(cmd, "docker pull"), strings.HasPrefix(cmd, "docker build"):
+					fetched = true
 					if !strings.Contains(out.String(), imageLine) {
-						t.Errorf("docker build before the image line; stdout %q", out.String())
+						t.Errorf("%s before the image line; stdout %q", cmd, out.String())
 					}
 				case strings.HasPrefix(cmd, "docker version"):
 					return "amd64", nil
@@ -109,8 +109,8 @@ func TestLoginFirstTimeLines(t *testing.T) {
 			if code := c.Run([]string{"login", "claude", "--project", "WEB"}); code != 1 {
 				t.Errorf("code %d, want 1 (the fake stops login)", code)
 			}
-			if built != tc.imageMissing || downloaded != tc.toolsMissing {
-				t.Errorf("built %v, downloaded %v", built, downloaded)
+			if fetched != tc.imageMissing || downloaded != tc.toolsMissing {
+				t.Errorf("fetched %v, downloaded %v", fetched, downloaded)
 			}
 			if got := strings.Contains(out.String(), imageLine); got != tc.imageMissing {
 				t.Errorf("image line printed %v, want %v; stdout %q", got, tc.imageMissing, out.String())

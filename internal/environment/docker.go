@@ -36,8 +36,9 @@ const PublishedImage = "ghcr.io/rodo-software/" + name.Name + "-runner-default"
 // publishedDigest pins the published image; publishedSum is the first 12 hex
 // of the SHA-256 of the images/default/Dockerfile it was built from, so a
 // changed Dockerfile is built locally until it is published and pinned again.
-// Both stay empty until the first publish (docs/ci/default-image.yml).
-var publishedDigest, publishedSum = "", ""
+// Pinned to tag v0.1.1 (CSR-151); repeat the pin after every Dockerfile
+// change (.github/workflows/default-image.yml, point 3).
+var publishedDigest, publishedSum = "sha256:22dc9fdeda6197570675db35feb6826639a35ae3f16079151c7b3cddcb95e95d", "8bc0a5e245dc"
 
 // DBEnv are the variables today's compose file sets, so Laravel's tests in
 // the clone reach the run's MySQL; real environment variables win over the
@@ -241,13 +242,15 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 	sum := sha256.Sum256(defaultimage.Dockerfile)
 	sumHex := hex.EncodeToString(sum[:6])
 	tag := name.Name + "-default:" + sumHex
+	onFetch := d.OnFetch
 	if !d.BuildImage && publishedDigest != "" && publishedSum == sumHex {
 		ref := PublishedImage + "@" + publishedDigest
 		if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref); err == nil {
 			return ref, nil
 		}
-		if d.OnFetch != nil {
-			d.OnFetch()
+		if onFetch != nil {
+			onFetch()
+			onFetch = nil // announced once, also when the pull fails and we build
 		}
 		_, err := d.exec(ctx, "docker", "pull", "--quiet", ref)
 		if err == nil {
@@ -255,7 +258,7 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 		}
 		d.log().Warn("default image pull failed, building it locally", "image", ref, "err", err)
 	}
-	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile}, d.OnFetch)
+	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile}, onFetch)
 }
 
 // ProxyImage returns the egress proxy's image, built locally from the

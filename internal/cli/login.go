@@ -101,7 +101,7 @@ func (c *CLI) agentImage(ctx context.Context, project string, build bool) (strin
 		Project: project, BuildImage: build, Exec: c.exec,
 		Log: slog.New(slog.NewTextHandler(c.Stderr, nil)),
 		OnFetch: func() {
-			fmt.Fprintln(c.Stdout, "Building the agent image (first time only, this can take a few minutes)…")
+			fmt.Fprintln(c.Stdout, "Fetching the agent image (first time only, this can take a few minutes)…")
 		},
 	}
 	image, err := env.Image(ctx)
