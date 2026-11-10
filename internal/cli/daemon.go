@@ -20,7 +20,12 @@ var drainPoll = time.Second // how often stop --drain asks the daemon what it st
 // run runs the daemon in the foreground. daemon.Run stops on SIGINT and SIGTERM
 // itself and gives localapi.ErrHeld while the service holds the socket.
 func (c *CLI) run(args []string) int {
-	if !c.noArgs("run", args) {
+	f := c.flags("run", "[-v]")
+	verbose := f.Bool("v", false, "also log to stderr, and log Debug lines")
+	if err := f.Parse(args); err != nil || f.NArg() > 0 {
+		if err == nil {
+			f.Usage()
+		}
 		return 2
 	}
 	if c.pathsErr != nil {
@@ -29,7 +34,11 @@ func (c *CLI) run(args []string) int {
 	if err := c.checkDocker(context.Background(), true); err != nil {
 		return c.fail(err)
 	}
-	if err := daemon.Run(context.Background(), daemon.Options{Paths: c.Paths, Version: c.Version}); err != nil {
+	o := daemon.Options{Paths: c.Paths, Version: c.Version}
+	if *verbose {
+		o.Verbose = c.Stderr
+	}
+	if err := daemon.Run(context.Background(), o); err != nil {
 		return c.fail(err)
 	}
 	return 0

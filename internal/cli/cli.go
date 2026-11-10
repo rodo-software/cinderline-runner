@@ -46,7 +46,7 @@ func commands() []command {
 	return []command{
 		{"add", "", "add a project, asking for its details", (*CLI).add},
 		{"remove", "[-url URL] KEY", "remove a project and its secrets", (*CLI).remove},
-		{"run", "", "run in the foreground until Ctrl-C", (*CLI).run},
+		{"run", "[-v]", "run in the foreground until Ctrl-C; -v also logs to stderr, with Debug lines", (*CLI).run},
 		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
 		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
 		{"stop", "[--drain]", "stop the running " + name.Name + " at once, or with --drain once its runs have finished", (*CLI).stopDaemon},

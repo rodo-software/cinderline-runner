@@ -48,6 +48,8 @@ To pin a specific version, set `CINDERLINE_DOWNLOAD_URL` before running (e.g.
 
 Then start it with `cinderline run` (foreground, until Ctrl-C) or as a service (below).
 
+`cinderline run -v` also prints the log on the terminal, one readable line per event, and adds Debug lines (each runner API request) to both the terminal and the log file.
+
 ### Sign a client in instead of storing a key
 
 `cinderline login claude --project KEY`, `cinderline login codex --project KEY` or `cinderline login gemini --project KEY` runs the CLI's own sign-in (`claude auth login`, `codex login --device-auth`, Gemini CLI's own Google sign-in) in a container. Open the link it prints and paste the code back. The credentials stay on that project's state volume; the runner never reads them. When the keychain holds no Anthropic, OpenAI or Gemini key for the project, runs then use this login; a stored key still wins. OpenCode uses the project's OpenRouter key only. After `login gemini`, type `/quit` once it says "Authentication succeeded": the interactive Gemini CLI stays open after signing in.
