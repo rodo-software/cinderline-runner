@@ -44,6 +44,49 @@ To pin a specific version, set `CINDERLINE_DOWNLOAD_URL` before running (e.g.
 
 `cinderline add` asks for the Cinderline instance's URL, the project's runner token, the repository (it offers the one the project names in Cinderline and refuses another) and a git token. It checks Docker first (installed, daemon running, at least 5 GB free), checks the runner token against the instance as it asks, stores both tokens in the OS keychain (or a 0600 file in the state folder where there is none) and the rest in `config.json`, and warns when CI can read secrets from the runner's branches (see "CI secrets" below). When other projects are configured, it offers to copy their model credentials. A running runner picks the project up at once. `cinderline remove [-url URL] KEY` removes a project and its secrets.
 
+### The git token
+
+`add` stores the git token without trying it. The first run or the CI secrets check is the first place a missing permission shows. The runner uses the token in two places. A throwaway git helper container uses it to clone, fetch and push `cinderline/<REF>` branches over HTTPS; pushes are never forced. The runner process uses it to call the forge's API. It never enters an agent container. Give it access to this one repository only, with the permissions below. Rows marked *CI secrets check* are optional: without them, `add` prints "could not check whether CI on the runner's branches can read secrets" and still adds the project. Scope names were checked against each forge's documentation on 2026-11-10; those marked *(not checked)* could not be confirmed there.
+
+**GitHub and GitHub Enterprise:** a fine-grained personal access token, limited to the repository:
+
+| Permission | Used for | Without it |
+|---|---|---|
+| Metadata: read (always granted) | finding the default branch when the project names no base branch | no run starts |
+| Contents: read and write | clone, fetch, push | no run starts, or its branch is not pushed |
+| Pull requests: read and write | opening and finding the pull request, auto-merge (squash, GraphQL `enablePullRequestAutoMerge`) for trusted teams *(not checked: the docs name no permission for the mutation)* | the branch is pushed but no pull request is opened or merged |
+| Checks: read | merge status: failed check runs on the pull request's head *(not checked: GitHub's docs disagree on whether fine-grained tokens can call this endpoint on github.com)* | the issue's merge status is not updated |
+| Workflows: read and write (optional) | pushing commits that change `.github/workflows/` | GitHub refuses that push |
+| Secrets: read | CI secrets check: repository and organisation secrets | the check fails |
+| Actions: read | CI secrets check: listing environments | the check fails |
+| Environments: read | CI secrets check: secrets of environments any branch can deploy to | the check fails |
+
+A classic token needs `repo`, plus `workflow` if agents may change workflows. It reaches every repository you can, so prefer the fine-grained one. Auto-merge also needs "Allow auto-merge" turned on in the repository's settings.
+
+**GitLab (gitlab.com and self-managed):** a project access token, or a personal access token, with the scope `api`. No narrower scope works: `write_repository` covers git but not the API, so it cannot open merge requests. `api` covers both. The role matters too:
+
+- Developer: clone, fetch and push `cinderline/` branches, open merge requests, read their pipeline status.
+- The role the default branch's protection allows to merge, Maintainer by default: auto-merge (squash, remove the source branch once the pipeline succeeds). With a lower role, GitLab refuses the merge request.
+- CI secrets check: Maintainer to list the project's variables *(not checked: the API docs name no role)*, and Owner of the group to list the group's variables (GitLab's docs name Owner). A project access token cannot be a group's Owner, so for a project in a group the check fails unless you use the personal access token of a group Owner.
+
+**Forgejo and Gitea:** an access token (Settings → Applications) with:
+
+| Scope | Used for | Without it |
+|---|---|---|
+| `write:repository` | clone, fetch, push, opening and finding pull requests, merge when checks succeed (squash, delete the branch), merge status from the commit status | no run starts, or its pull request is not opened or merged |
+| `read:organization` | CI secrets check: the organisation's Actions secrets, when the repository belongs to an organisation | the check fails |
+
+For the CI secrets check, the token's user must also own the repository to read its secrets, and be an owner of the organisation to read the organisation's secrets. Gitea 1.25 requires this *(not checked for Forgejo)*. Where Forgejo offers tokens limited to chosen repositories, they only allow repository and issue scopes. Such a token can run issues, but the CI secrets check fails for a repository in an organisation.
+
+**Bitbucket Cloud:** a repository access token (Repository settings → Access tokens). A project or workspace access token also works but reaches more. The runner sends the token as a Bearer token and as the password of the git user `x-token-auth`, so app passwords and user API tokens do not work.
+
+| Permission | Used for | Without it |
+|---|---|---|
+| Pull requests: Write (`pullrequest:write`, includes `repository:write` and `repository`) | clone, fetch, push, default branch, opening and finding pull requests, merge status from the head commit's build statuses | no run starts, or its pull request is not opened |
+| Pipelines: Read (`pipeline`) | CI secrets check: repository variables, deployment environments and their variables | the check fails |
+
+The runner never merges on Bitbucket: its API cannot merge when builds pass, so you merge yourself. The check also reads the workspace's variables. A repository access token may be refused there *(not checked)*. In that case the check fails while the runs still work.
+
 Last, `add` asks for the project's model keys, each optional (press Enter to skip): an Anthropic API key or `claude setup-token` token for Claude Code, an OpenRouter key for OpenCode, an OpenAI API key for Codex and a Gemini API key (or a Vertex AI express-mode key, see `gemini_vertex` below) for Gemini CLI. Prefer a spend-limited API key to a subscription. OpenCode runs only with an OpenRouter key. Like the tokens, keys are typed in plain text and stored in the keychain; none is printed back.
 
 `cinderline key set CLIENT --project KEY` (CLIENT is `claude`, `opencode`, `codex` or `gemini`) sets or replaces one key later, read from stdin, e.g. `cinderline key set opencode --project WEB`, then paste the key and press Enter. Add `-url URL` when projects on several instances share the key.
