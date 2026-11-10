@@ -923,6 +923,10 @@ components:
               issue:
                 description: An issue ref, set only for missing_key and unsupported_client.
                 type: string
+        refused_connections:
+          description: Connections the egress proxy of this project's agent runs refused since the runner started (CSR-63); left out while 0.
+          type: integer
+          minimum: 1
     AgentTokenKind:
       description: |
         What an agent token may do, limited to the issue it was made for:

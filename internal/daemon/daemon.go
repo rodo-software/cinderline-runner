@@ -167,7 +167,13 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			projects = append(projects, st)
 			continue
 		}
-		env := &environment.Docker{Project: p.Key, Log: log, BuildImage: cfg.BuildImage}
+		c := cinderline.New(p.URL, token, o.Version)
+		c.Log = log.With("project", p.Key)
+		env := &environment.Docker{
+			Project: p.Key, Log: log, BuildImage: cfg.BuildImage,
+			Allow:     environment.ProjectHosts(p.URL, p.AllowHosts),
+			OnRefused: func(string) { c.AddRefused() },
+		}
 		proj, err := run.NewProject(p, sec, o.Paths.State, env, log)
 		if err != nil {
 			log.Error("project not started", "project", p.Key, "err", err)
@@ -175,8 +181,6 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			projects = append(projects, st)
 			continue
 		}
-		c := cinderline.New(p.URL, token, o.Version)
-		c.Log = log.With("project", p.Key)
 		wg.Go(func() {
 			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
 			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}

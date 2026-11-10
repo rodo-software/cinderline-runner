@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -167,4 +168,49 @@ func TestSyncReportSendsClientsOnlyWhenChanged(t *testing.T) {
 	c.SetClients([]ReportClient{{Name: "claude", Version: &v, State: "invalid_credential"}, {Name: "codex", State: "missing_credential"}})
 	sync(`[{"name":"claude","version":"2.1.316","state":"invalid_credential"},{"name":"codex","version":null,"state":"missing_credential"}]`)
 	sync()
+}
+
+// CSR-63: the runner counts the connections the egress proxy refused, per
+// project since it started, and sends the count in the report, so a model
+// that probes once in 100,000 turns still shows up. Zero is left out.
+func TestSyncReportCountsRefusedConnections(t *testing.T) {
+	var (
+		mu  sync.Mutex
+		got []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var rep map[string]json.RawMessage
+		if err := json.Unmarshal(b, &rep); err != nil {
+			t.Errorf("report body %s", b)
+		}
+		mu.Lock()
+		got = append(got, string(rep["refused_connections"]))
+		mu.Unlock()
+		w.WriteHeader(204)
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL, runnerToken, version)
+	c.HTTP = srv.Client()
+	base := Report{RunnerVersion: version, Clients: []ReportClient{}, Environments: []string{"default"}}
+	ctx := context.Background()
+	sync := func() {
+		t.Helper()
+		if err := c.SyncReport(ctx, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sync()
+	c.AddRefused()
+	c.AddRefused()
+	sync()
+	sync() // unchanged: nothing sent
+	c.AddRefused()
+	sync()
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"", "2", "3"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("refused_connections sent = %q, want %q", got, want)
+	}
 }

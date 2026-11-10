@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -53,6 +57,9 @@ type Project struct {
 	OpenAIBaseURL string `json:"openai_base_url,omitempty"`
 	// GeminiVertex says the Gemini key is a Vertex AI express-mode key; false means the Gemini API.
 	GeminiVertex bool `json:"gemini_vertex,omitempty"`
+	// AllowHosts are extra host:port pairs this project's runs may reach.
+	// Only local config extends the allowlist (decision 2026-11-09-network-allowlist).
+	AllowHosts []string `json:"allow_hosts,omitempty"`
 }
 
 // Paths are the per-machine paths. Computing them creates nothing on disk.
@@ -143,6 +150,8 @@ func (c *Config) Validate() error {
 			problem = "repository must be an absolute URL with a host"
 		} else if seen[id{p.URL, p.Key}] {
 			problem = "another project has the same url and key"
+		} else if i := slices.IndexFunc(p.AllowHosts, func(hp string) bool { return !validHostPort(hp) }); i >= 0 {
+			problem = fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", p.AllowHosts[i])
 		}
 		if problem != "" {
 			return fmt.Errorf("project %d (%s): %s", i+1, p.Key, problem)
@@ -150,6 +159,17 @@ func (c *Config) Validate() error {
 		seen[id{p.URL, p.Key}] = true
 	}
 	return nil
+}
+
+// hostChars are what an allow_hosts host may hold: a DNS name or an IPv4
+// address. The egress proxy matches it exactly.
+var hostChars = regexp.MustCompile(`(?i)^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
+
+// validHostPort says hp is a host and a port in 1-65535.
+func validHostPort(hp string) bool {
+	host, port, err := net.SplitHostPort(hp)
+	n, perr := strconv.Atoi(port)
+	return err == nil && hostChars.MatchString(host) && perr == nil && n >= 1 && n <= 65535 && strconv.Itoa(n) == port
 }
 
 // Save validates c, sets its version and writes it to path atomically.

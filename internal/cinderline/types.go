@@ -146,6 +146,9 @@ type Report struct {
 	Clients       []ReportClient `json:"clients"`
 	Environments  []string       `json:"environments"`
 	Errors        []ReportError  `json:"errors"`
+	// RefusedConnections counts the hosts the egress proxy refused for this
+	// project since the runner started (CSR-63); 0 is left out.
+	RefusedConnections int `json:"refused_connections,omitempty"`
 }
 
 // UpdateIssueRequest changes an issue. Status needs ExpectedStatus; empty fields are not sent.

@@ -210,6 +210,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 		Cmd:     append([]string{"/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
+		Allow:   []string{"openrouter.ai:443"},
 	}
 	if s := calls[0].Args[0].(environment.Spec); !reflect.DeepEqual(s, want) {
 		t.Errorf("Spec =\n%+v\nwant\n%+v", s, want)

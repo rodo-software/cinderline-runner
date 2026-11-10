@@ -3,7 +3,6 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -46,6 +45,7 @@ func (c *Codex) Run(ctx context.Context, t Turn) (Result, error) {
 		}, codexArgs(t, c.MCPURL, c.BaseURL)...),
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
+		Allow:   c.Hosts(),
 	})
 	res := parseCodex(out)
 	if res.SessionID == "" {
@@ -55,17 +55,22 @@ func (c *Codex) Run(ctx context.Context, t Turn) (Result, error) {
 	return res, err
 }
 
-// Hosts returns the provider hosts a run needs, for the per-run network
-// allowlist (M8).
+// Hosts returns the provider host:port pairs a run needs, for the run's
+// network allowlist: OpenAI's API, or the configured base URL's.
+// Without a key the run uses the stored sign-in (CSR-58), which also needs
+// the provider's sign-in hosts: decision 2026-11-09-network-allowlist point 5,
+// unchecked against the CLI; a missing one shows up as a refused host.
 func (c *Codex) Hosts() []string {
-	if c.BaseURL == "" {
-		return []string{"api.openai.com"}
-	}
-	u, err := url.Parse(c.BaseURL)
-	if err != nil {
+	if c.BaseURL != "" {
+		if hp := environment.HostPort(c.BaseURL); hp != "" {
+			return []string{hp}
+		}
 		return nil
 	}
-	return []string{u.Hostname()}
+	if c.Key == "" {
+		return []string{"api.openai.com:443", "chatgpt.com:443", "auth.openai.com:443"}
+	}
+	return []string{"api.openai.com:443"}
 }
 
 // codexArgs is Codex's headless argv for one turn; the prompt goes in on

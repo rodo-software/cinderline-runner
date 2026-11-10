@@ -91,6 +91,8 @@ type Client struct {
 	// heldClients replaces base.Clients in SyncReport when set by
 	// SetClients (CSR-137). Nil means use base.Clients.
 	heldClients []ReportClient
+
+	refused int // connections the egress proxy refused since start, for the report
 }
 
 // New returns a client for the instance at baseURL, e.g. https://cinderline.example.com.
@@ -268,6 +270,14 @@ func (c *Client) SetClients(cs []ReportClient) {
 	c.heldClients = cs
 }
 
+// AddRefused counts one connection the egress proxy refused, sent with the
+// next SyncReport.
+func (c *Client) AddRefused() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refused++
+}
+
 // KeepIssueErrors drops every issue error whose ref is not in refs.
 // Runner-wide errors (empty Issue) stay.
 func (c *Client) KeepIssueErrors(refs map[string]bool) {
@@ -300,6 +310,7 @@ func (c *Client) SyncReport(ctx context.Context, base Report) error {
 		clients = c.heldClients
 	}
 	base.Clients = clients
+	base.RefusedConnections = c.refused
 	encoded, err := json.Marshal(base)
 	if err != nil {
 		c.mu.Unlock()

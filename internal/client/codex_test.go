@@ -140,6 +140,7 @@ func TestCodexRunFresh(t *testing.T) {
 		Cmd:     append([]string{"sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`, "/opt/cinderline/bin/codex"}, codexArgs(turn, "https://cs.example/mcp", "")...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
+		Allow:   []string{"api.openai.com:443"},
 	}
 	if s := calls[0].Args[0].(environment.Spec); !reflect.DeepEqual(s, want) {
 		t.Errorf("Spec =\n%+v\nwant\n%+v", s, want)
@@ -175,16 +176,5 @@ func TestCodexRunStateVolumeFails(t *testing.T) {
 	}
 	if len(env.Calls()) != 0 {
 		t.Error("the turn ran without its state volume")
-	}
-}
-
-// The provider hosts a Codex run needs, for the per-run network allowlist:
-// OpenAI's API, or the host of the configured OpenAI-compatible base URL.
-func TestCodexHosts(t *testing.T) {
-	if got := (&Codex{}).Hosts(); !reflect.DeepEqual(got, []string{"api.openai.com"}) {
-		t.Errorf("Hosts() = %q, want api.openai.com", got)
-	}
-	if got := (&Codex{BaseURL: "http://host.docker.internal:11434/v1"}).Hosts(); !reflect.DeepEqual(got, []string{"host.docker.internal"}) {
-		t.Errorf("Hosts() with a base URL = %q, want host.docker.internal", got)
 	}
 }

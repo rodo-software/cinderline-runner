@@ -27,6 +27,10 @@ type OpenCode struct {
 
 var _ Client = (*OpenCode)(nil)
 
+// Hosts returns the provider host:port pairs a run needs, for the run's
+// network allowlist: OpenRouter only.
+func (c *OpenCode) Hosts() []string { return []string{"openrouter.ai:443"} }
+
 // Run runs one turn. OpenCode has no turn limit to hit (see opencodeConfig),
 // so HitTurnLimit stays false.
 func (c *OpenCode) Run(ctx context.Context, t Turn) (Result, error) {
@@ -42,6 +46,7 @@ func (c *OpenCode) Run(ctx context.Context, t Turn) (Result, error) {
 		Cmd:     append([]string{tools.Path + "/bin/opencode"}, opencodeArgs(t)...),
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
+		Allow:   c.Hosts(),
 	})
 	res := parseOpenCode(out)
 	if res.SessionID == "" {

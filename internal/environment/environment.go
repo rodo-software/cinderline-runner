@@ -37,6 +37,9 @@ type Spec struct {
 	Cmd     []string
 	Stdin   string
 	Timeout time.Duration // 0: none
+	// Allow is the client's provider hosts, as host:port, for the run's
+	// network allowlist next to the project's (CSR-63).
+	Allow []string
 }
 
 // Tail is the end of a turn's output kept for comments: the last 40 lines,

@@ -71,6 +71,8 @@ func TestClaudeEnv(t *testing.T) {
 	orch := claudeEnv("sk-ant-api03-k", Turn{Token: "tok"})
 	want := []string{
 		"CLAUDE_CONFIG_DIR=/state/claude",
+		// CSR-63: no telemetry or update checks, which the proxy would refuse and count.
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		"ANTHROPIC_API_KEY=sk-ant-api03-k",
 		"CINDERLINE_TOKEN=tok",
 	}
@@ -81,6 +83,8 @@ func TestClaudeEnv(t *testing.T) {
 	worker := claudeEnv("sk-ant-oat01-t", Turn{})
 	want = []string{
 		"CLAUDE_CONFIG_DIR=/state/claude",
+		// CSR-63: no telemetry or update checks, which the proxy would refuse and count.
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-t",
 		"CLAUDE_CODE_DISABLE_CLAUDE_MDS=1",
 	}
@@ -180,6 +184,7 @@ func TestClaudeRunFresh(t *testing.T) {
 		Cmd:     append([]string{"/opt/cinderline/bin/claude"}, claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, session, "https://cs.example/mcp")...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
+		Allow:   []string{"api.anthropic.com:443"},
 	}
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("Spec =\n%+v\nwant\n%+v", s, want)

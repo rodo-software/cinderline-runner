@@ -182,6 +182,7 @@ func (c *Gemini) Run(ctx context.Context, t Turn) (Result, error) {
 		}, geminiArgs(t)...),
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
+		Allow:   c.Hosts(),
 	})
 	res := parseGemini(out)
 	if res.SessionID == "" {
@@ -194,11 +195,18 @@ func (c *Gemini) Run(ctx context.Context, t Turn) (Result, error) {
 	return res, err
 }
 
-// Hosts returns the provider hosts a run needs, for the per-run network
-// allowlist (M8).
+// Hosts returns the provider host:port pairs a run needs, for the run's
+// network allowlist: the Gemini API, or Vertex AI's global endpoint for an
+// express-mode key.
+// Without a key the run uses the stored sign-in (CSR-58), which also needs
+// the provider's sign-in hosts: decision 2026-11-09-network-allowlist point 5,
+// unchecked against the CLI; a missing one shows up as a refused host.
 func (c *Gemini) Hosts() []string {
-	if c.Vertex {
-		return []string{"aiplatform.googleapis.com"}
+	switch {
+	case c.Key == "":
+		return []string{"generativelanguage.googleapis.com:443", "cloudcode-pa.googleapis.com:443", "oauth2.googleapis.com:443"}
+	case c.Vertex:
+		return []string{"aiplatform.googleapis.com:443"}
 	}
-	return []string{"generativelanguage.googleapis.com"}
+	return []string{"generativelanguage.googleapis.com:443"}
 }

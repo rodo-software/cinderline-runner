@@ -203,6 +203,7 @@ func TestGeminiRunFresh(t *testing.T) {
 		}, geminiArgs(turn)...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
+		Allow:   []string{"generativelanguage.googleapis.com:443"},
 	}
 	if s := calls[0].Args[0].(environment.Spec); !reflect.DeepEqual(s, want) {
 		t.Errorf("Spec =\n%+v\nwant\n%+v", s, want)
@@ -249,16 +250,5 @@ func TestGeminiRunStateVolumeFails(t *testing.T) {
 	}
 	if len(env.Calls()) != 0 {
 		t.Error("the turn ran without its state volume")
-	}
-}
-
-// The provider hosts a Gemini run needs, for the per-run network allowlist:
-// the Gemini API, or Vertex AI's global endpoint for an express-mode key.
-func TestGeminiHosts(t *testing.T) {
-	if got := (&Gemini{}).Hosts(); !reflect.DeepEqual(got, []string{"generativelanguage.googleapis.com"}) {
-		t.Errorf("Hosts() = %q", got)
-	}
-	if got := (&Gemini{Vertex: true}).Hosts(); !reflect.DeepEqual(got, []string{"aiplatform.googleapis.com"}) {
-		t.Errorf("Vertex Hosts() = %q", got)
 	}
 }

@@ -31,6 +31,18 @@ type Claude struct {
 
 var _ Client = (*Claude)(nil)
 
+// Hosts returns the provider host:port pairs a run needs, for the run's
+// network allowlist: Anthropic's API.
+// Without a key the run uses the stored sign-in (CSR-58), which also needs
+// the provider's sign-in hosts: decision 2026-11-09-network-allowlist point 5,
+// unchecked against the CLI; a missing one shows up as a refused host.
+func (c *Claude) Hosts() []string {
+	if c.Credential == "" {
+		return []string{"api.anthropic.com:443", "console.anthropic.com:443", "platform.claude.com:443"}
+	}
+	return []string{"api.anthropic.com:443"}
+}
+
 // errTurnLimit is a turn that stopped at the team's turn limit.
 var errTurnLimit = errors.New("claude: stopped at the turn limit")
 
@@ -52,6 +64,7 @@ func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
 		Cmd:     append([]string{tools.Path + "/bin/claude"}, claudeArgs(t, session, c.MCPURL)...),
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
+		Allow:   c.Hosts(),
 	})
 	res := parseClaude(out)
 	if res.SessionID == "" {
@@ -148,7 +161,8 @@ func claudeArgs(t Turn, session, mcpURL string) []string {
 // it skip the project's CLAUDE.md files: workers get what they need in the
 // sub-issue (app repository decision 2026-11-05-workers-skip-project-files).
 func claudeEnv(credential string, t Turn) []string {
-	env := []string{"CLAUDE_CONFIG_DIR=" + StatePath + "/claude"}
+	// No telemetry or update checks: the proxy would refuse and count them.
+	env := []string{"CLAUDE_CONFIG_DIR=" + StatePath + "/claude", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}
 	if credential != "" {
 		// A `claude setup-token` token is an OAuth token; anything else is an API key.
 		if strings.HasPrefix(credential, "sk-ant-oat") {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -138,6 +139,12 @@ func TestValidate(t *testing.T) {
 		{"empty repository", []Project{with(func(p *Project) { p.Repository = "" })}, "project 1 (WEB): repository"},
 		{"relative repository", []Project{with(func(p *Project) { p.Repository = "acme/web.git" })}, "project 1 (WEB): repository"},
 		{"duplicate", []Project{ok, ok}, "project 2 (WEB): "},
+		// CSR-63, Willem's decision (option C): extra allowlist entries come from local config only, as exact host:port.
+		{"allow hosts", []Project{with(func(p *Project) { p.AllowHosts = []string{"mirror.example.com:443", "api.example.com:8443"} })}, ""},
+		{"allow host without port", []Project{with(func(p *Project) { p.AllowHosts = []string{"mirror.example.com"} })}, "project 1 (WEB): allow_hosts"},
+		{"allow host wildcard", []Project{with(func(p *Project) { p.AllowHosts = []string{"*.example.com:443"} })}, "project 1 (WEB): allow_hosts"},
+		{"allow host bad port", []Project{with(func(p *Project) { p.AllowHosts = []string{"x.example:0"} })}, "project 1 (WEB): allow_hosts"},
+		{"allow host empty host", []Project{with(func(p *Project) { p.AllowHosts = []string{":443"} })}, "project 1 (WEB): allow_hosts"},
 	}
 	for _, tt := range tests {
 		err := (&Config{Version: 1, Projects: tt.projects}).Validate()
@@ -323,5 +330,16 @@ func TestBuildImage(t *testing.T) {
 	}
 	if cfg, err := Load(writeFile(t, `{"version":1,"build_image":true,"projects":[]}`)); err != nil || !cfg.BuildImage {
 		t.Fatalf("set = %v, %v; want true", cfg, err)
+	}
+}
+
+// CSR-63: a project's extra allowlist entries are read from allow_hosts.
+func TestAllowHostsField(t *testing.T) {
+	var p Project
+	if err := json.Unmarshal([]byte(`{"allow_hosts":["mirror.example.com:443"]}`), &p); err != nil {
+		t.Fatal(err)
+	}
+	if len(p.AllowHosts) != 1 || p.AllowHosts[0] != "mirror.example.com:443" {
+		t.Errorf("AllowHosts = %q", p.AllowHosts)
 	}
 }

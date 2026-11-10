@@ -171,7 +171,7 @@ A port of today's behaviour in `legacy/runner.mjs` and `legacy/lib.mjs`. Every b
 ### M8. Network allowlist
 
 - Agent containers sit on an internal network whose only way out is a small egress proxy with an allowlist (EMBER-58).
-- **Open (before M8):** what the default allowlist holds (the model providers, the Cinderline URL, the forge, package registries such as Packagist and npm) and who can extend it (local configuration only, or also Cinderline).
+- **Decided** (decision 2026-11-09-network-allowlist): per run, the provider of that run's client, the Cinderline host and the package registries; no forge and no `host.docker.internal`; only local config (`allow_hosts`) extends it.
 - **Done when:** an agent can reach what its run needs and nothing else, tested in CI.
 
 ## 4. The app's side (stays in the app repository)
