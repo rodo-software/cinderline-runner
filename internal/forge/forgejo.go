@@ -182,9 +182,14 @@ func (f *Forgejo) CISecrets(ctx context.Context) ([]string, error) {
 	err = f.do(ctx, http.MethodGet, f.host+"/orgs/"+url.PathEscape(f.owner)+"/actions/secrets?limit=50", nil, &orgSecrets)
 	if err != nil {
 		var e *forgejoError
-		if errors.As(err, &e) && e.status == http.StatusNotFound {
+		switch {
+		case errors.As(err, &e) && e.status == http.StatusNotFound:
 			// owner is a user, not an org
-		} else {
+		case errors.As(err, &e) && e.status == http.StatusForbidden:
+			// Forgejo checks scopes before the owner, so a user owner answers 403 to
+			// a token without read:organization; not "no secrets" for a real org.
+			return exposed, fmt.Errorf("organization secrets not checked (repository secrets were): %w", err)
+		default:
 			return nil, err
 		}
 	} else {

@@ -204,10 +204,30 @@ func TestForgejoCISecretsExposed(t *testing.T) {
 	}), "repository secret DEPLOY_KEY", "organization secret NPM_TOKEN")
 }
 
+// A 403 on the organization call (CSR-147): Forgejo checks the token's
+// scopes before it resolves the owner, so a user owner answers 403 to a token
+// without read:organization. The repository findings stay, with an error.
+func TestForgejoCISecretsOrgForbiddenKeepsRepository(t *testing.T) {
+	f := forgejoCI(t, map[string]reply{
+		fjRepo + "/actions/secrets":      {200, `[{"name":"DEPLOY_KEY"}]`},
+		"/api/v1/orgs/o/actions/secrets": {403, `{"message":"token does not have at least one of required scope(s): [read:organization]"}`},
+	})
+	exposed, err := f.CISecrets(context.Background())
+	if want := []string{"repository secret DEPLOY_KEY"}; !reflect.DeepEqual(exposed, want) {
+		t.Errorf("CISecrets = %q, want %q", exposed, want)
+	}
+	if err == nil || !strings.Contains(err.Error(), "organization secrets not checked") || !strings.Contains(err.Error(), "read:organization") {
+		t.Errorf("error %v, want organization secrets not checked for read:organization", err)
+	}
+}
+
 func TestForgejoCISecretsUnknown(t *testing.T) {
 	checkUnknown(t, forgejoCI(t, map[string]reply{
-		fjRepo + "/actions/secrets":      {200, `[]`},
-		"/api/v1/orgs/o/actions/secrets": {403, `{"message":"user should be an owner of the organization"}`},
+		fjRepo + "/actions/secrets":      {200, `[{"name":"DEPLOY_KEY"}]`},
+		"/api/v1/orgs/o/actions/secrets": {500, `{"message":"internal error"}`},
+	}), "500")
+	checkUnknown(t, forgejoCI(t, map[string]reply{
+		fjRepo + "/actions/secrets": {403, `{"message":"token does not have at least one of required scope(s): [read:repository]"}`},
 	}), "403")
 }
 
