@@ -227,7 +227,7 @@ func TestUpdateDrainsRunningDaemon(t *testing.T) {
 		if err != nil {
 			t.Fatalf("daemon.Run = %v, want nil", err)
 		}
-	default:
+	case <-time.After(time.Second): // the socket closes in Run's defers, a moment before Run returns
 		t.Fatal("update returned before the daemon exited")
 	}
 	if got := content(t, exe); got != "new" {
