@@ -15,14 +15,14 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// ember is project B, linked from CSR (A), added on this runner under the
-// same Cinderline URL.
-var ember = config.Project{URL: cfg.URL + "/", Key: "EMBER", Repository: "https://git.example/o/app",
+// app is project B (key EMBER), linked from CSR (A), added on this runner
+// under the same Cinderline URL.
+var app = config.Project{URL: cfg.URL + "/", Key: "EMBER", Repository: "https://git.example/o/app",
 	ExtraRepositories: []config.ExtraRepository{{URL: "https://git.example/o/docs", Ref: "v2"}, {URL: "https://git.example/o/bad"}}}
 
-// emberLink is the project response of CSR with its link to EMBER.
-const emberLink = `{"key":"CSR","name":"CSR","repository_url":"https://git.example/o/r","forge":"forgejo","base_branch":"main","environment":"default",
-	"linked_projects":[{"key":"EMBER","name":"Ember\napp","repository_url":"https://git.example/o/app","base_branch":"develop"}]}`
+// appLink is the project response of CSR with its link to EMBER.
+const appLink = `{"key":"CSR","name":"CSR","repository_url":"https://git.example/o/r","forge":"forgejo","base_branch":"main","environment":"default",
+	"linked_projects":[{"key":"EMBER","name":"Cinderline\napp","repository_url":"https://git.example/o/app","base_branch":"develop"}]}`
 
 // fetched is one fetchExtras call: its path, its repositories, and how many
 // agent turns had started before it.
@@ -94,18 +94,18 @@ func progressLines(api *fakeAPI) string {
 // with their own tokens; never a token of another URL or project. One that
 // fails is left out and reported. The prompt names what it can read (CSR-161).
 func TestALinkedProjectsRepositoriesAreFetchedAndNamed(t *testing.T) {
-	p, cl, api, calls := linkedRun(t, emberLink, 1, "EMBER/bad")
+	p, cl, api, calls := linkedRun(t, appLink, 1, "EMBER/bad")
 	// Same key on another Cinderline: not the linked project.
 	other := config.Project{URL: "https://other.example", Key: "EMBER", Repository: "https://git.example/o/wrong"}
-	p.Others = []config.Project{cfg, other, ember}
+	p.Others = []config.Project{cfg, other, app}
 	for _, s := range []struct {
 		p config.Project
 		k secrets.Kind
 		v string
 	}{
-		{ember, secrets.GitToken, "tok-app"},
-		{ember, secrets.ExtraGitToken("https://git.example/o/docs"), "tok-docs"},
-		{ember, secrets.ExtraGitToken("https://git.example/o/bad"), "tok-bad"},
+		{app, secrets.GitToken, "tok-app"},
+		{app, secrets.ExtraGitToken("https://git.example/o/docs"), "tok-docs"},
+		{app, secrets.ExtraGitToken("https://git.example/o/bad"), "tok-bad"},
 		{other, secrets.GitToken, "tok-wrong"},
 	} {
 		if _, err := p.Secrets.Set(s.p, s.k, s.v); err != nil {
@@ -127,7 +127,7 @@ func TestALinkedProjectsRepositoriesAreFetchedAndNamed(t *testing.T) {
 		t.Errorf("fetched %+v\nwant %+v", got, want)
 	}
 	prompt := turns(cl)[0].Prompt
-	line := "- EMBER (Ember app): its repositories, read-only: `/linked/EMBER/app`, `/linked/EMBER/docs`\n"
+	line := "- EMBER (Cinderline app): its repositories, read-only: `/linked/EMBER/app`, `/linked/EMBER/docs`\n"
 	if !strings.Contains(prompt, line) || !strings.Contains(prompt, "every change to code goes into this run's own repository") ||
 		strings.Index(prompt, line) > strings.Index(prompt, "## Issue") {
 		t.Errorf("prompt:\n%s", prompt)
@@ -143,12 +143,12 @@ func TestALinkedProjectsRepositoriesAreFetchedAndNamed(t *testing.T) {
 // pruned, so a removed link's code is gone.
 func TestWithoutLinksARunGetsNoLinkedCode(t *testing.T) {
 	for name, body := range map[string]string{
-		"no field":   strings.Replace(emberLink, `"linked_projects":[{"key":"EMBER","name":"Ember\napp","repository_url":"https://git.example/o/app","base_branch":"develop"}]`, `"x":1`, 1),
-		"empty list": strings.Replace(emberLink, `{"key":"EMBER","name":"Ember\napp","repository_url":"https://git.example/o/app","base_branch":"develop"}`, ``, 1),
+		"no field":   strings.Replace(appLink, `"linked_projects":[{"key":"EMBER","name":"Cinderline\napp","repository_url":"https://git.example/o/app","base_branch":"develop"}]`, `"x":1`, 1),
+		"empty list": strings.Replace(appLink, `{"key":"EMBER","name":"Cinderline\napp","repository_url":"https://git.example/o/app","base_branch":"develop"}`, ``, 1),
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, cl, api, calls := linkedRun(t, body, 1)
-			p.Others = []config.Project{cfg, ember}
+			p.Others = []config.Project{cfg, app}
 			runCSR7(t, p, api)
 			if len(*calls) != 1 || (*calls)[0].path != workspace.LinkedPath || len((*calls)[0].repos) != 0 {
 				t.Errorf("fetches = %+v, want the linked volume pruned to nothing", *calls)
@@ -163,7 +163,7 @@ func TestWithoutLinksARunGetsNoLinkedCode(t *testing.T) {
 // A linked project not added on this runner gives a progress line that names
 // it and the add command, no paths in the prompt, and the run goes on.
 func TestALinkedProjectNotOnThisRunner(t *testing.T) {
-	p, cl, api, calls := linkedRun(t, emberLink, 1)
+	p, cl, api, calls := linkedRun(t, appLink, 1)
 	p.Others = []config.Project{cfg}
 	runCSR7(t, p, api)
 	if pr := progressLines(api); !strings.Contains(pr, "Linked project EMBER is not added on this runner") || !strings.Contains(pr, "cinderline add") {
@@ -173,7 +173,7 @@ func TestALinkedProjectNotOnThisRunner(t *testing.T) {
 		t.Errorf("fetches = %+v", *calls)
 	}
 	prompt := turns(cl)[0].Prompt
-	if !strings.Contains(prompt, "- EMBER (Ember app): its code is not available in this run\n") || strings.Contains(prompt, "/linked/") {
+	if !strings.Contains(prompt, "- EMBER (Cinderline app): its code is not available in this run\n") || strings.Contains(prompt, "/linked/") {
 		t.Errorf("prompt:\n%s", prompt)
 	}
 }
@@ -182,9 +182,9 @@ func TestALinkedProjectNotOnThisRunner(t *testing.T) {
 // fetch the linked repositories again before the agent starts, and their
 // prompts name the links (CSR-161).
 func TestAResumeAndAFollowUpFetchAgain(t *testing.T) {
-	p, cl, api, calls := linkedRun(t, emberLink, 3)
-	p.Others = []config.Project{cfg, ember}
-	if _, err := p.Secrets.Set(ember, secrets.GitToken, "tok-app"); err != nil {
+	p, cl, api, calls := linkedRun(t, appLink, 3)
+	p.Others = []config.Project{cfg, app}
+	if _, err := p.Secrets.Set(app, secrets.GitToken, "tok-app"); err != nil {
 		t.Fatal(err)
 	}
 	runCSR7(t, p, api) // fresh
@@ -207,7 +207,7 @@ func TestAResumeAndAFollowUpFetchAgain(t *testing.T) {
 			t.Errorf("fetch %d after %d turns with %+v; want after %d", i, f.turns, f.repos, i)
 		}
 	}
-	section := LinkedSection([]Linked{{Key: "EMBER", Name: "Ember app", Paths: []string{"EMBER/app"}}})
+	section := LinkedSection([]Linked{{Key: "EMBER", Name: "Cinderline app", Paths: []string{"EMBER/app"}}})
 	if got := turns(cl)[1].Prompt; got != FollowUpPrompt("CSR-7")+section {
 		t.Errorf("follow-up prompt:\n%s", got)
 	}

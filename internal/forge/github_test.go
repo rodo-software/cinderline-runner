@@ -104,11 +104,11 @@ var input = PullRequestInput{Branch: "cinderline/EMB-3", Base: "main", Title: "T
 // host is the forge choice's, not this file's.
 func TestGitHubRepositoryForms(t *testing.T) {
 	for _, tt := range []struct{ repository, api string }{
-		{"https://github.com/willem/ember.git", "https://api.github.com/repos/willem/ember"},
-		{"https://GitHub.com/willem/ember", "https://api.github.com/repos/willem/ember"},
-		{"ssh://git@github.com/willem/ember.git", "https://api.github.com/repos/willem/ember"},
-		{"git@github.com:willem/ember.git", "https://api.github.com/repos/willem/ember"},
-		{"https://github.com:443/willem/ember/", "https://api.github.com/repos/willem/ember"},
+		{"https://github.com/willem/cinderline.git", "https://api.github.com/repos/willem/cinderline"},
+		{"https://GitHub.com/willem/cinderline", "https://api.github.com/repos/willem/cinderline"},
+		{"ssh://git@github.com/willem/cinderline.git", "https://api.github.com/repos/willem/cinderline"},
+		{"git@github.com:willem/cinderline.git", "https://api.github.com/repos/willem/cinderline"},
+		{"https://github.com:443/willem/cinderline/", "https://api.github.com/repos/willem/cinderline"},
 		{"git@ghe.example.com:team/app.git", "https://ghe.example.com/api/v3/repos/team/app"},
 		{"ssh://git@ghe.example.com:222/team/app.git", "https://ghe.example.com/api/v3/repos/team/app"},
 		{"https://ghe.example.com:8443/team/app.git", "https://ghe.example.com:8443/api/v3/repos/team/app"},
@@ -128,12 +128,12 @@ func TestGitHubRepositoryForms(t *testing.T) {
 }
 
 func TestGitHubDefaultBranch(t *testing.T) {
-	g, _ := recorded(t, "https://github.com/willem/ember", reply{200, `{"default_branch":"develop"}`})
+	g, _ := recorded(t, "https://github.com/willem/cinderline", reply{200, `{"default_branch":"develop"}`})
 	if b, err := g.DefaultBranch(context.Background()); b != "develop" || err != nil {
 		t.Errorf("DefaultBranch = %q, %v", b, err)
 	}
 
-	g, _ = recorded(t, "https://github.com/willem/ember", reply{404, `{"message":"Not Found"}`})
+	g, _ = recorded(t, "https://github.com/willem/cinderline", reply{404, `{"message":"Not Found"}`})
 	if _, err := g.DefaultBranch(context.Background()); err == nil || !strings.Contains(err.Error(), "404: Not Found") {
 		t.Errorf("DefaultBranch on a 404 = %v", err)
 	}
@@ -142,7 +142,7 @@ func TestGitHubDefaultBranch(t *testing.T) {
 // Ported from "openPullRequest opens a GitHub pull request with a bearer
 // header", with the rest of legacy forgeRequest's GitHub headers.
 func TestGitHubOpenPullRequest(t *testing.T) {
-	g, reqs := recorded(t, "https://github.com/willem/ember.git",
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{201, `{"number":7,"html_url":"u","node_id":"PR_1"}`})
 
 	pr, err := g.OpenPullRequest(context.Background(), input)
@@ -152,7 +152,7 @@ func TestGitHubOpenPullRequest(t *testing.T) {
 	if pr != (PullRequest{Number: 7, URL: "u"}) {
 		t.Errorf("pull request = %+v", pr)
 	}
-	wantURLs(t, *reqs, "POST https://api.github.com/repos/willem/ember/pulls")
+	wantURLs(t, *reqs, "POST https://api.github.com/repos/willem/cinderline/pulls")
 	r := (*reqs)[0]
 	for h, want := range map[string]string{
 		"Authorization":        "Bearer " + testToken,
@@ -173,7 +173,7 @@ func TestGitHubOpenPullRequest(t *testing.T) {
 // Ported from the GitHub half of "openPullRequest finds the pull request an
 // earlier run opened": GitHub answers 422 when one is open.
 func TestGitHubOpenPullRequestFindsEarlier(t *testing.T) {
-	g, reqs := recorded(t, "https://github.com/willem/ember.git",
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{422, `{"message":"exists"}`},
 		reply{200, `[{"number":2,"html_url":"u","head":{"ref":"cinderline/EMB-3"}}]`})
 
@@ -182,13 +182,13 @@ func TestGitHubOpenPullRequestFindsEarlier(t *testing.T) {
 		t.Errorf("OpenPullRequest = %+v, %v", pr, err)
 	}
 	wantURLs(t, *reqs,
-		"POST https://api.github.com/repos/willem/ember/pulls",
-		"GET https://api.github.com/repos/willem/ember/pulls?state=open&head=willem%3Acinderline%2FEMB-3")
+		"POST https://api.github.com/repos/willem/cinderline/pulls",
+		"GET https://api.github.com/repos/willem/cinderline/pulls?state=open&head=willem%3Acinderline%2FEMB-3")
 }
 
 // Ported from "openPullRequest reports a refusal with the forge's answer".
 func TestGitHubOpenPullRequestRefused(t *testing.T) {
-	g, _ := recorded(t, "https://github.com/willem/ember.git",
+	g, _ := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{422, `{"message":"No commits between main and cinderline/EMB-3"}`},
 		reply{200, `[]`})
 
@@ -197,7 +197,7 @@ func TestGitHubOpenPullRequestRefused(t *testing.T) {
 		t.Errorf("OpenPullRequest = %v, want the 422 and its message", err)
 	}
 
-	g, _ = recorded(t, "https://github.com/willem/ember.git", reply{401, `{"message":"Bad credentials"}`})
+	g, _ = recorded(t, "https://github.com/willem/cinderline.git", reply{401, `{"message":"Bad credentials"}`})
 	_, err = g.OpenPullRequest(context.Background(), input)
 	if err == nil || !strings.Contains(err.Error(), "401: Bad credentials") || strings.Contains(err.Error(), testToken) {
 		t.Errorf("OpenPullRequest = %v, want the 401 without the token", err)
@@ -205,7 +205,7 @@ func TestGitHubOpenPullRequestRefused(t *testing.T) {
 }
 
 func TestGitHubFindPullRequest(t *testing.T) {
-	g, reqs := recorded(t, "https://github.com/willem/ember.git",
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{200, `[{"number":2,"html_url":"u","head":{"ref":"cinderline/EMB-3"}}]`},
 		reply{200, `[]`})
 	ctx := context.Background()
@@ -216,7 +216,7 @@ func TestGitHubFindPullRequest(t *testing.T) {
 	if pr, found, err := g.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{}) || found || err != nil {
 		t.Errorf("FindPullRequest without one = %+v, %v, %v", pr, found, err)
 	}
-	if (*reqs)[0].url != "https://api.github.com/repos/willem/ember/pulls?state=open&head=willem%3Acinderline%2FEMB-3" {
+	if (*reqs)[0].url != "https://api.github.com/repos/willem/cinderline/pulls?state=open&head=willem%3Acinderline%2FEMB-3" {
 		t.Errorf("url = %s", (*reqs)[0].url)
 	}
 }
@@ -225,7 +225,7 @@ func TestGitHubFindPullRequest(t *testing.T) {
 // pull request's node ID is read first: the Forge's PullRequest carries only
 // its number.
 func TestGitHubRequestMerge(t *testing.T) {
-	g, reqs := recorded(t, "https://github.com/willem/ember.git",
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{200, `{"number":7,"node_id":"PR_1"}`},
 		reply{200, `{"data":{"enablePullRequestAutoMerge":{"clientMutationId":null}}}`})
 
@@ -233,7 +233,7 @@ func TestGitHubRequestMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantURLs(t, *reqs,
-		"GET https://api.github.com/repos/willem/ember/pulls/7",
+		"GET https://api.github.com/repos/willem/cinderline/pulls/7",
 		"POST https://api.github.com/graphql")
 	r := (*reqs)[1]
 	if r.header.Get("Authorization") != "Bearer "+testToken {
@@ -289,7 +289,7 @@ func TestGitHubRequestMergeRefused(t *testing.T) {
 		{reply{200, `{"errors":[{"message":"Auto merge is not allowed for this repository"}]}`}, "200: Auto merge is not allowed"},
 		{reply{405, `{"message":"Please try again later"}`}, "405: Please try again later"},
 	} {
-		g, reqs := recorded(t, "https://github.com/willem/ember.git", pr, tt.answer)
+		g, reqs := recorded(t, "https://github.com/willem/cinderline.git", pr, tt.answer)
 		err := g.RequestMerge(context.Background(), PullRequest{Number: 7})
 		if err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("RequestMerge = %v, want %q", err, tt.want)
@@ -299,7 +299,7 @@ func TestGitHubRequestMergeRefused(t *testing.T) {
 		}
 	}
 
-	g, reqs := recorded(t, "https://github.com/willem/ember.git", reply{404, `{"message":"Not Found"}`})
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git", reply{404, `{"message":"Not Found"}`})
 	if err := g.RequestMerge(context.Background(), PullRequest{Number: 7}); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Errorf("RequestMerge of a missing pull request = %v", err)
 	}
@@ -311,8 +311,8 @@ func TestGitHubRequestMergeRefused(t *testing.T) {
 // Ported from "pullRequestOutcome on GitHub" and "awaitMerge reads GitHub
 // pull requests" (the merge wait reads MergeState by branch, decision 0091).
 func TestGitHubMergeState(t *testing.T) {
-	const list = "GET https://api.github.com/repos/willem/ember/pulls?state=all&head=willem%3Acinderline%2FEMBER-1"
-	const checks = "GET https://api.github.com/repos/willem/ember/commits/abc/check-runs"
+	const list = "GET https://api.github.com/repos/willem/cinderline/pulls?state=all&head=willem%3Acinderline%2FEMBER-1"
+	const checks = "GET https://api.github.com/repos/willem/cinderline/commits/abc/check-runs"
 	pr := func(fields string) reply {
 		return reply{200, `[{"head":{"sha":"abc"},"merged_at":null,` + fields + `}]`}
 	}
@@ -333,7 +333,7 @@ func TestGitHubMergeState(t *testing.T) {
 		{"none", []reply{{200, `[]`}}, "", []string{list}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			g, reqs := recorded(t, "https://github.com/willem/ember.git", tt.replies...)
+			g, reqs := recorded(t, "https://github.com/willem/cinderline.git", tt.replies...)
 			s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
 			if s != tt.want || err != nil {
 				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
@@ -348,12 +348,12 @@ func TestGitHubMergeState(t *testing.T) {
 
 // Ported from "pullRequestOutcome throws on an error answer" (GitHub).
 func TestGitHubMergeStateError(t *testing.T) {
-	g, _ := recorded(t, "https://github.com/willem/ember.git", reply{401, `{"message":"no"}`})
+	g, _ := recorded(t, "https://github.com/willem/cinderline.git", reply{401, `{"message":"no"}`})
 	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("MergeState = %v, want the 401", err)
 	}
 
-	g, _ = recorded(t, "https://github.com/willem/ember.git", reply{502, `<html>Bad Gateway</html>`})
+	g, _ = recorded(t, "https://github.com/willem/cinderline.git", reply{502, `<html>Bad Gateway</html>`})
 	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "502") {
 		t.Errorf("MergeState = %v, want the 502", err)
 	}
@@ -363,11 +363,11 @@ func TestGitHubMergeStateError(t *testing.T) {
 // branch is deleted, and the list by head owner:branch still answers it, so
 // the merge status poll sees the merge.
 func TestGitHubMergeStateAfterBranchDeletion(t *testing.T) {
-	g, reqs := recorded(t, "https://github.com/willem/ember.git",
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{200, `[{"number":53,"head":{"ref":"cinderline/EMBER-1","sha":"abc"},"merged_at":"2026-11-07T09:47:00Z","state":"closed"}]`})
 	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
 	if s != MergeMerged || err != nil {
 		t.Errorf("MergeState = %q, %v; want merged", s, err)
 	}
-	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/ember/pulls?state=all&head=willem%3Acinderline%2FEMBER-1")
+	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/cinderline/pulls?state=all&head=willem%3Acinderline%2FEMBER-1")
 }

@@ -83,7 +83,7 @@ func LinkedSection(links []Linked) string {
 }
 
 // clientLabels are the names of the agent CLIs for the team section; legacy
-// had them from Ember's client label, the runner API sends only the value.
+// had them from the app's client label, the runner API sends only the value.
 var clientLabels = map[string]string{"claude": "Claude Code", "opencode": "OpenCode"}
 
 // formatPrice is a price in USD per million tokens, or that it is unknown,

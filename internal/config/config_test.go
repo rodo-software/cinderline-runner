@@ -309,9 +309,9 @@ func TestSameRepository(t *testing.T) {
 		{"https://h.example.com/o/r", "https://h.example.com/o/r2", false},
 		{"https://h.example.com/o/r", "https://g.example.com/o/r", false},
 		// Ported from legacy lib.test.mjs "assertRepository accepts only the configured repository".
-		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/Willem/ember", true},
-		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/willem/ember.git", true},
-		{"git@git.rodo.nl:willem/ember.git", "https://git.rodo.nl/willem/other", false},
+		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/Willem/cinderline", true},
+		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/willem/cinderline.git", true},
+		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/willem/other", false},
 		// A project without a repository, or one that does not parse, is never the configured one.
 		{"", "https://h.example.com/o/r", false},
 		{"https://h.example.com/o/r", "::", false},

@@ -127,7 +127,7 @@ type Project struct {
 	AllowHosts []string `json:"allow_hosts,omitempty"`
 	// ExtraRepositories are other repositories the project's runs may read,
 	// mounted read-only (CSR-160). Configured only here, not in Cinderline
-	// (Ember decision 2026-11-11-extra-repositories-in-runner).
+	// (app decision 2026-11-11-extra-repositories-in-runner).
 	ExtraRepositories []ExtraRepository `json:"extra_repositories,omitempty"`
 }
 

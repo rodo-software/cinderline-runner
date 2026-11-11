@@ -102,7 +102,7 @@ Then start it with `cinderline run` (foreground, until Ctrl-C) or as a service (
 
 A run can read other repositories of the project, read-only. `cinderline add-repo --project KEY` asks for a repository URL (`https://host/path`, `ssh://git@host/path` or `git@host:path`, without credentials), an optional branch or tag (empty for the default branch) and a git token, and checks with `git ls-remote` that the token can read it. Only HTTPS works in practice: the token is given to git as an HTTPS password, so an SSH URL fails that check. Each token is stored for its URL alone. `cinderline list-repos --project KEY` lists them and `cinderline remove-repo --project KEY NAME` removes one (NAME is the folder name `list-repos` shows, or the URL).
 
-Before each run the runner fetches them in a git container that alone gets their tokens and mounts them read-only at `/extra/NAME` in the agent's container; the prompt lists them. One that fails to fetch is left out and the run says so in a progress update. Cinderline knows nothing about them (Ember decision 2026-11-11-extra-repositories-in-runner).
+Before each run the runner fetches them in a git container that alone gets their tokens and mounts them read-only at `/extra/NAME` in the agent's container; the prompt lists them. One that fails to fetch is left out and the run says so in a progress update. Cinderline knows nothing about them (app decision 2026-11-11-extra-repositories-in-runner).
 
 ### Linked projects
 

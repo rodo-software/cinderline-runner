@@ -32,8 +32,9 @@ func TestOpenCodeArgs(t *testing.T) {
 }
 
 // Ported from lib.test.mjs "opencodeConfig has Ember only for the
-// orchestrator, and the turn limit as steps". The agent label no longer
-// travels in a header: it is in the scoped token (plan M3).
+// orchestrator, and the turn limit as steps", Ember being Cinderline's old
+// name. The agent label no longer travels in a header: it is in the scoped
+// token (plan M3).
 func TestOpenCodeConfig(t *testing.T) {
 	var cfg struct {
 		Schema     string `json:"$schema"`
