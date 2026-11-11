@@ -2,10 +2,12 @@ package run
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // ContinuePrompt is what a run that hit the team's turn limit gets when it
@@ -37,6 +39,7 @@ func retryProgress(res client.Result, attempt int) string {
 // Job is one issue's agent run for Attempts.
 type Job struct {
 	Ref    string
+	Agent  string      // the team's agent, for its usage entries
 	Client string      // the agent's CLI, kept in a paused note
 	Turn   client.Turn // the fresh first turn
 	Resume string      // a paused session to resume first with ResumePrompt, from TakePaused
@@ -47,6 +50,8 @@ type Job struct {
 	// NoComments leaves the comments to the caller: a team's rounds read
 	// them only after the last round, as legacy rounds() does.
 	NoComments bool
+	// Workspace commits and pushes the clone when the budget stops the run.
+	Workspace workspace.Workspace
 }
 
 // Outcome is how Attempts ended without an error.
@@ -123,8 +128,18 @@ func (p Project) Attempts(ctx context.Context, c *cinderline.Client, cl client.C
 		readFail int
 	)
 	for attempt := 1; attempt <= 2; {
+		if berr := p.checkBudget(ctx, c, j.Workspace, j.Ref, t.Dir); berr != nil {
+			if !errors.Is(berr, errBudget) {
+				return Outcome{Result: res}, berr
+			}
+			if err := p.SavePaused(j.Ref, Paused{Dir: t.Dir, Session: next.SessionID, Client: j.Client}); err != nil {
+				log.Warn("paused note not written", "err", err)
+			}
+			return Outcome{Paused: true}, nil
+		}
 		log.Info("run started", "attempt", attempt, "session", next.SessionID)
 		res, err = cl.Run(ctx, next)
+		p.run.addUsage(j.Ref, j.Ref, j.Agent, t.Model, res.Usage)
 		if ctx.Err() != nil {
 			// A stop is no failure: the next start's recovery puts the issue back.
 			return Outcome{Result: res}, ctx.Err()

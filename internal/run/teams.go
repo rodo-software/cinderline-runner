@@ -177,10 +177,23 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 	if err != nil {
 		return Outcome{}, notStarted(err)
 	}
+	// A budget stop pauses the run: the note resumes it once a person
+	// raised the budget and moved the issue to To do.
+	budgetStop := func() (Outcome, error) {
+		if err := p.SavePaused(j.Ref, Paused{Dir: dir, Session: session, Client: orch.Client}); err != nil {
+			log.Warn("paused note not written", "err", err)
+		}
+		return Outcome{Paused: true}, nil
+	}
 	// Also on a clone fresh from the base, where the merge changes nothing,
 	// as Prepare does not say whether it continued the remote branch.
-	p.CatchUp(ctx, c, clients, ws, Upkeep{Ref: j.Ref, Branch: j.Branch, Base: j.Base, Dir: dir, MaxTurns: j.MaxTurns, Team: j.Team}, parent.Title)
+	if err := p.CatchUp(ctx, c, clients, ws, Upkeep{Ref: j.Ref, Branch: j.Branch, Base: j.Base, Dir: dir, MaxTurns: j.MaxTurns, Team: j.Team}, parent.Title); err != nil {
+		return budgetStop()
+	}
 	ran, err := p.runSubIssues(ctx, c, clients, ws, j, dir, parent.SubIssues, true)
+	if errors.Is(err, errBudget) {
+		return budgetStop()
+	}
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -225,7 +238,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 		}
 		turn.Token = tok.Token
 
-		res, err := p.Attempts(ctx, c, cl, Job{Ref: j.Ref, Client: orch.Client, Turn: turn, NoComments: true})
+		res, err := p.Attempts(ctx, c, cl, Job{Ref: j.Ref, Agent: orch.Name, Client: orch.Client, Turn: turn, NoComments: true, Workspace: ws})
 		if res.SessionID != "" {
 			session = res.SessionID
 			if err := p.SavePaused(j.Ref, Paused{Dir: dir, Session: session, Client: orch.Client}); err != nil {
@@ -263,7 +276,9 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 		}
 
 		finished = nil
-		if ran, err = p.runSubIssues(ctx, c, clients, ws, j, dir, after.SubIssues, false); err != nil {
+		if ran, err = p.runSubIssues(ctx, c, clients, ws, j, dir, after.SubIssues, false); errors.Is(err, errBudget) {
+			return budgetStop()
+		} else if err != nil {
 			return Outcome{}, err
 		}
 		if w, err := waiting(ctx, c, j.Ref); w || err != nil {
@@ -277,8 +292,8 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 }
 
 // runSubIssues runs the parent's open sub-issues one at a time, in creation
-// order, and returns those that ran. Its only error is a stop; a sub-issue
-// it cannot claim is skipped, as legacy does.
+// order, and returns those that ran. Its only errors are a stop and
+// errBudget; a sub-issue it cannot claim is skipped, as legacy does.
 func (p Project) runSubIssues(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, j TeamJob, dir string, subs []cinderline.SubIssue, afterRestart bool) ([]Ran, error) {
 	var ran []Ran
 	for _, s := range subIssuesToRun(subs, afterRestart) {
@@ -297,6 +312,9 @@ func (p Project) runSubIssues(ctx context.Context, c *cinderline.Client, clients
 		report, err := p.runSubIssue(ctx, c, clients, ws, j, dir, &r, log)
 		if ctx.Err() != nil {
 			return ran, ctx.Err() // it stays In progress, so the resumed parent runs it again
+		}
+		if errors.Is(err, errBudget) {
+			return ran, err // as a stop; checkBudget pushed the clone
 		}
 		if err != nil {
 			r.Failed, report = true, "**Failed**: "+err.Error()
@@ -374,8 +392,14 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderline.Client, clients 
 	next := turn
 	var res client.Result
 	for attempt := 1; attempt <= 2; attempt++ {
+		// The budget is the parent's (app decision 2026-11-05-cost-per-issue-and-budget).
+		if err := p.checkBudget(ctx, c, ws, j.Ref, dir); err != nil {
+			return "", err
+		}
 		log.Info("run started", "agent", agent.Name, "attempt", attempt, "session", next.SessionID)
-		if res, err = cl.Run(ctx, next); err == nil || ctx.Err() != nil {
+		res, err = cl.Run(ctx, next)
+		p.run.addUsage(j.Ref, r.Ref, agent.Name, turn.Model, res.Usage)
+		if err == nil || ctx.Err() != nil {
 			break
 		}
 		log.Warn("run failed", "attempt", attempt, "turn_limit", res.HitTurnLimit, "err", err)

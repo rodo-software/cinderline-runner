@@ -125,6 +125,9 @@ func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[
 			}
 			break
 		}
+		if errors.Is(err, errBudget) {
+			return nil // checkBudget pushed the work and blocked the issue
+		}
 		if ctx.Err() != nil {
 			return err
 		}

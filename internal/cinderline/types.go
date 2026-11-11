@@ -55,10 +55,36 @@ type Issue struct {
 	ArchivedAt  *time.Time    `json:"archived_at"`
 }
 
-// IssueWithComments is an issue with its comments, oldest first.
+// IssueWithComments is an issue with its comments, oldest first, and its
+// cost (EMBER-112).
 type IssueWithComments struct {
 	Issue
-	Comments []Comment `json:"comments"`
+	Comments   []Comment  `json:"comments"`
+	Usage      IssueUsage `json:"usage"`
+	BudgetUSD  *float64   `json:"budget_usd"`  // nil: no budget; a sub-issue's is its parent's
+	OverBudget bool       `json:"over_budget"` // for a sub-issue, its parent's total reached the budget
+}
+
+// IssueUsage totals the usage entries of an issue and its sub-issues.
+type IssueUsage struct {
+	InputTokens      int     `json:"input_tokens"`
+	OutputTokens     int     `json:"output_tokens"`
+	CacheReadTokens  int     `json:"cache_read_tokens"`
+	CacheWriteTokens int     `json:"cache_write_tokens"`
+	CostUSD          float64 `json:"cost_usd"` // only the known cost
+	CostIncomplete   bool    `json:"cost_incomplete"`
+}
+
+// UsageEntry is the tokens and cost of one agent CLI run, for ReportUsage.
+type UsageEntry struct {
+	Issue            string   `json:"issue"` // the run's issue or one of its sub-issues
+	Agent            string   `json:"agent"` // the team's agent; the app labels it "<team> / <agent>"
+	Model            *string  `json:"model"` // nil: the client's default
+	InputTokens      int      `json:"input_tokens"`
+	OutputTokens     int      `json:"output_tokens"`
+	CacheReadTokens  int      `json:"cache_read_tokens"`
+	CacheWriteTokens int      `json:"cache_write_tokens"`
+	CostUSD          *float64 `json:"cost_usd"` // nil: the app estimates it
 }
 
 // CommentAuthor wrote a comment; Agent is set when an agent wrote it through its token.

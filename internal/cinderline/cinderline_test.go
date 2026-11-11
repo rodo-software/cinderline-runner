@@ -32,7 +32,9 @@ const issueJSON = `{"id":1,"number":9,"ref":"CSR-9","title":"T","body":"b",
 
 const commentJSON = `{"id":4,"body":"hi","author":{"name":"Runner","agent":null},"created_at":"2026-11-05T10:00:00Z"}`
 
-var issueWithCommentsJSON = strings.TrimSuffix(issueJSON, "}") + `,"comments":[` + commentJSON + `]}`
+var issueWithCommentsJSON = strings.TrimSuffix(issueJSON, "}") + `,"comments":[` + commentJSON + `],
+	"usage":{"input_tokens":10,"output_tokens":20,"cache_read_tokens":30,"cache_write_tokens":40,"cost_usd":5.126,"cost_incomplete":true},
+	"budget_usd":5,"over_budget":true}`
 
 // recorded is what the test server received.
 type recorded struct {
@@ -140,9 +142,19 @@ var operations = []operation{
 		return c.CreateAgentToken(ctx, "CSR-9", KindOrchestrator, "Ada")
 	}, "POST", "/api/runner/v1/runs/CSR-9/agent-token", "", `{"kind":"orchestrator","agent":"Ada"}`, 201,
 		`{"token":"` + agentToken + `","expires_at":"2026-11-05T12:00:00Z"}`},
+	{"reportUsage", func(ctx context.Context, c *Client) (any, error) {
+		return nil, c.ReportUsage(ctx, "CSR-9", []UsageEntry{
+			{Issue: "CSR-9", Agent: "Ada", Model: ptr("m"), InputTokens: 1, OutputTokens: 2, CacheReadTokens: 3, CacheWriteTokens: 4, CostUSD: ptr(0.5)},
+			{Issue: "CSR-10", Agent: "Qwen"},
+		})
+	}, "POST", "/api/runner/v1/runs/CSR-9/usage", "", `{"entries":[
+		{"issue":"CSR-9","agent":"Ada","model":"m","input_tokens":1,"output_tokens":2,"cache_read_tokens":3,"cache_write_tokens":4,"cost_usd":0.5},
+		{"issue":"CSR-10","agent":"Qwen","model":null,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":null}]}`, 204, ""},
 	{"deleteAgentTokens", func(ctx context.Context, c *Client) (any, error) { return nil, c.DeleteAgentTokens(ctx, "CSR-9") },
 		"DELETE", "/api/runner/v1/runs/CSR-9/agent-token", "", "", 204, ""},
 }
+
+func ptr[T any](v T) *T { return &v }
 
 func TestOperations(t *testing.T) {
 	for _, op := range operations {

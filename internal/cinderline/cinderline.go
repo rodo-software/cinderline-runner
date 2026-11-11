@@ -368,6 +368,13 @@ func (c *Client) CreateAgentToken(ctx context.Context, ref string, kind TokenKin
 	return out, err
 }
 
+// ReportUsage records the usage of a run's agent CLI runs on the top-level
+// issue ref and its sub-issues, in one call per run (EMBER-112, EMBER-161).
+func (c *Client) ReportUsage(ctx context.Context, ref string, entries []UsageEntry) error {
+	in := map[string][]UsageEntry{"entries": entries}
+	return c.call(ctx, "reportUsage", "POST", "/runs/"+url.PathEscape(ref)+"/usage", in, 204, nil)
+}
+
 // DeleteAgentTokens deletes every agent token of the issue.
 func (c *Client) DeleteAgentTokens(ctx context.Context, ref string) error {
 	return c.call(ctx, "deleteAgentTokens", "DELETE", "/runs/"+url.PathEscape(ref)+"/agent-token", nil, 204, nil)

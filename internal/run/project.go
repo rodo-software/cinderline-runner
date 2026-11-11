@@ -77,6 +77,9 @@ type runState struct {
 	// noPR is when a Review issue was last found without a pull request, by
 	// ref: a cache CheckMerges may lose.
 	noPR map[string]time.Time
+	// usage is the usage entries of the running run, by its top-level
+	// issue, until reportUsage sends them at the run's end.
+	usage map[string][]cinderline.UsageEntry
 }
 
 // noPullRequestFor is how long CheckMerges leaves an issue it found without
@@ -243,6 +246,13 @@ func notStarted(err error) error { return fmt.Errorf("%w: %w", scheduler.ErrNotS
 func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
 	log := p.Log.With("project", p.Config.Key, "issue", issue.Ref)
 	ref := issue.Ref
+	// The run ends here unless Publish takes over: one usage report per run.
+	handed := false
+	defer func() {
+		if !handed {
+			p.reportUsage(ctx, c, ref)
+		}
+	}()
 
 	if p.prepare != nil {
 		p.run.mu.Lock()
@@ -308,6 +318,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 			return nil // Publish must skip it.
 		}
 		p.setHandoff(ref, title, body, out.Dir, base, team, maxTurns, proj.Forge, out.Unread, "", "")
+		handed = true
 		return nil
 	}
 
@@ -338,17 +349,26 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	}
 	token := tok.Token
 
-	p.CatchUp(ctx, c, p.Clients, p.Workspace, Upkeep{
+	if err := p.CatchUp(ctx, c, p.Clients, p.Workspace, Upkeep{
 		Ref: ref, Branch: branch, Base: base, Dir: dir, MaxTurns: maxTurns, Team: team,
 		Session: session, Token: token,
-	}, title)
+	}, title); err != nil {
+		// A budget stop before the first turn: the note TakePaused took is kept.
+		if err := p.SavePaused(ref, Paused{Dir: dir, Session: session, Client: agent.Client}); err != nil {
+			log.Warn("paused note not written", "err", err)
+		}
+		if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
+			log.Warn("agent tokens not deleted", "err", derr)
+		}
+		return nil
+	}
 
 	turn := client.Turn{
 		Dir: dir, Prompt: prompt, MaxTurns: maxTurns,
 		MaxMinutes: team.MaxMinutes, Model: deref(agent.Model),
 		Token: token, Ponytail: team.Ponytail,
 	}
-	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: agent.Client, Turn: turn, Resume: session, FollowUp: resumed && !note.Kept.IsZero(), Links: LinkedSection(links)})
+	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Agent: agent.Name, Client: agent.Client, Workspace: p.Workspace, Turn: turn, Resume: session, FollowUp: resumed && !note.Kept.IsZero(), Links: LinkedSection(links)})
 	if ctx.Err() == nil && !out.Paused {
 		// Kept for a follow-up even when the run failed: the next run can continue it.
 		p.keep(ref, Paused{Dir: dir, Session: cmp.Or(out.SessionID, session), Client: agent.Client})
@@ -371,6 +391,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	}
 	// Run hands off to Publish; Publish deletes the token.
 	p.setHandoff(ref, title, body, dir, base, team, maxTurns, proj.Forge, out.Unread, out.SessionID, token)
+	handed = true
 	return nil
 }
 
@@ -494,6 +515,7 @@ func (p *Project) hookPublish(ctx context.Context, c *cinderline.Client, issue c
 	if h == nil {
 		return nil
 	}
+	defer p.reportUsage(ctx, c, h.Ref) // the run ends with its publish
 	if h.Ref != issue.Ref {
 		return fmt.Errorf("handoff for %s, but the scheduled issue is %s", h.Ref, issue.Ref)
 	}

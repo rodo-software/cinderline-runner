@@ -262,6 +262,8 @@ func TestHooksRunIssueToReview(t *testing.T) {
 					return reply{201, `{"token":"scoped","expires_at":"2030-01-01T00:00:00Z"}`}, true
 				case key == "DELETE /runs/"+ref+"/agent-token":
 					return reply{204, ""}, true
+				case key == "POST /runs/"+ref+"/usage":
+					return reply{204, ""}, true
 				}
 				return reply{}, false
 			}}
@@ -271,7 +273,7 @@ func TestHooksRunIssueToReview(t *testing.T) {
 			if _, err := p.Secrets.Set(cfg, secrets.AnthropicCredential, "sk-ant"); err != nil {
 				t.Fatal(err)
 			}
-			cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: "Added hello."}}}}
+			cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: "Added hello.", Usage: cost(0.5)}}}}
 			ws := &workspace.Fake{
 				Prepares:   []workspace.PrepareReply{{Dir: "/clone"}},
 				Commits:    []workspace.CommitReply{{Committed: true}, {Committed: true}, {Committed: true}},
@@ -320,6 +322,11 @@ func TestHooksRunIssueToReview(t *testing.T) {
 			}
 			if !opened {
 				t.Errorf("no pull request opened; forge calls %+v", fg.Calls())
+			}
+			// One usage call at the run's end, after its publish (CSR-76).
+			wantUsage := `{"entries":[{"issue":"CSR-7","agent":"Coder","model":null,"input_tokens":10,"output_tokens":20,"cache_read_tokens":30,"cache_write_tokens":40,"cost_usd":0.5}]}`
+			if got := usageReports(api, ref); !slices.Equal(got, []string{wantUsage}) {
+				t.Errorf("usage reports = %q, want %q", got, wantUsage)
 			}
 			var reported bool
 			for _, w := range api.writes() {

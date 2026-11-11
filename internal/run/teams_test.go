@@ -37,6 +37,7 @@ type tree struct {
 	agent    map[string]string
 	subs     []string
 	comments []string // on CSR-1
+	budget   float64  // CSR-1's budget_usd; 0: none
 }
 
 func newTree(parent string) *tree {
@@ -77,6 +78,9 @@ func (tr *tree) issue(ref string) string {
 			subs = append(subs, map[string]any{"ref": s, "title": tr.title[s], "status": map[string]string{"value": tr.status[s], "label": "x"}})
 		}
 		m["sub_issues"] = subs
+		if tr.budget > 0 {
+			m["budget_usd"] = tr.budget
+		}
 	} else {
 		m["body"] = "Body of " + ref + "."
 		m["parent"] = map[string]string{"ref": "CSR-1", "title": "Parent"}
@@ -298,6 +302,7 @@ func TestWorkerPrompt(t *testing.T) {
 // runner API posts comments as the runner user.
 func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 	p := project(t)
+	p.Hooks()
 	clone := t.TempDir()
 	if err := p.SavePaused("CSR-1", Paused{Dir: clone, Session: "the-session", Client: "claude"}); err != nil {
 		t.Fatal(err)
@@ -307,6 +312,9 @@ func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 	tr.add("CSR-2", "Part", "Qwen", "todo")
 	r := newTeamRun(tr)
 	r.claude.Runs = []client.RunReply{ok("fresh", "Claude report."), ok("the-session", "Reviewed.")}
+	for i := range r.claude.Runs {
+		r.claude.Runs[i].Result.Usage = cost(0.5)
+	}
 	r.claude.during = func(t client.Turn) {
 		if t.SessionID == "the-session" {
 			tr.set("CSR-2", "done")
@@ -314,10 +322,31 @@ func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 		}
 	}
 	r.opencode.Runs = []client.RunReply{ok("ses_worker", "Qwen report.")}
+	r.opencode.Runs[0].Result.Usage = cost(0)
 
 	out, err := r.run(t, context.Background(), p)
 	if err != nil || out.Paused || out.Unread || out.Report != "Reviewed." {
 		t.Fatalf("Rounds = %+v, %v", out, err)
+	}
+
+	// Each CLI run's usage on the issue it was for, by its agent, the
+	// worker's too; sent in one call at the run's end (CSR-76). Cinderline
+	// refusing it never stops the run: here the fake has no such route.
+	if got := usageReports(r.api, "CSR-1"); len(got) != 0 {
+		t.Fatalf("usage reported during the run: %q", got)
+	}
+	p.reportUsage(context.Background(), r.api.client(t), "CSR-1")
+	var sent struct{ Entries []cinderline.UsageEntry }
+	if got := usageReports(r.api, "CSR-1"); len(got) != 1 || json.Unmarshal([]byte(got[0]), &sent) != nil {
+		t.Fatalf("usage reports = %q, want one", got)
+	}
+	var entries []string
+	for _, e := range sent.Entries {
+		entries = append(entries, fmt.Sprintf("%s %s %s %v", e.Issue, e.Agent, deref(e.Model), *e.CostUSD))
+	}
+	wantEntries := []string{"CSR-3 Builder m 0.5", "CSR-2 Qwen openrouter/qwen 0", "CSR-1 Builder m 0.5"}
+	if !slices.Equal(entries, wantEntries) {
+		t.Errorf("usage entries = %q, want %q", entries, wantEntries)
 	}
 
 	if got := r.moves("CSR-3"); !slices.Equal(got, []string{"review"}) {
@@ -347,7 +376,7 @@ func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 	if got := r.commentOn("CSR-3"); got != "Claude report." {
 		t.Errorf("CSR-3 comment = %q", got)
 	}
-	tokens := r.writes("POST /runs/")
+	tokens := append(r.writes("POST /runs/CSR-3/agent-token"), r.writes("POST /runs/CSR-1/agent-token")...)
 	wantTokens := []string{
 		`POST /runs/CSR-3/agent-token {"agent":"Builder","kind":"reader"}`,
 		`POST /runs/CSR-1/agent-token {"agent":"Builder","kind":"orchestrator"}`,

@@ -190,6 +190,7 @@ func newPubRun(trusted bool) *pubRun {
 			"POST /issues/CSR-1/comments": {201, `{"id":9,"body":"x"}`},
 			"POST /issues/CSR-1/progress": {204, ""},
 			"PATCH /issues/CSR-1":         {200, issueJSON("CSR-1", "review")},
+			"GET /issues/CSR-1":           {200, issueJSON("CSR-1", "in_progress")}, // the budget check before a Merge Resolver run
 		}},
 		ws: &workspace.Fake{
 			Commits:    []workspace.CommitReply{{Committed: true}},

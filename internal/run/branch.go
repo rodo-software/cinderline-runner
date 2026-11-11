@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -86,7 +87,8 @@ func reportsBlocked(msg string) bool { return blocked.MatchString(msg) }
 // old head are both in it, no conflict marker is left and the report does
 // not say Blocked. Never a retry (decision
 // 2026-11-04-agent-resolves-merge-conflicts). It returns the files that
-// still conflict; the clone is then as it was before the merge.
+// still conflict; the clone is then as it was before the merge. When the
+// issue reached its budget the agent does not run and the error is errBudget.
 func (p Project) UpdateBranch(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, u Upkeep) ([]string, error) {
 	log := p.Log.With("project", p.Config.Key, "issue", u.Ref)
 	conflicts, err := ws.MergeBase(ctx, u.Dir, u.Base)
@@ -136,7 +138,11 @@ func (p Project) UpdateBranch(ctx context.Context, c *cinderline.Client, clients
 		turn.SessionID = u.Session
 		turn.Token = u.Token
 	}
+	if err := p.checkBudget(ctx, c, ws, u.Ref, u.Dir); err != nil {
+		return conflicts, err
+	}
 	res, runErr := cl.Run(ctx, turn)
+	p.run.addUsage(u.Ref, u.Ref, agent.Name, turn.Model, res.Usage)
 	if ctx.Err() != nil {
 		return conflicts, ctx.Err()
 	}
@@ -194,20 +200,24 @@ func verifyMerge(ctx context.Context, ws workspace.Workspace, dir, base, head st
 // CatchUp merges the base into continued work before the agent's first turn
 // (decision 2026-11-04-agent-resolves-merge-conflicts). What a paused turn
 // left is committed first as "<REF>: <title>". A conflict left or an error
-// only logs: the run goes on, and publish tries again.
-func (p Project) CatchUp(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, u Upkeep, title string) {
+// only logs: the run goes on, and publish tries again. Its only error is
+// errBudget: the Merge Resolver did not run and the run must pause.
+func (p Project) CatchUp(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, u Upkeep, title string) error {
 	log := p.Log.With("project", p.Config.Key, "issue", u.Ref)
 	if _, err := ws.Commit(ctx, u.Dir, u.Ref+": "+title); err != nil {
 		log.Warn("base not merged in", "err", err)
-		return
+		return nil
 	}
 	conflicts, err := p.UpdateBranch(ctx, c, clients, ws, u)
 	switch {
+	case errors.Is(err, errBudget):
+		return err
 	case err != nil:
 		log.Warn("base not merged in", "err", err)
 	case len(conflicts) > 0:
 		log.Info("base not merged in", "base", u.Base, "conflicts", conflicts)
 	}
+	return nil
 }
 
 // ReviewBranches keeps the pull requests of Review issues current: it
