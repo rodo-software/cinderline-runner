@@ -419,3 +419,25 @@ func TestListIssuesWarnsAtTheCap(t *testing.T) {
 		}
 	}
 }
+
+// A runner token may not move a top-level issue to done (decision
+// 2026-11-08-runner-tokens-without-done): the 403 comes back as an APIError
+// with the server's message after one request, not retried.
+func TestDoneForbidden(t *testing.T) {
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, `{"message":"This token may not move issues to done."}`)
+	}))
+	defer srv.Close()
+	c := New(srv.URL, runnerToken, version)
+	_, err := c.UpdateIssue(context.Background(), "CSR-9", UpdateIssueRequest{Status: "done", ExpectedStatus: "review"})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 403 || apiErr.Message != "This token may not move issues to done." {
+		t.Fatalf("err = %v, want APIError 403 with the server's message", err)
+	}
+	if n != 1 {
+		t.Errorf("%d requests, want 1 (no retry)", n)
+	}
+}
