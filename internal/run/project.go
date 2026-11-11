@@ -54,9 +54,10 @@ type Project struct {
 	// run is the state shared by the hooks of one slot, set by Hooks().
 	run *runState
 
-	// prepare fills the tools mount on the first agent run, set only by
-	// NewProject as a closure over the Docker environment. Nil in tests.
-	prepare func(ctx context.Context) error
+	// prepare points the Docker environment at the project's environment
+	// in Cinderline and fills the tools mount for its agent image, set only
+	// by NewProject. Nil in tests.
+	prepare func(ctx context.Context, proj cinderline.Project, base string) error
 
 	// fetchExtras fetches repositories into the volume of path (ExtraPath
 	// or LinkedPath), set only by NewProject. Nil in tests.
@@ -73,7 +74,7 @@ type Project struct {
 type runState struct {
 	mu      sync.Mutex
 	handoff *runHandoff
-	ready   bool // the clients have their tools mount
+	image   string // the agent image the clients' tools mount was filled for
 	// noPR is when a Review issue was last found without a pull request, by
 	// ref: a cache CheckMerges may lose.
 	noPR map[string]time.Time
@@ -134,6 +135,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	if err != nil {
 		return nil, err
 	}
+	ws := &workspace.Docker{Project: cfg.Key, Repository: cfg.Repository, Token: gitToken}
 	p := &Project{
 		Config:    cfg,
 		Secrets:   sec,
@@ -142,7 +144,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		Log:       log,
 		Clients:   map[string]client.Client{},
 		clients:   &clientCache{},
-		Workspace: &workspace.Docker{Project: cfg.Key, Repository: cfg.Repository, Token: gitToken},
+		Workspace: ws,
 	}
 	mcpURL := strings.TrimRight(cfg.URL, "/") + "/mcp"
 	for name, kind := range keys {
@@ -166,10 +168,27 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	p.Forge = func(kind string) (forge.Forge, error) {
 		return forge.New(kind, cfg.Repository, gitToken)
 	}
-	p.prepare = func(ctx context.Context) error {
-		image, err := env.Image(ctx)
+	p.prepare = func(ctx context.Context, proj cinderline.Project, base string) error {
+		var compose *environment.Compose
+		// existing (EMBER-29) is not built yet and keeps the default environment.
+		if proj.Environment == "docker" {
+			// The file is read from the repo volume's base branch: fetch it first.
+			if err := ws.Fetch(ctx); err != nil {
+				return err
+			}
+			compose = &environment.Compose{
+				Base:    base,
+				File:    cmp.Or(proj.ComposeFile, environment.DefaultComposeFile),
+				Service: cmp.Or(proj.AgentService, environment.DefaultAgentService),
+			}
+		}
+		env.SetCompose(compose)
+		image, err := env.AgentImage(ctx)
 		if err != nil {
 			return err
+		}
+		if image == p.run.image {
+			return nil
 		}
 		mount, err := (&tools.Tools{State: state}).Mount(ctx, image)
 		if err != nil {
@@ -194,6 +213,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 				c.Tools = mount
 			}
 		}
+		p.run.image = image
 		return nil
 	}
 	exec := env.Exec
@@ -254,18 +274,6 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 		}
 	}()
 
-	if p.prepare != nil {
-		p.run.mu.Lock()
-		if !p.run.ready {
-			if err := p.prepare(ctx); err != nil {
-				p.run.mu.Unlock()
-				return notStarted(err)
-			}
-			p.run.ready = true
-		}
-		p.run.mu.Unlock()
-	}
-
 	// A run may need the space; only a stop keeps it from starting.
 	if err := p.Prune(ctx, c); err != nil {
 		return notStarted(err)
@@ -292,6 +300,16 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	base, err := BaseBranch(ctx, c, fg)
 	if err != nil {
 		return notStarted(err)
+	}
+	if p.prepare != nil {
+		p.run.mu.Lock()
+		err := p.prepare(ctx, proj, base)
+		p.run.mu.Unlock()
+		if err != nil {
+			// A refused compose file is the admin's to fix: say so at once, not after three strikes.
+			p.progress(ctx, c, ref, "The run's environment could not be prepared: "+err.Error())
+			return notStarted(err)
+		}
 	}
 	branch := name.Name + "/" + ref
 

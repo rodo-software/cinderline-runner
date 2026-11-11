@@ -2,7 +2,7 @@
 
 The Cinderline runner is a native Go program on a developer's machine that takes To do issues from a Cinderline instance, runs an agent team on each in its own Docker container, pushes a branch and opens a pull request.
 
-Status: milestones M0 to M5, M7 (Codex, Gemini CLI, `cinderline login`, client detection, errors reported to Cinderline) and M8 (network allowlist) are built. M6 (per-project and existing environments) is decided (decision 2026-11-08-m6-environments) but not built: every project runs in the default environment. See [docs/runner-rewrite-plan.md](docs/runner-rewrite-plan.md).
+Status: milestones M0 to M5, M7 (Codex, Gemini CLI, `cinderline login`, client detection, errors reported to Cinderline) and M8 (network allowlist) are built. Of M6, the per-project environment (`docker`) is built; the existing setup (`existing`) is decided (decision 2026-11-08-m6-environments) but not built. See [docs/runner-rewrite-plan.md](docs/runner-rewrite-plan.md).
 
 ## Supported platforms
 
@@ -142,6 +142,12 @@ Each issue runs on its own internal Docker network with a fresh MySQL 8 and an e
 - the project's `allow_hosts`.
 
 No forge (git fetch and push run in a separate helper container) and never `host.docker.internal`. The run's log names each refused host, and the runner report counts them.
+
+## Environments
+
+A project runs in the default environment above unless an admin sets its environment to `docker` in Cinderline. Then each turn runs in the project's own compose file, read from the base branch only (`.cinderline/compose.yml` by default, path and agent service set in Cinderline), so a pull request cannot change what runs for its own issue. The agent runs in the agent service's image (`agent` by default), pulled or built, with that service's environment, hardened as in the default environment; the other services start beside it with `docker compose up --wait` on the run's internal network, behind the same egress proxy, instead of MySQL, and everything is removed after the turn. The agent service's own command, entrypoint, user and mounts are not used. This needs `docker compose`; it runs with only the variables the docker CLI needs, so the file cannot read the runner's environment.
+
+A file is refused, with the reason in a progress line on the issue, when a service has a bind mount, `privileged`, `network_mode`, another network, `pid`, `ipc`, `uts`, `cgroup` or `userns_mode` set to the host or another container, `cap_add`, devices, published ports or `volumes_from`; when a volume or network is external; when a secret or config comes from the environment; or when a build context, `env_file`, secret or config file lies outside the repository. Symlinks in the repository are left out of the copy compose reads. A service may not be named `proxy`.
 
 ## Update
 

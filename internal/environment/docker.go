@@ -79,6 +79,8 @@ type Docker struct {
 	// OnFetch is called before the default image is pulled or built, a slow
 	// first-time step; nil: none. A failed pull calls it again for the build.
 	OnFetch func()
+
+	compose atomic.Pointer[Compose] // the project's own compose file; nil: the default environment
 }
 
 var _ Environment = (*Docker)(nil)
@@ -98,8 +100,10 @@ func streamCommand(ctx context.Context, env []string, stdin string, out io.Write
 
 // Run runs one agent turn: an internal network with a fresh MySQL and the
 // egress proxy allowing d.Allow and s.Allow, then the hardened agent
-// container with only DBEnv, ProxyEnv and s.Env, stopped with docker stop at
-// s.Timeout. Its output goes to the log line by line as it comes, then the
+// container with only DBEnv, ProxyEnv and s.Env, stopped with docker stop
+// at s.Timeout. With a compose file (SetCompose), its services replace
+// MySQL, and the agent runs as hardened in the agent service's image with
+// that service's environment instead of DBEnv. Its output goes to the log line by line as it comes, then the
 // hosts the proxy refused. All are removed afterwards, also after a failure
 // or a stop of the runner.
 func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
@@ -115,24 +119,47 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		}
 		names = append(names, "-e", k)
 	}
-	image, err := d.Image(ctx)
-	if err != nil {
-		return "", err
+	compose := d.compose.Load()
+	image := ""
+	if compose == nil {
+		i, err := d.Image(ctx)
+		if err != nil {
+			return "", err
+		}
+		image = i
 	}
 	// Without its proxy no agent starts: the run fails closed.
 	proxy, err := d.ProxyImage(ctx)
 	if err != nil {
 		return "", err
 	}
-	if err := d.up(ctx, s.Issue, proxy, append(slices.Clip(d.Allow), s.Allow...)); err != nil {
+	if err := d.up(ctx, s.Issue, proxy, append(slices.Clip(d.Allow), s.Allow...), compose == nil); err != nil {
 		return "", err
 	}
+	var p *composed
 	// Removal must also happen when the runner stops.
 	defer func() {
-		if err := d.down(context.WithoutCancel(ctx), s.Issue); err != nil {
+		var err error
+		if p != nil {
+			if p.args != nil {
+				err = d.composeDown(context.WithoutCancel(ctx), p)
+			}
+			err = errors.Join(err, os.RemoveAll(p.dir))
+		}
+		if err = errors.Join(err, d.down(context.WithoutCancel(ctx), s.Issue)); err != nil {
 			d.log().Warn("run's containers not removed", "project", d.Project, "issue", s.Issue, "err", err)
 		}
 	}()
+	env := append(slices.Clip(DBEnv), ProxyEnv...)
+	if compose != nil {
+		if p, err = d.composeProject(ctx, s.Issue, compose); err != nil {
+			return "", err
+		}
+		if err := d.composeUp(ctx, p); err != nil {
+			return "", err
+		}
+		image, env = p.image, p.env
+	}
 
 	net := d.network(s.Issue)
 	agent := net + "-agent"
@@ -140,7 +167,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		"--name", agent, "--network", net)
 	// No --add-host host.docker.internal: decision 2026-11-09-network-allowlist.
 	argv = append(append(argv, hardening...), "--user", workspace.AgentUser, "--workdir", s.Dir)
-	for _, kv := range append(slices.Clip(DBEnv), ProxyEnv...) {
+	for _, kv := range env {
 		argv = append(argv, "-e", kv)
 	}
 	// Secrets go by name: their values travel in the docker command's
@@ -298,9 +325,9 @@ func (d *Docker) network(issue string) string {
 // up creates the issue's internal network, which has no route out and no
 // upstream DNS, starts the egress proxy on it as proxy, allowing allow, and
 // connects the proxy to the default bridge as its way out, then starts a
-// fresh MySQL as mysql. What an earlier turn left under these names is
-// removed first when it is in the way. A failure leaves nothing behind.
-func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string) error {
+// fresh MySQL as mysql when mysql is set. What an earlier turn left under
+// these names is removed first when it is in the way. A failure leaves nothing behind.
+func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string, mysql bool) error {
 	labels := workspace.Labels(d.Project, issue)
 	net := d.network(issue)
 	create := append(append([]string{"docker", "network", "create", "--internal"}, labels...), net)
@@ -316,10 +343,13 @@ func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []strin
 	proxy := append(append([]string{"docker", "run", "--detach"}, labels...),
 		"--name", net+"-proxy", "--network", net, "--network-alias", "proxy")
 	proxy = append(append(append(proxy, hardening...), "--read-only", proxyImage), allow...)
-	mysql := append(append([]string{"docker", "run", "--detach"}, labels...),
-		"--name", net+"-mysql", "--network", net, "--network-alias", "mysql")
-	mysql = append(append(mysql, mysqlEnv...), MySQLImage)
-	for _, argv := range [][]string{proxy, {"docker", "network", "connect", "bridge", net + "-proxy"}, mysql} {
+	steps := [][]string{proxy, {"docker", "network", "connect", "bridge", net + "-proxy"}}
+	if mysql {
+		db := append(append([]string{"docker", "run", "--detach"}, labels...),
+			"--name", net+"-mysql", "--network", net, "--network-alias", "mysql")
+		steps = append(steps, append(append(db, mysqlEnv...), MySQLImage))
+	}
+	for _, argv := range steps {
 		if _, err := d.exec(ctx, argv...); err != nil {
 			return errors.Join(err, d.down(ctx, issue))
 		}
@@ -342,13 +372,14 @@ func (d *Docker) down(ctx context.Context, issue string) error {
 
 // Cleanup removes the project's containers and networks a previous process
 // left, so Docker's address pools do not run out (review item 9). It runs
-// in recovery at start, when none of them is in use. Volumes stay: they hold
-// the clones of paused runs.
+// in recovery at start, when none of them is in use. Volumes stay, they hold
+// the clones of paused runs, except those of compose projects.
 func (d *Docker) Cleanup(ctx context.Context) error {
 	filter := []string{"--filter", "label=" + workspace.ProjectLabel(d.Project)}
 	return errors.Join(
 		d.remove(ctx, append([]string{"docker", "ps", "--all", "--quiet"}, filter...), "docker", "rm", "--force", "--volumes"),
 		d.remove(ctx, append([]string{"docker", "network", "ls", "--quiet"}, filter...), "docker", "network", "rm"),
+		d.remove(ctx, []string{"docker", "volume", "ls", "--quiet", "--filter", "label=" + composeLabel(d.Project)}, "docker", "volume", "rm", "--force"),
 	)
 }
 

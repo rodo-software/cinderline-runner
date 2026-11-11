@@ -116,7 +116,7 @@ var issueLabels = []string{"--label", "cinderline.project=CSR", "--label", "cind
 // run's allowlist as its arguments.
 func TestUp(t *testing.T) {
 	d, calls := scripted(nil, nil)
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}, true); err != nil {
 		t.Fatal(err)
 	}
 	want := []execCall{
@@ -150,7 +150,7 @@ func TestDBEnv(t *testing.T) {
 func TestUpFailureLeavesNothing(t *testing.T) {
 	boom := errors.New("boom")
 	d, calls := scripted(nil, map[int]error{1: boom})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil); !errors.Is(err, boom) {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, true); !errors.Is(err, boom) {
 		t.Errorf("up = %v, want boom", err)
 	}
 	if got := (*calls)[len(*calls)-1].Argv; !reflect.DeepEqual(got, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}) {
@@ -162,7 +162,7 @@ func TestUpFailureLeavesNothing(t *testing.T) {
 // issue's later turns still run (decision 2026-11-11-audit-fixes).
 func TestUpRemovesALeftoverNetwork(t *testing.T) {
 	d, calls := scripted(nil, map[int]error{0: errors.New("network already exists")})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, true); err != nil {
 		t.Fatalf("up = %v", err)
 	}
 	var got []string
@@ -200,20 +200,22 @@ func TestCleanupRemovesStaleContainersAndNetworks(t *testing.T) {
 		{nil, []string{"docker", "rm", "--force", "--volumes", "c1", "c2"}},
 		{nil, []string{"docker", "network", "ls", "--quiet", "--filter", "label=cinderline.project=CSR"}},
 		{nil, []string{"docker", "network", "rm", "n1"}},
+		{nil, []string{"docker", "volume", "ls", "--quiet", "--filter", "label=cinderline.compose.CSR"}},
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
 	}
 }
 
-// Volumes are left alone: they hold the clones of paused runs and sessions.
+// Volumes are left alone, they hold the clones of paused runs and
+// sessions, except those of compose projects.
 func TestCleanupWithNothingStale(t *testing.T) {
 	d, calls := scripted(nil, nil)
 	if err := d.Cleanup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) != 2 {
-		t.Errorf("calls = %q, want only the two lists", *calls)
+	if len(*calls) != 3 {
+		t.Errorf("calls = %q, want only the three lists", *calls)
 	}
 }
 
@@ -223,8 +225,8 @@ func TestCleanupReportsAFailedList(t *testing.T) {
 	if err := d.Cleanup(context.Background()); !errors.Is(err, boom) {
 		t.Errorf("Cleanup = %v, want boom", err)
 	}
-	if len(*calls) != 2 {
-		t.Errorf("calls = %q, want the networks still listed", *calls)
+	if len(*calls) != 3 {
+		t.Errorf("calls = %q, want the networks and volumes still listed", *calls)
 	}
 }
 

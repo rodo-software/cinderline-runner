@@ -201,7 +201,7 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		proj.KeepFor, proj.MinFree, proj.Others = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects
 		wg.Go(func() {
 			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
-			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}
+			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default", "docker"}}
 			if err := c.SyncReport(ctx, r); err != nil && ctx.Err() == nil {
 				c.Log.Warn("report failed", "err", err)
 			}

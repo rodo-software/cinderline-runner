@@ -944,6 +944,14 @@ components:
         environment:
           description: Where runs happen; set by admins in the app, never from issue text (0098).
           enum: [default, docker, existing]
+        compose_file:
+          description: For environment docker, the compose file's path in the repository, read from the base branch only; set by admins. Null or absent means the default (decision 2026-11-08-m6-environments point 1).
+          type: [string, 'null']
+          default: .cinderline/compose.yml
+        agent_service:
+          description: For environment docker, the compose file's service the agents run in; set by admins. Null or absent means the default.
+          type: [string, 'null']
+          default: agent
         linked_projects:
           description: The projects this project's agents may reach, one direction per link. Empty when there are none.
           type: array

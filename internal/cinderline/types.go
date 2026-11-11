@@ -109,6 +109,11 @@ type Project struct {
 	Forge         string `json:"forge"`
 	BaseBranch    string `json:"base_branch"`
 	Environment   string `json:"environment"`
+	// ComposeFile and AgentService are the compose file of environment
+	// docker and its agent service; empty means the runner's defaults
+	// (decision 2026-11-08-m6-environments point 1).
+	ComposeFile  string `json:"compose_file,omitempty"`
+	AgentService string `json:"agent_service,omitempty"`
 	// LinkedProjects are the projects this project's agents may reach, one
 	// direction per link (decision 2026-11-11-project-links). An app that
 	// does not send it yet means none.
