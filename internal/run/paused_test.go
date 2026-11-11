@@ -20,11 +20,12 @@ import (
 // drive a whole process with fake CLIs; these drive the same branches of
 // attempts() and takePaused() against the fakes.
 
-// pausedNote writes a note for CSR-7 whose clone exists, as pausedRun does.
+// pausedNote writes a note for CSR-7 whose clone is in the runs volume, a
+// path the host does not have, as pausedRun does.
 func pausedNote(t *testing.T, p Project, n Paused) Paused {
 	t.Helper()
 	if n.Dir == "" {
-		n.Dir = t.TempDir()
+		n.Dir = "/runs/CSR-7"
 	}
 	if err := p.SavePaused("CSR-7", n); err != nil {
 		t.Fatal(err)
@@ -199,7 +200,7 @@ func TestAFinishedRunDoesNotPause(t *testing.T) {
 
 // Ported from runner.test.mjs "an answered issue of an OpenCode orchestrator
 // resumes in OpenCode", with legacy readPaused's other refusals: a note
-// resumes only in the client that made it, with a session and its clone.
+// resumes only in the client that made it, with a session.
 // Taking a note removes it, so a crash during the resumed run starts fresh.
 func TestTakePaused(t *testing.T) {
 	for _, tt := range []struct {
@@ -211,7 +212,6 @@ func TestTakePaused(t *testing.T) {
 		{"an OpenCode note in OpenCode", Paused{Session: "ses_paused", Client: "opencode"}, "opencode", true},
 		{"an OpenCode note in Claude", Paused{Session: "ses_paused", Client: "opencode"}, "claude", false},
 		{"no session", Paused{Client: "claude"}, "claude", false},
-		{"a clone that is gone", Paused{Session: "s", Client: "claude", Dir: "/gone/CSR-7"}, "claude", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := project(t)

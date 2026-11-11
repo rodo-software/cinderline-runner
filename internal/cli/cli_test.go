@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
@@ -279,6 +281,22 @@ func TestAddEOFStoresNothing(t *testing.T) {
 	}
 }
 
+// Two projects with one key would share their Docker volumes (decision 2026-11-11-audit-fixes).
+func TestAddRefusesSameKeyOnAnotherInstance(t *testing.T) {
+	u := instance(t, "WEB", repoURL)
+	c, _, errb := newCLI(t, lines(u, goodToken, "", "git-tok"))
+	saveConfig(t, c, config.Project{URL: "https://other.example.com", Key: "WEB", Repository: repoURL})
+	if code := c.Run([]string{"add"}); code != 1 {
+		t.Fatalf("code %d, want 1", code)
+	}
+	if !strings.Contains(errb.String(), "key WEB is already added, at https://other.example.com") {
+		t.Errorf("stderr %q", errb.String())
+	}
+	if got := projects(t, c); len(got) != 1 {
+		t.Errorf("config = %+v, want only the first project", got)
+	}
+}
+
 func TestAddRefusesExistingProject(t *testing.T) {
 	u := instance(t, "WEB", repoURL)
 	c, _, errb := newCLI(t, lines(u, goodToken, "", "git-tok"))
@@ -359,11 +377,24 @@ func TestRemove(t *testing.T) {
 	}
 
 	c, out, errb := setup()
+	d := &fakeDocker{lists: map[string]string{"docker volume ls --quiet --filter label=cinderline.project=API": "cinderline-API-repo\ncinderline-API-state-claude\n"}}
+	c.exec = d.exec
+	notes := run.PausedDir(c.Paths.State, api)
+	if err := os.MkdirAll(notes, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if code := c.Run([]string{"remove", "API"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
-	if out.String() != "Removed API at https://a.example.com\n" {
-		t.Errorf("stdout %q", out.String())
+	if out.String() != "Removed API at https://a.example.com\n" || errb.Len() != 0 {
+		t.Errorf("stdout %q, stderr %q", out.String(), errb.String())
+	}
+	// Its volumes hold the clones and the clients' sign-ins (decision 2026-11-11-audit-fixes).
+	if want := []string{"docker", "volume", "rm", "--force", "cinderline-API-repo", "cinderline-API-state-claude"}; len(d.calls) != 4 || !reflect.DeepEqual(d.calls[3], want) {
+		t.Errorf("docker calls %q, want three lists and %q", d.calls, want)
+	}
+	if _, err := os.Stat(notes); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("paused notes: %v, want removed", err)
 	}
 	if got := projects(t, c); !reflect.DeepEqual(got, []config.Project{a, b}) {
 		t.Errorf("projects %+v", got)
@@ -380,6 +411,17 @@ func TestRemove(t *testing.T) {
 	c, _, errb = setup()
 	if code := c.Run([]string{"remove", "NOPE"}); code != 1 || !strings.Contains(errb.String(), "NOPE") {
 		t.Errorf("unknown key: code %d, stderr %q", code, errb.String())
+	}
+
+	// A namesake on another instance still uses the Docker names; a failing docker only warns.
+	c, _, errb = setup()
+	d = &fakeDocker{fail: errors.New("docker down")}
+	c.exec = d.exec
+	if code := c.Run([]string{"remove", "-url", "https://a.example.com", "WEB"}); code != 0 || len(d.calls) != 0 {
+		t.Errorf("shared key: code %d, docker calls %q, stderr %q", code, d.calls, errb.String())
+	}
+	if code := c.Run([]string{"remove", "API"}); code != 0 || !strings.Contains(errb.String(), "docker down") || len(projects(t, c)) != 1 {
+		t.Errorf("docker down: code %d, stderr %q", code, errb.String())
 	}
 
 	c, _, errb = setup()

@@ -160,6 +160,14 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 	slotted := map[string]bool{}
 	for _, p := range cfg.Projects {
 		st := scheduler.ProjectStatus{Project: p.Key}
+		// Volumes, containers and networks are named by the key alone, so
+		// two projects with one key would share them (decision 2026-11-11-audit-fixes).
+		if slotted[p.Key] {
+			log.Error("another project has the same key, project not started", "project", p.Key, "url", p.URL)
+			st.LastError, st.LastErrorAt = "another project has key "+p.Key+": only the first one runs; remove one of them", time.Now()
+			projects = append(projects, st)
+			continue
+		}
 		token, _, err := sec.Get(p, secrets.RunnerToken)
 		if err != nil {
 			log.Error("no runner token, project not started", "project", p.Key, "err", err)
@@ -225,7 +233,8 @@ func (d *daemon) status() []scheduler.ProjectStatus {
 	defer d.mu.Unlock()
 	out := make([]scheduler.ProjectStatus, len(d.projects))
 	for i, p := range d.projects {
-		if s, ok := live[p.Project]; ok && d.slotted[p.Project] {
+		// One with its own error has no slot, also when a namesake has.
+		if s, ok := live[p.Project]; ok && d.slotted[p.Project] && p.LastError == "" {
 			p = s
 		}
 		out[i] = p

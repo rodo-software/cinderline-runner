@@ -44,7 +44,7 @@ func decodeSettings(t *testing.T, s string) map[string]any {
 // environment, so it is never written to disk, and the project's AGENTS.md as
 // context next to GEMINI.md.
 func TestGeminiSettings(t *testing.T) {
-	orch := decodeSettings(t, geminiSettings(Turn{MaxTurns: 40, Token: "tok"}, "https://cs.example/mcp", false))
+	orch := decodeSettings(t, geminiSettingsWithAuth(Turn{MaxTurns: 40, Token: "tok"}, "https://cs.example/mcp", geminiAuthType(false)))
 	want := decodeSettings(t, `{
 		"security": {"auth": {"selectedType": "gemini-api-key"}},
 		"model": {"maxSessionTurns": 40},
@@ -61,7 +61,7 @@ func TestGeminiSettings(t *testing.T) {
 	// repository decision 2026-11-05-workers-skip-project-files); without a
 	// turn limit the CLI's own default (none) applies; a Vertex key is a
 	// vertex-ai auth.
-	worker := decodeSettings(t, geminiSettings(Turn{}, "https://cs.example/mcp", true))
+	worker := decodeSettings(t, geminiSettingsWithAuth(Turn{}, "https://cs.example/mcp", geminiAuthType(true)))
 	want = decodeSettings(t, `{
 		"security": {"auth": {"selectedType": "vertex-ai"}},
 		"general": {"enableAutoUpdate": false, "enableAutoUpdateNotification": false},
@@ -70,7 +70,7 @@ func TestGeminiSettings(t *testing.T) {
 	if !reflect.DeepEqual(worker, want) {
 		t.Errorf("worker settings =\n%v\nwant\n%v", worker, want)
 	}
-	if s := geminiSettings(Turn{MaxTurns: 3, Token: "tok"}, "u", false); strings.Contains(s, "tok\"") {
+	if s := geminiSettingsWithAuth(Turn{MaxTurns: 3, Token: "tok"}, "u", geminiAuthType(false)); strings.Contains(s, "tok\"") {
 		t.Errorf("settings %s hold the token", s)
 	}
 }
@@ -84,7 +84,7 @@ func TestGeminiEnv(t *testing.T) {
 	want := []string{
 		"GEMINI_CLI_HOME=/state/gemini",
 		"GEMINI_API_KEY=AIza-key",
-		"CINDERLINE_GEMINI_SETTINGS=" + geminiSettings(orch, "https://cs.example/mcp", false),
+		"CINDERLINE_GEMINI_SETTINGS=" + geminiSettingsWithAuth(orch, "https://cs.example/mcp", geminiAuthType(false)),
 		"CINDERLINE_TOKEN=tok",
 	}
 	if got := geminiEnv("AIza-key", false, orch, "https://cs.example/mcp"); !reflect.DeepEqual(got, want) {
@@ -94,7 +94,7 @@ func TestGeminiEnv(t *testing.T) {
 		"GEMINI_CLI_HOME=/state/gemini",
 		"GOOGLE_GENAI_USE_VERTEXAI=true",
 		"GOOGLE_API_KEY=AQ-key",
-		"CINDERLINE_GEMINI_SETTINGS=" + geminiSettings(Turn{}, "https://cs.example/mcp", true),
+		"CINDERLINE_GEMINI_SETTINGS=" + geminiSettingsWithAuth(Turn{}, "https://cs.example/mcp", geminiAuthType(true)),
 	}
 	if got := geminiEnv("AQ-key", true, Turn{}, "https://cs.example/mcp"); !reflect.DeepEqual(got, want) {
 		t.Errorf("vertex worker env =\n%q\nwant\n%q", got, want)
@@ -195,7 +195,7 @@ func TestGeminiRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:  "CSR-7",
 		Dir:    "/runs/CSR-7",
-		Mounts: []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state:/state", "-v", "tools:/opt/cinderline:ro"},
+		Mounts: []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-gemini:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:    append([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, geminiEnv("AIza-key", false, turn, "https://cs.example/mcp")...),
 		Cmd: append([]string{
 			"sh", "-c", `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' "$CINDERLINE_GEMINI_SETTINGS" > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`,

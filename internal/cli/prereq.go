@@ -31,18 +31,32 @@ func dockerHint(goos string) string {
 	}
 }
 
-// checkDocker reports a missing docker, a silent daemon or low disk; with wait it waits for the daemon.
+// keepsDNSInside reports whether Docker Engine version v has the fix for
+// CVE-2024-29018 (23.0.11, 25.0.5, 26.0.0): older engines answer DNS lookups
+// from an --internal network through the host's resolver, a way out past the
+// egress proxy. A version it cannot read does not have it.
+func keepsDNSInside(v string) bool {
+	var major, minor, patch int
+	if n, _ := fmt.Sscanf(v, "%d.%d.%d", &major, &minor, &patch); n != 3 {
+		return false
+	}
+	return major >= 26 || major == 25 && (minor > 0 || patch >= 5) || major == 23 && (minor > 0 || patch >= 11)
+}
+
+// checkDocker reports a missing docker, a silent daemon, an engine too old or low disk; with wait it waits for the daemon.
 func (c *CLI) checkDocker(ctx context.Context, wait bool) error {
 	x := c.exec
 	if x == nil {
 		x = workspace.RunCommand
 	}
 
+	var engine string
 	version := func() error {
-		_, err := x(ctx, nil, "docker", "version", "--format", "{{.Server.Version}}")
+		out, err := x(ctx, nil, "docker", "version", "--format", "{{.Server.Version}}")
 		if errors.Is(err, exec.ErrNotFound) {
 			return errNoDocker
 		}
+		engine = strings.TrimSpace(out)
 		return err
 	}
 	err := version()
@@ -63,6 +77,9 @@ func (c *CLI) checkDocker(ctx context.Context, wait bool) error {
 	}
 	if err != nil {
 		return err
+	}
+	if !keepsDNSInside(engine) {
+		return fmt.Errorf("the Docker Engine, %s, is too old: it forwards DNS lookups from the agents' internal network, which lets an agent send data out past the allowlist (CVE-2024-29018); update to 25.0.5 or later (or 23.0.11 or later of 23.0)", engine)
 	}
 
 	out, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none", "--entrypoint", "df", workspace.GitImage, "-Pk", "/")

@@ -14,7 +14,7 @@ FROM php:8.4-cli-bookworm
 
 COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
-COPY --from=golang:1.27.3-bookworm /usr/local/go /usr/local/go
+COPY --from=golang:1.27.4-bookworm /usr/local/go /usr/local/go
 
 # gcc and libc6-dev: go test -race needs cgo.
 RUN apt-get update \

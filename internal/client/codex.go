@@ -31,13 +31,13 @@ var _ Client = (*Codex)(nil)
 // Run runs one turn. Codex has no turn or step limit; the team's time limit
 // bounds the turn. HitTurnLimit stays false.
 func (c *Codex) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project, "codex"); err != nil {
 		return Result{}, err
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
 		Issue:  path.Base(t.Dir),
 		Dir:    t.Dir,
-		Mounts: agentMounts(c.Project, c.Tools),
+		Mounts: agentMounts(c.Project, "codex", c.Tools),
 		Env:    append(append([]string(nil), c.Tools.Env...), codexEnv(c.Key, t)...),
 		Cmd: append([]string{
 			"sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`,

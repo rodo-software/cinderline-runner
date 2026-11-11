@@ -11,9 +11,10 @@ Status: milestones M0 to M5, M7 (Codex, Gemini CLI, `cinderline login`, client d
 | System | Versions | Docker |
 |---|---|---|
 | macOS | The current and two previous major releases, as Docker Desktop supports them; Apple silicon and Intel | Docker Desktop |
-| Linux | Any distribution that runs Docker Engine 20.10 or later; `cinderline service` needs systemd | Docker Engine 20.10 or later, or Docker Desktop |
+| Linux | Any distribution that runs a supported Docker Engine; `cinderline service` needs systemd | Docker Engine 25.0.5 or later (or 23.0.11 or later of 23.0), or Docker Desktop |
 | Windows | Windows 10 22H2 (build 19045) or Windows 11 23H2 or later, 64-bit; ARM64 only as far as Docker Desktop's ARM build (early access) runs | Docker Desktop with the WSL2 backend |
 
+- An older Docker Engine is refused: it forwards DNS lookups from the agents' internal network, a way out past the network allowlist (CVE-2024-29018).
 - On a Windows build below 19045 every command except `cinderline version` stops with an error naming the build it found. Windows Server is not supported: Docker Desktop does not run on it.
 - CI runs the checks on macOS and Windows on GitHub and on Linux on Forgejo; [docs/ci/platforms.yml](docs/ci/platforms.yml) widens that to the oldest and newest images per system and architecture.
 
@@ -42,7 +43,9 @@ To pin a specific version, set `CINDERLINE_DOWNLOAD_URL` before running (e.g.
 
 ## Add a project
 
-`cinderline add` asks for the Cinderline instance's URL, the project's runner token, the repository (it offers the one the project names in Cinderline and refuses another) and a git token. It checks Docker first (installed, daemon running, at least 5 GB free), checks the runner token against the instance as it asks, stores both tokens in the OS keychain (or a 0600 file in the state folder where there is none) and the rest in `config.json`, and warns when CI can read secrets from the runner's branches (see "CI secrets" below). When other projects are configured, it offers to copy their model credentials. A running runner picks the project up at once. `cinderline remove [-url URL] KEY` removes a project and its secrets.
+`cinderline add` asks for the Cinderline instance's URL, the project's runner token, the repository (it offers the one the project names in Cinderline and refuses another) and a git token. It checks Docker first (installed, daemon running, at least 5 GB free), checks the runner token against the instance as it asks, stores both tokens in the OS keychain (or a 0600 file in the state folder where there is none) and the rest in `config.json`, and warns when CI can read secrets from the runner's branches (see "CI secrets" below). When other projects are configured, it offers to copy their model credentials. A running runner picks the project up at once. `cinderline remove [-url URL] KEY` removes a project, its secrets, its Docker volumes (the clones and the clients' sign-ins) and its paused notes; a running runner drops it at once.
+
+A project key can be added once: Docker volumes are named by the key, so a second project with the same key on another instance is refused by `add`, and one written into `config.json` by hand does not run.
 
 `cinderline add` does not ask for model keys (Anthropic API key or `claude setup-token` token, OpenRouter, OpenAI, Gemini), and no command stores one: a project gets them by copying from another project, or uses a sign-in (below).
 
@@ -50,7 +53,7 @@ Then start it with `cinderline run` (foreground, until Ctrl-C) or as a service (
 
 ### Sign a client in instead of storing a key
 
-`cinderline login claude --project KEY`, `cinderline login codex --project KEY` or `cinderline login gemini --project KEY` runs the CLI's own sign-in (`claude auth login`, `codex login --device-auth`, Gemini CLI's own Google sign-in) in a container. Open the link it prints and paste the code back. The credentials stay on that project's state volume; the runner never reads them. When the keychain holds no Anthropic, OpenAI or Gemini key for the project, runs then use this login; a stored key still wins. OpenCode uses the project's OpenRouter key only. After `login gemini`, type `/quit` once it says "Authentication succeeded": the interactive Gemini CLI stays open after signing in.
+`cinderline login claude --project KEY`, `cinderline login codex --project KEY` or `cinderline login gemini --project KEY` runs the CLI's own sign-in (`claude auth login`, `codex login --device-auth`, Gemini CLI's own Google sign-in) in a container. Open the link it prints and paste the code back. The credentials stay on that project's state volume of that client, which only that client's runs mount; the runner never reads them. When the keychain holds no Anthropic, OpenAI or Gemini key for the project, runs then use this login; a stored key still wins. OpenCode uses the project's OpenRouter key only. After `login gemini`, type `/quit` once it says "Authentication succeeded": the interactive Gemini CLI stays open after signing in.
 
 The daemon reports each client's state (ready, missing the binary, missing a credential, or the provider refused the key) in its runner report, so the Cinderline instance can show what a project is set up for. Logins on the state volume count as configured but are not tested, so an expired login only fails on the first run.
 
@@ -68,7 +71,7 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 - `build_image`: `true` builds the default image locally instead of pulling it.
 - Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key.
 
-Unknown fields are refused. `add` and `login` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. After `remove` or a hand edit, restart the runner.
+Unknown fields are refused. `add` and `login` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
 
 ## Network
 

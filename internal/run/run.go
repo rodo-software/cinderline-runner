@@ -17,6 +17,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // PausedDir is the folder of a project's paused notes, one <REF>.json per
@@ -131,58 +132,63 @@ func (p Project) pushStranded(ctx context.Context, c *cinderline.Client) error {
 			p.Log.Warn("stranded branch not checked", "project", p.Config.Key, "branch", clone.Branch, "err", "not a "+name.Name+" branch")
 			continue
 		}
-		log := p.Log.With("project", p.Config.Key, "issue", ref)
 		issue, err := c.GetIssue(ctx, ref)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			log.Warn("stranded branch not checked", "err", err)
+			p.Log.Warn("stranded branch not checked", "project", p.Config.Key, "issue", ref, "err", err)
 			continue
 		}
-		switch issue.Status.Value {
-		case "done", "cancelled":
-			log.Info("stranded branch of a closed issue left alone")
-			continue
+		if _, err := p.pushClone(ctx, p.Workspace, fg, base, clone, issue.Issue); err != nil {
+			return err
 		}
-		state, err := fg.MergeState(ctx, clone.Branch)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			log.Warn("stranded branch not checked", "err", err)
-			continue
-		}
-		switch state {
-		case forge.MergeMerged, forge.MergeClosed:
-			log.Info("stranded branch left alone", "pull_request_state", state)
-			continue
-		}
-		err = p.Workspace.Push(ctx, clone.Dir, clone.Branch)
-		if err != nil {
-			log.Warn("stranded branch not pushed", "err", err)
-			continue
-		}
-		log.Info("stranded branch pushed", "branch", clone.Branch)
-		if issue.Status.Value != "review" {
-			continue
-		}
-		pr, err := fg.OpenPullRequest(ctx, forge.PullRequestInput{
-			Branch: clone.Branch,
-			Base:   base,
-			Title:  ref + ": " + issue.Title,
-			Body:   pullRequestBody(ref, deref(issue.Body)),
-		})
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			log.Warn("pull request not opened for a stranded branch", "err", err)
-			continue
-		}
-		log.Info("pull request opened for a stranded branch", "pull_request", pr.URL)
 	}
 	return nil
+}
+
+// pushClone pushes one stranded clone and, for an issue in Review, opens its
+// pull request. A clone whose issue is closed, or whose pull request is
+// merged or closed, is left alone. It reports whether the clone's commits
+// are on the remote now; every failure only logs, and its only error is a stop.
+func (p Project) pushClone(ctx context.Context, ws workspace.Workspace, fg forge.Forge, base string, clone workspace.Clone, issue cinderline.Issue) (bool, error) {
+	ref := issue.Ref
+	log := p.Log.With("project", p.Config.Key, "issue", ref)
+	switch issue.Status.Value {
+	case "done", "cancelled":
+		log.Info("stranded branch of a closed issue left alone")
+		return false, nil
+	}
+	state, err := fg.MergeState(ctx, clone.Branch)
+	if err != nil {
+		log.Warn("stranded branch not checked", "err", err)
+		return false, ctx.Err()
+	}
+	switch state {
+	case forge.MergeMerged, forge.MergeClosed:
+		log.Info("stranded branch left alone", "pull_request_state", state)
+		return false, nil
+	}
+	if err := ws.Push(ctx, clone.Dir, clone.Branch); err != nil {
+		log.Warn("stranded branch not pushed", "err", err)
+		return false, ctx.Err()
+	}
+	log.Info("stranded branch pushed", "branch", clone.Branch)
+	if issue.Status.Value != "review" {
+		return true, nil
+	}
+	pr, err := fg.OpenPullRequest(ctx, forge.PullRequestInput{
+		Branch: clone.Branch,
+		Base:   base,
+		Title:  ref + ": " + issue.Title,
+		Body:   pullRequestBody(ref, deref(issue.Body)),
+	})
+	if err != nil {
+		log.Warn("pull request not opened for a stranded branch", "err", err)
+		return true, ctx.Err()
+	}
+	log.Info("pull request opened for a stranded branch", "pull_request", pr.URL)
+	return true, nil
 }
 
 // Pin refuses a repository from Cinderline other than the one configured on

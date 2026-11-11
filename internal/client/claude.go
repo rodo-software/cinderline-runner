@@ -49,7 +49,7 @@ var errTurnLimit = errors.New("claude: stopped at the turn limit")
 // Run runs one turn. The turn limit is an error with HitTurnLimit set, so
 // Attempts continues the session (CSR-21).
 func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project, "claude"); err != nil {
 		return Result{}, err
 	}
 	session := t.SessionID
@@ -59,7 +59,7 @@ func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
 	out, err := c.Env.Run(ctx, environment.Spec{
 		Issue:   path.Base(t.Dir), // the clone is RunsPath/<REF>
 		Dir:     t.Dir,
-		Mounts:  agentMounts(c.Project, c.Tools),
+		Mounts:  agentMounts(c.Project, "claude", c.Tools),
 		Env:     append(append([]string(nil), c.Tools.Env...), claudeEnv(c.Credential, t)...),
 		Cmd:     append([]string{tools.Path + "/bin/claude"}, claudeArgs(t, session, c.MCPURL)...),
 		Stdin:   t.Prompt,
@@ -78,24 +78,32 @@ func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
 }
 
 // agentMounts mounts the issue's clone, the repo volume that holds the
-// objects the clone's alternates point at, the state volume and the tools.
-func agentMounts(project string, t tools.Mount) []string {
+// objects the clone's alternates point at, the client's state volume and the
+// tools.
+func agentMounts(project, client string, t tools.Mount) []string {
 	return append([]string{
 		"-v", workspace.Volume(project, "repo") + ":" + workspace.RepoPath + ":ro",
 		"-v", workspace.Volume(project, "runs") + ":" + workspace.RunsPath,
-		"-v", workspace.Volume(project, "state") + ":" + StatePath,
+		"-v", StateVolume(project, client) + ":" + StatePath,
 	}, t.Args...)
 }
 
-// PrepareState makes the project's state volume and hands its root to the
-// agent user: a new volume belongs to root, and the CLIs write their config
-// dirs and sessions in it. Every turn, as it costs a second and repairs
-// itself. A nil x means workspace.RunCommand.
-func PrepareState(ctx context.Context, x workspace.Exec, project string) error {
+// StateVolume is the name of the volume with one client's sessions, config
+// dir and sign-in for a project. One per client, so a run can read only its
+// own client's sign-in (decision 2026-11-11-audit-fixes).
+func StateVolume(project, client string) string {
+	return workspace.Volume(project, "state-"+client)
+}
+
+// PrepareState makes the client's state volume for the project and hands its
+// root to the agent user: a new volume belongs to root, and the CLI writes
+// its config dir and sessions in it. Every turn, as it costs a second and
+// repairs itself. A nil x means workspace.RunCommand.
+func PrepareState(ctx context.Context, x workspace.Exec, project, client string) error {
 	if x == nil {
 		x = workspace.RunCommand
 	}
-	vol := workspace.Volume(project, "state")
+	vol := StateVolume(project, client)
 	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, workspace.Labels(project, "")...), vol)...); err != nil {
 		return fmt.Errorf("state volume: %w", err)
 	}
@@ -114,8 +122,8 @@ func newSessionID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// StatePath is where the agent container mounts the project's state volume,
-// which holds the clients' sessions and config dirs (decision
+// StatePath is where the agent container mounts its client's state volume,
+// which holds the client's sessions and config dir (decision
 // 2026-11-05-runner-state-location, 0116).
 const StatePath = "/state"
 

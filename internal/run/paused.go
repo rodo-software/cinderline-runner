@@ -64,21 +64,19 @@ func (p Project) dropPaused(ref string) {
 
 // TakePaused reads and removes issue ref's note, so a crash during the
 // resumed run starts fresh. It returns the note only when it names a session
-// of this client and its clone is still there.
+// of this client.
 func (p Project) TakePaused(ref, client string) (Paused, bool) {
 	n, ok := p.resumable(ref, client)
 	p.dropPaused(ref)
 	return n, ok
 }
 
-// resumable returns issue ref's note when it names a session of this client
-// and its clone is still there, and leaves it in place.
+// resumable returns issue ref's note when it names a session of this client,
+// and leaves it in place. The clone is not checked: its dir is a path in the
+// runs volume, which the host cannot stat, and only Prepare removes a clone.
 func (p Project) resumable(ref, client string) (Paused, bool) {
 	n, ok := p.readPaused(ref)
 	if !ok || n.Session == "" || n.Client != client {
-		return Paused{}, false
-	}
-	if _, err := os.Stat(n.Dir); err != nil {
 		return Paused{}, false
 	}
 	return n, true

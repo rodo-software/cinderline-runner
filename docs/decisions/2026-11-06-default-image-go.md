@@ -6,7 +6,7 @@
 
 ## Decision
 
-The default image (`images/default/Dockerfile`) holds Go 1.27.3 with staticcheck and govulncheck, the same pins as today's runner image and with `GOTOOLCHAIN=local`, besides PHP 8.4, Composer, Node 22 and git.
+The default image (`images/default/Dockerfile`) holds Go 1.27.4 with staticcheck and govulncheck, the same pins as today's runner image and with `GOTOOLCHAIN=local`, besides PHP 8.4, Composer, Node 22 and git.
 
 This is a stopgap. One image cannot hold every project's toolchain, certainly not once Cinderline is offered as SaaS, so a more flexible solution is needed later. It is tracked as an issue at the end of the backlog (CSR-77).
 

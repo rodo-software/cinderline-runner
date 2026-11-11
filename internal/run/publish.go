@@ -29,16 +29,7 @@ const (
 )
 
 // sleep waits d or until ctx is done; a variable so tests need not wait.
-var sleep = func(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-t.C:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
+var sleep = forge.Sleep
 
 // mergeStatusOf is an issue's merge_status for where its pull request stands
 // (decision 2026-11-04-merge-status), as legacy MERGE_STATUS. An open pull
@@ -279,7 +270,8 @@ func FinishReport(pub *Published, trusted bool, forgeKind string) string {
 // Review issues up to date with their pull requests (decision
 // 2026-11-04-merge-status), on the MERGE_POLL_SECONDS timer. Issues already
 // at success are skipped; an open pull request or none says nothing new. An
-// issue that fails is logged and the next one checked.
+// issue that fails is logged and the next one checked. An issue found
+// without a pull request is asked again only after noPullRequestFor.
 //
 // shortcut: one page of Review issues, as the API returns them, like ReviewBranches; page if Review outgrows it.
 func (p Project) CheckMerges(ctx context.Context, c *cinderline.Client, fg forge.Forge) error {
@@ -308,6 +300,9 @@ func (p Project) CheckMerges(ctx context.Context, c *cinderline.Client, fg forge
 		if !trusted[issue.Team.ID] {
 			continue
 		}
+		if p.run.withoutPullRequest(issue.Ref) {
+			continue
+		}
 		state, err := fg.MergeState(ctx, name.Name+"/"+issue.Ref)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -316,6 +311,7 @@ func (p Project) CheckMerges(ctx context.Context, c *cinderline.Client, fg forge
 			log.Warn("merge status not checked", "err", err)
 			continue
 		}
+		p.run.setPullRequest(issue.Ref, state != "")
 		if status := mergeStatusOf[state]; status != "" && status != current {
 			p.setMergeStatus(ctx, c, issue.Ref, status)
 		}

@@ -41,6 +41,10 @@ type Workspace interface {
 	// branch has: work never pushed, or not since its last commit
 	// (decision 2026-11-07-publish-resilience).
 	Stranded(ctx context.Context) ([]Clone, error)
+	// Behind fetches once and lists the runner's branches on the remote
+	// that base has moved past: not merged into base and without base's
+	// head. The review timer makes a clone only for those.
+	Behind(ctx context.Context, base string) ([]string, error)
 }
 
 // Clone is one per-issue clone and the branch it is on.

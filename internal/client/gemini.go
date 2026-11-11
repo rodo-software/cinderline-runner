@@ -44,7 +44,12 @@ func geminiArgs(t Turn) []string {
 	return a
 }
 
-// geminiSettingsWithAuth is geminiSettings with an explicit auth type.
+// geminiSettingsWithAuth builds the user settings file content with an
+// explicit auth type. The settings go to the user settings file. A system
+// settings file is skipped unless its folder is owned by root, and the
+// repository's own .gemini/settings.json is ignored. Headless mode refuses
+// an untrusted folder (exit 55); hence --skip-trust. The turn limit exits 53
+// with a result of type FatalTurnLimitedError.
 func geminiSettingsWithAuth(t Turn, mcpURL string, authType string) string {
 	sec := map[string]any{"auth": map[string]string{"selectedType": authType}}
 	cfg := map[string]any{"security": sec}
@@ -71,15 +76,6 @@ func geminiAuthType(vertex bool) string {
 		return "vertex-ai"
 	}
 	return "gemini-api-key"
-}
-
-// geminiSettings builds the user settings file content. The settings go to
-// the user settings file. A system settings file is skipped unless its folder
-// is owned by root, and the repository's own .gemini/settings.json is ignored.
-// Headless mode refuses an untrusted folder (exit 55); hence --skip-trust.
-// The turn limit exits 53 with a result of type FatalTurnLimitedError.
-func geminiSettings(t Turn, mcpURL string, vertex bool) string {
-	return geminiSettingsWithAuth(t, mcpURL, geminiAuthType(vertex))
 }
 
 // geminiSettingsVar is the environment variable that holds the settings JSON.
@@ -168,13 +164,13 @@ func parseGemini(out string) Result {
 
 // Run runs one turn.
 func (c *Gemini) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project, "gemini"); err != nil {
 		return Result{}, err
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
 		Issue:  path.Base(t.Dir),
 		Dir:    t.Dir,
-		Mounts: agentMounts(c.Project, c.Tools),
+		Mounts: agentMounts(c.Project, "gemini", c.Tools),
 		Env:    append(append(append([]string(nil), c.Tools.Env...), c.Tools.OpenCodeEnv...), geminiEnv(c.Key, c.Vertex, t, c.MCPURL)...),
 		Cmd: append([]string{
 			"sh", "-c", `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' "$` + geminiSettingsVar + `" > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`,

@@ -92,6 +92,10 @@ func (c *CLI) add(args []string) int {
 		if q.URL == p.URL && q.Key == p.Key {
 			return c.fail(fmt.Errorf("%s at %s is already added; run `%s remove %s` first", p.Key, p.URL, name.Name, p.Key))
 		}
+		// Docker volumes are named by the key alone (decision 2026-11-11-audit-fixes).
+		if q.Key == p.Key {
+			return c.fail(fmt.Errorf("a project with key %s is already added, at %s; two projects with one key would share their Docker volumes", p.Key, q.URL))
+		}
 	}
 
 	prompt := "Repository: "

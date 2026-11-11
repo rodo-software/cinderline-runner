@@ -54,6 +54,12 @@ type StrandedReply struct {
 	Err    error
 }
 
+// BehindReply is one scripted reply to Behind.
+type BehindReply struct {
+	Branches []string
+	Err      error
+}
+
 // BoolReply is one scripted reply to Clean or ConflictMarkers.
 type BoolReply struct {
 	Yes bool
@@ -81,6 +87,7 @@ type Fake struct {
 	Resets     []error
 	Logs       []LogReply
 	Strandeds  []StrandedReply
+	Behinds    []BehindReply
 
 	mu    sync.Mutex
 	calls []Call
@@ -227,4 +234,16 @@ func (f *Fake) Stranded(_ context.Context) ([]Clone, error) {
 	r := f.Strandeds[0]
 	f.Strandeds = f.Strandeds[1:]
 	return r.Clones, r.Err
+}
+
+func (f *Fake) Behind(_ context.Context, base string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Behind", base)
+	if len(f.Behinds) == 0 {
+		return nil, fmt.Errorf("%w for Behind", ErrNotScripted)
+	}
+	r := f.Behinds[0]
+	f.Behinds = f.Behinds[1:]
+	return r.Branches, r.Err
 }

@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
@@ -219,16 +220,51 @@ func (p Project) CatchUp(ctx context.Context, c *cinderline.Client, clients map[
 // 2026-11-04-runner-updates-branch-before-push). An issue that fails is
 // logged and the next one checked.
 //
+// A fresh clone replaces the issue's old one, so a clone with commits the
+// remote lacks (a failed run or publish) is pushed first, and while that
+// fails its issue is skipped: the work is never removed unpushed. One fetch
+// then says which branches are behind; only those get a clone (decision
+// 2026-11-11-audit-fixes).
+//
 // shortcut: one page of Review issues, as the API returns them, like the claim's To do list; page if Review outgrows it.
 func (p Project) ReviewBranches(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, fg forge.Forge, base string) error {
 	issues, err := c.ListIssues(ctx, "review")
 	if err != nil {
 		return err
 	}
+	clones, err := ws.Stranded(ctx)
+	if err != nil {
+		return err // unknown, so no clone may be replaced
+	}
+	stranded := map[string]workspace.Clone{}
+	for _, clone := range clones {
+		stranded[clone.Branch] = clone
+	}
+	keep := map[string]bool{}
+	for _, issue := range issues {
+		branch := name.Name + "/" + issue.Ref
+		clone, ok := stranded[branch]
+		if !ok || issue.Team == nil || issue.Parent != nil {
+			continue
+		}
+		pushed, err := p.pushClone(ctx, ws, fg, base, clone, issue)
+		if err != nil {
+			return err
+		}
+		keep[branch] = !pushed
+	}
+	behind, err := ws.Behind(ctx, base)
+	if err != nil {
+		return err
+	}
 	trusted := map[int]bool{}
 	for _, issue := range issues {
-		if issue.Team == nil || issue.Parent != nil {
-			continue // a sub-issue's branch is its parent's
+		branch := name.Name + "/" + issue.Ref
+		if issue.Team == nil || issue.Parent != nil { // a sub-issue's branch is its parent's
+			continue
+		}
+		if keep[branch] || !slices.Contains(behind, branch) {
+			continue
 		}
 		if _, ok := trusted[issue.Team.ID]; !ok {
 			team, err := c.GetTeam(ctx, issue.Team.ID)

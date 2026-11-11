@@ -549,3 +549,24 @@ func TestDockerAgentRefusesDirOutsideRuns(t *testing.T) {
 		}
 	}
 }
+
+// Behind fetches once, then lists in one container without token or network.
+func TestDockerBehind(t *testing.T) {
+	d, calls := scripted([]string{"", "", "", "cinderline/CSR-5\ncinderline/CSR-8\n"}, nil)
+	got, err := d.Behind(context.Background(), "main")
+	if err != nil || !reflect.DeepEqual(got, []string{"cinderline/CSR-5", "cinderline/CSR-8"}) {
+		t.Fatalf("Behind = %v, %v", got, err)
+	}
+	want := append(append([]string{"docker", "run", "--rm"}, projectLabel...),
+		"--network", "none", "-v", "cinderline-CSR-repo:/repo:ro",
+		"--entrypoint", "sh", GitImage, "-c", behindScript, "sh", "refs/heads/main", "cinderline")
+	if len(*calls) != 4 || (*calls)[3].Env != nil || !reflect.DeepEqual((*calls)[3].Argv, want) {
+		t.Errorf("calls = %q\nwant the fetch's three, then\n%q", *calls, want)
+	}
+
+	boom := errors.New("no base")
+	d, _ = scripted(nil, map[int]error{3: boom})
+	if _, err := d.Behind(context.Background(), "main"); !errors.Is(err, boom) {
+		t.Errorf("Behind on a failed list = %v, want boom", err)
+	}
+}

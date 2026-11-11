@@ -190,6 +190,30 @@ func TestStatus(t *testing.T) {
 	}
 }
 
+// Two projects with one key would share their Docker volumes, so only the
+// first gets a slot (decision 2026-11-11-audit-fixes).
+func TestSecondProjectWithTheSameKeyDoesNotRun(t *testing.T) {
+	keyring.MockInit()
+	a, b := newApp(t), newApp(t)
+	p := paths(t)
+	first, second := project(a.url, "A"), project(b.url, "A")
+	writeConfig(t, p, first, second)
+	setToken(t, p, first)
+	setToken(t, p, second)
+	c, _ := start(t, p)
+	waitFor(t, "A to poll", func() bool {
+		s, err := c.Status(ctxT(t))
+		return err == nil && len(s.Projects) == 2 && s.Projects[0].Connected
+	})
+	s, err := c.Status(ctxT(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Projects[1]; got.Connected || !strings.Contains(got.LastError, "another project has key A") {
+		t.Errorf("the second A = %+v, want not started with the reason", got)
+	}
+}
+
 // Decision on CSR-74 (option A): each slot reports and heartbeats at start, not only after the first 60 s tick.
 func TestReportAndHeartbeatAtStart(t *testing.T) {
 	keyring.MockInit()
