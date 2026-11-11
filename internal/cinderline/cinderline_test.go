@@ -441,3 +441,25 @@ func TestDoneForbidden(t *testing.T) {
 		t.Errorf("%d requests, want 1 (no retry)", n)
 	}
 }
+
+// TestRedactsWhatItPosts: an agent token Cinderline issues is registered, and
+// comments, progress lines and report errors never carry it (CSR-157).
+func TestRedactsWhatItPosts(t *testing.T) {
+	const tok = "cl_agent_redacttest_0123456789"
+	c, rec := server(t, 201, `{"token":"`+tok+`","expires_at":"2026-11-11T10:00:00Z"}`, nil)
+	if _, err := c.CreateAgentToken(context.Background(), "CSR-9", KindOrchestrator, "Coder"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = c.AddComment(context.Background(), "CSR-9", "output: "+tok)
+	if strings.Contains(rec.body, tok) || !strings.Contains(rec.body, "[redacted orchestrator token]") {
+		t.Errorf("comment body %s", rec.body)
+	}
+	_ = c.AddProgress(context.Background(), "CSR-9", "line "+tok)
+	if strings.Contains(rec.body, tok) {
+		t.Errorf("progress body %s", rec.body)
+	}
+	_ = c.PutReport(context.Background(), Report{Errors: []ReportError{{Kind: KindPollFailed, Message: "failed: " + tok}}})
+	if strings.Contains(rec.body, tok) {
+		t.Errorf("report body %s", rec.body)
+	}
+}

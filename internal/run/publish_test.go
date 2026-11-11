@@ -15,6 +15,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -724,5 +725,18 @@ func TestPublishGivesUpAfterFiveAttempts(t *testing.T) {
 	}
 	if len(*slept) != 4 || total > 10*time.Minute {
 		t.Errorf("waits = %v (total %v), want four within ten minutes", *slept, total)
+	}
+}
+
+// TestPullRequestTextRedacted: a known secret in the issue's title or body
+// never reaches the pull request (CSR-157).
+func TestPullRequestTextRedacted(t *testing.T) {
+	const v = "sk-or-v1-prtextredaction-0123456789"
+	redact.Add("openrouter key", v)
+	if got := pullRequestTitle("CSR-9", "leak "+v); got != "CSR-9: leak [redacted openrouter key]" {
+		t.Errorf("title %q", got)
+	}
+	if got := pullRequestBody("CSR-9", "key "+v); strings.Contains(got, v) {
+		t.Errorf("body %q", got)
 	}
 }

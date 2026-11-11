@@ -15,6 +15,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 )
 
 var (
@@ -226,5 +227,27 @@ func TestCopyModelCredentials(t *testing.T) {
 	empty := config.Project{URL: "https://c.example.com", Key: "API"}
 	if err := s.CopyModelCredentials(empty, projectB); !errors.Is(err, ErrNotFound) {
 		t.Errorf("copy from a project without model credentials: %v, want ErrNotFound", err)
+	}
+}
+
+// TestGetRegistersForRedaction: every kind has a marker label, and a value
+// Get returns is redacted from then on (CSR-157).
+func TestGetRegistersForRedaction(t *testing.T) {
+	for _, k := range append([]Kind{RunnerToken, GitToken}, modelCredentials...) {
+		if labels[k] == "" {
+			t.Errorf("no redaction label for %s", k)
+		}
+	}
+	keyring.MockInit()
+	s := New(t.TempDir())
+	const v = "glpat-redactiontest-0123456789"
+	if _, err := s.Set(projectA, GitToken, v); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Get(projectA, GitToken); err != nil {
+		t.Fatal(err)
+	}
+	if got := redact.String("push https://x:" + v + "@host"); got != "push https://x:[redacted git token]@host" {
+		t.Errorf("got %q", got)
 	}
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 )
 
 // Kind is the kind of secret a project holds.
@@ -73,7 +74,23 @@ func entry(p config.Project, k Kind) string {
 
 // Get returns the secret and the store that held it. A failing keychain is
 // treated as not holding it: a locked or absent Secret Service is normal on headless Linux.
+// Every value it returns is registered with redact, so it never leaves the
+// runner in a log line, comment or pull request (CSR-157).
 func (s *Secrets) Get(p config.Project, k Kind) (string, Store, error) {
+	v, st, err := s.get(p, k)
+	if err == nil {
+		redact.Add(labels[k], v)
+	}
+	return v, st, err
+}
+
+// labels name each kind in the redaction marker, e.g. [redacted git token].
+var labels = map[Kind]string{
+	RunnerToken: "runner token", GitToken: "git token",
+	AnthropicCredential: "anthropic key", OpenRouterKey: "openrouter key", OpenAIKey: "openai key", GeminiKey: "gemini key",
+}
+
+func (s *Secrets) get(p config.Project, k Kind) (string, Store, error) {
 	if v, err := keyring.Get(name.Name, entry(p, k)); err == nil {
 		return v, Keychain, nil
 	}

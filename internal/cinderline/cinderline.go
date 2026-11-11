@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 )
 
 // WorkWait is how many seconds the app holds a Work long-poll open.
@@ -203,15 +204,16 @@ func (c *Client) ListComments(ctx context.Context, ref string, after int) ([]Com
 }
 
 // AddComment adds a comment as the runner user.
+// The body is redacted (CSR-157): it can hold an agent's report or output.
 func (c *Client) AddComment(ctx context.Context, ref, body string) (Comment, error) {
 	var out Comment
-	err := c.call(ctx, "addComment", "POST", issuePath(ref)+"/comments", map[string]string{"body": body}, 201, &out)
+	err := c.call(ctx, "addComment", "POST", issuePath(ref)+"/comments", map[string]string{"body": redact.String(body)}, 201, &out)
 	return out, err
 }
 
-// AddProgress reports what a run is doing now.
+// AddProgress reports what a run is doing now, redacted as AddComment.
 func (c *Client) AddProgress(ctx context.Context, ref, body string) error {
-	return c.call(ctx, "addProgress", "POST", issuePath(ref)+"/progress", map[string]string{"body": body}, 204, nil)
+	return c.call(ctx, "addProgress", "POST", issuePath(ref)+"/progress", map[string]string{"body": redact.String(body)}, 204, nil)
 }
 
 // GetTeam returns a team of the project with its agents.
@@ -224,9 +226,13 @@ func (c *Client) GetTeam(ctx context.Context, id int) (Team, error) {
 // PutReport replaces the runner's report. The Errors field is always sent as
 // a list: nil becomes an empty slice so it is never null in JSON.
 func (c *Client) PutReport(ctx context.Context, r Report) error {
-	if r.Errors == nil {
-		r.Errors = []ReportError{}
+	// Redacted in a copy, leaving the caller's slice alone: messages can hold error texts.
+	errs := make([]ReportError, len(r.Errors))
+	for i, e := range r.Errors {
+		e.Message = redact.String(e.Message)
+		errs[i] = e
 	}
+	r.Errors = errs
 	return c.call(ctx, "putReport", "PUT", "/report", r, 204, nil)
 }
 
@@ -356,6 +362,9 @@ func (c *Client) CreateAgentToken(ctx context.Context, ref string, kind TokenKin
 	var out AgentToken
 	in := map[string]string{"kind": string(kind), "agent": agent}
 	err := c.call(ctx, "createAgentToken", "POST", "/runs/"+url.PathEscape(ref)+"/agent-token", in, 201, &out)
+	if err == nil {
+		redact.Add(string(kind)+" token", out.Token)
+	}
 	return out, err
 }
 

@@ -144,7 +144,7 @@ func (p Project) pushStranded(ctx context.Context, c *cinderline.Client) error {
 		pr, err := fg.OpenPullRequest(ctx, forge.PullRequestInput{
 			Branch: clone.Branch,
 			Base:   base,
-			Title:  ref + ": " + issue.Title,
+			Title:  pullRequestTitle(ref, issue.Title),
 			Body:   pullRequestBody(ref, deref(issue.Body)),
 		})
 		if err != nil {

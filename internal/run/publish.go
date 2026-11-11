@@ -11,6 +11,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -97,8 +98,11 @@ type Published struct {
 // and body text, shared by Publish and the stranded branch recovery
 // (decision 2026-11-07-publish-resilience).
 func pullRequestBody(ref, body string) string {
-	return strings.TrimSpace("Resolves " + ref + " in Cinderline.\n\n" + body)
+	return redact.String(strings.TrimSpace("Resolves " + ref + " in Cinderline.\n\n" + body))
 }
+
+// pullRequestTitle is the title of the issue's pull request, redacted as the body.
+func pullRequestTitle(ref, title string) string { return redact.String(ref + ": " + title) }
 
 // Publish ends a finished run, as legacy publish() and runIssue(): commit
 // what was left, merge the base in with UpdateBranch, push cinderline/<REF>
@@ -113,7 +117,7 @@ func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[
 	log := p.Log.With("project", p.Config.Key, "issue", pub.Ref)
 	// Built here, never passed in, so the push can never target the base.
 	branch := name.Name + "/" + pub.Ref
-	title := pub.Ref + ": " + pub.Title
+	title := pullRequestTitle(pub.Ref, pub.Title)
 	if _, err := ws.Commit(ctx, pub.Dir, title); err != nil {
 		return err
 	}
