@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // CodingPrompt is the fresh prompt of a coding run, the text of legacy
@@ -16,7 +18,15 @@ import (
 // (the API lists it first) runs it; a team with workers also gets the team
 // section. The agent's instructions come first and the issue text last, as
 // data (decision 2026-11-06-prompts).
-func CodingPrompt(team cinderline.Team, ref, title, body, branch, projectKey string) string {
+// Extra repositories the run can read get one line each (CSR-160).
+func CodingPrompt(team cinderline.Team, ref, title, body, branch, projectKey string, extras []config.ExtraRepository) string {
+	others := ""
+	if len(extras) > 0 {
+		others = "\nOther repositories of the project, read-only, for reference:\n\n"
+		for _, r := range extras {
+			others += "- `" + workspace.ExtraPath + "/" + r.Name() + "`: " + r.URL + "\n"
+		}
+	}
 	section := ""
 	if len(team.Agents) > 1 {
 		section = teamSection(team, ref, branch)
@@ -28,7 +38,7 @@ func CodingPrompt(team cinderline.Team, ref, title, body, branch, projectKey str
 # Your task: ` + ref + `
 
 You work in the current directory, a git worktree on branch ` + "`" + branch + "`" + ` of the project's repository, issue ` + ref + ` of project ` + projectKey + ` in Cinderline.
-
+` + others + `
 Rules from the runner:
 
 - Implement the issue below. Run the project's checks. Commit your work with git, in one or more commits with clear messages.

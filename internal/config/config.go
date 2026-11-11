@@ -125,7 +125,79 @@ type Project struct {
 	// AllowHosts are extra host:port pairs this project's runs may reach.
 	// Only local config extends the allowlist (decision 2026-11-09-network-allowlist).
 	AllowHosts []string `json:"allow_hosts,omitempty"`
+	// ExtraRepositories are other repositories the project's runs may read,
+	// mounted read-only (CSR-160). Configured only here, not in Cinderline
+	// (Ember decision 2026-11-11-extra-repositories-in-runner).
+	ExtraRepositories []ExtraRepository `json:"extra_repositories,omitempty"`
 }
+
+// ExtraRepository is one read-only repository of a project. Its git token is
+// stored under its URL, so it only ever goes to that URL.
+type ExtraRepository struct {
+	URL string `json:"url"`
+	Ref string `json:"ref,omitempty"` // a branch or tag; empty is the default branch
+}
+
+// Name is the repository's folder under the extra mount: the last segment
+// of its URL's path without .git.
+func (r ExtraRepository) Name() string {
+	s := strings.TrimSuffix(strings.TrimSuffix(r.URL, "/"), ".git")
+	return s[strings.LastIndexAny(s, "/:")+1:]
+}
+
+// repoName is what Name must look like to be a folder.
+var repoName = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._-]*$`)
+
+// Validate reports a URL outside the allowlist, a ref that is not a plain
+// branch or tag name, or a name that is not a plain folder name.
+func (r ExtraRepository) Validate() error {
+	if err := CheckRepositoryURL(r.URL); err != nil {
+		return err
+	}
+	if r.Ref != "" && !validRef(r.Ref) {
+		return fmt.Errorf("%q is not a plain branch or tag name", r.Ref)
+	}
+	if n := r.Name(); !repoName.MatchString(n) {
+		return fmt.Errorf("%s ends in %q, which cannot be a folder name", r.URL, n)
+	}
+	return nil
+}
+
+// CheckRepositoryURL allows https://host/path, ssh://git@host/path and
+// git@host:path, without credentials, whitespace, query or fragment.
+func CheckRepositoryURL(s string) error {
+	bad := fmt.Errorf("%q must be https://host/path, ssh://git@host/path or git@host:path, without credentials", s)
+	if strings.IndexFunc(s, unicode.IsSpace) >= 0 || strings.ContainsAny(s, "?#") {
+		return bad
+	}
+	if rest, ok := strings.CutPrefix(s, "git@"); ok && !strings.Contains(s, "://") {
+		host, path, ok := strings.Cut(rest, ":")
+		if !ok || !hostChars.MatchString(host) || strings.Trim(path, "/") == "" || strings.HasPrefix(path, "-") {
+			return bad
+		}
+		return nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" || strings.Trim(u.Path, "/") == "" {
+		return bad
+	}
+	switch {
+	case u.Scheme == "https" && u.User == nil:
+	case u.Scheme == "ssh" && u.User != nil && u.User.String() == "git":
+	default:
+		return bad
+	}
+	return nil
+}
+
+// validRef is a subset of git check-ref-format: plain names such as main,
+// release/1.2 or v1.0.0, never an option, a range or a reflog expression.
+func validRef(s string) bool {
+	return refChars.MatchString(s) && !strings.Contains(s, "..") && !strings.Contains(s, "//") &&
+		!strings.HasSuffix(s, "/") && !strings.HasSuffix(s, ".") && !strings.HasSuffix(s, ".lock") && s != "HEAD"
+}
+
+var refChars = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]*$`)
 
 // Paths are the per-machine paths. Computing them creates nothing on disk.
 type Paths struct {
@@ -223,6 +295,8 @@ func (c *Config) Validate() error {
 			problem = "another project has the same url and key"
 		} else if i := slices.IndexFunc(p.AllowHosts, func(hp string) bool { return !validHostPort(hp) }); i >= 0 {
 			problem = fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", p.AllowHosts[i])
+		} else {
+			problem = checkExtraRepositories(p.ExtraRepositories)
 		}
 		if problem != "" {
 			return fmt.Errorf("project %d (%s): %s", i+1, p.Key, problem)
@@ -230,6 +304,22 @@ func (c *Config) Validate() error {
 		seen[id{p.URL, p.Key}] = true
 	}
 	return nil
+}
+
+// checkExtraRepositories reports the first invalid extra repository or two
+// with one folder name; "" means none.
+func checkExtraRepositories(rs []ExtraRepository) string {
+	names := map[string]bool{}
+	for _, r := range rs {
+		if err := r.Validate(); err != nil {
+			return "extra repository: " + err.Error()
+		}
+		if names[r.Name()] {
+			return "two extra repositories are named " + r.Name()
+		}
+		names[r.Name()] = true
+	}
+	return ""
 }
 
 // hostChars are what an allow_hosts host may hold: a DNS name or an IPv4

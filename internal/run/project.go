@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,10 @@ type Project struct {
 	// prepare fills the tools mount on the first agent run, set only by
 	// NewProject as a closure over the Docker environment. Nil in tests.
 	prepare func(ctx context.Context) error
+
+	// fetchExtras fetches the extra repositories, set only by NewProject.
+	// Nil in tests.
+	fetchExtras func(ctx context.Context, repos []workspace.Extra) map[string]error
 
 	// detect is overridden by tests; nil means detectClients is called.
 	detect func(ctx context.Context) []cinderline.ReportClient
@@ -162,6 +167,10 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		if err != nil {
 			return err
 		}
+		if len(cfg.ExtraRepositories) > 0 {
+			// Every agent container gets the tools mount's flags; the extra repositories ride along.
+			mount.Args = append(mount.Args, workspace.ExtraMount(cfg.Key)...)
+		}
 		for _, cl := range p.Clients {
 			switch c := cl.(type) {
 			case *client.Claude:
@@ -179,6 +188,9 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	exec := env.Exec
 	if exec == nil {
 		exec = workspace.RunCommand
+	}
+	p.fetchExtras = func(ctx context.Context, repos []workspace.Extra) map[string]error {
+		return workspace.FetchExtras(ctx, exec, cfg.Key, repos)
 	}
 	p.deleteSession = func(ctx context.Context, ref, session string) error {
 		return client.DeleteSession(ctx, exec, cfg.Key, ref, session)
@@ -272,7 +284,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 
 	title := full.Title
 	body := deref(full.Body)
-	prompt := CodingPrompt(team, ref, title, body, branch, p.Config.Key)
+	prompt := CodingPrompt(team, ref, title, body, branch, p.Config.Key, p.extraRepositories(ctx, c, ref))
 
 	if len(team.Agents) > 1 {
 		// Team with workers.
@@ -350,6 +362,36 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	// Run hands off to Publish; Publish deletes the token.
 	p.setHandoff(ref, title, body, dir, base, team, maxTurns, proj.Forge, out.Unread, out.SessionID, token)
 	return nil
+}
+
+// extraRepositories fetches the project's extra repositories and returns
+// those the run can read. One that fails is left out and reported in a
+// progress line; the run goes on without it (CSR-160).
+func (p *Project) extraRepositories(ctx context.Context, c *cinderline.Client, ref string) []config.ExtraRepository {
+	if p.fetchExtras == nil || len(p.Config.ExtraRepositories) == 0 {
+		return nil
+	}
+	failed := map[string]error{}
+	var repos []workspace.Extra
+	for _, r := range p.Config.ExtraRepositories {
+		token, _, err := p.Secrets.Get(p.Config, secrets.ExtraGitToken(r.URL))
+		if err != nil {
+			failed[r.Name()] = err
+			continue
+		}
+		repos = append(repos, workspace.Extra{Name: r.Name(), URL: r.URL, Ref: r.Ref, Token: token})
+	}
+	maps.Copy(failed, p.fetchExtras(ctx, repos))
+	var ok []config.ExtraRepository
+	for _, r := range p.Config.ExtraRepositories {
+		if err := failed[r.Name()]; err != nil {
+			p.Log.Warn("extra repository not fetched", "project", p.Config.Key, "issue", ref, "repository", r.URL, "err", err)
+			p.progress(ctx, c, ref, "Extra repository "+r.URL+" not fetched; the run goes on without it")
+			continue
+		}
+		ok = append(ok, r)
+	}
+	return ok
 }
 
 func (p *Project) setHandoff(ref, title, body, dir, base string, team cinderline.Team, maxTurns int, forgeKind string, unread bool, session, token string) {

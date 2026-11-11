@@ -57,6 +57,9 @@ func commands() []command {
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
 		{"login", "CLIENT --project KEY", "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
 		{"key", "set CLIENT --project KEY [-url URL]", "set or replace a project's model key for a client (claude, opencode, codex, gemini), read from stdin; it wins over a login", (*CLI).key},
+		{"add-repo", "--project KEY [-url URL]", "add a repository the project's runs can read, read-only, asking for its URL, ref and git token", (*CLI).addRepo},
+		{"list-repos", "--project KEY [-url URL]", "list the project's extra repositories", (*CLI).listRepos},
+		{"remove-repo", "--project KEY [-url URL] URL|NAME", "remove an extra repository and its git token", (*CLI).removeRepo},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

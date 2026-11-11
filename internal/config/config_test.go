@@ -375,3 +375,45 @@ func TestKeptSessionLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestExtraRepositoryValidate(t *testing.T) {
+	for _, tt := range []struct {
+		url, ref string
+		ok       bool
+	}{
+		{"https://git.example.com/o/lib.git", "", true},
+		{"ssh://git@git.example.com:2222/o/lib", "release/1.2", true},
+		{"git@git.example.com:o/lib", "v1.0.0", true},
+		{"https://user:pw@git.example.com/o/lib", "", false},
+		{"https://tok@git.example.com/o/lib", "", false},
+		{"ssh://root@git.example.com/o/lib", "", false},
+		{"http://git.example.com/o/lib", "", false},
+		{"file:///srv/lib", "", false},
+		{"ext::sh -c x", "", false},
+		{"git@git.example.com:-o/lib", "", false},
+		{"https://git.example.com/", "", false},
+		{"https://git.example.com/o/lib?x=1", "", false},
+		{"https://git.example.com/o/lib", "-u", false},
+		{"https://git.example.com/o/lib", "a..b", false},
+		{"https://git.example.com/o/lib", "main@{1}", false},
+		{"https://git.example.com/o/lib", "x.lock", false},
+		{"https://git.example.com/o/lib", "HEAD", false},
+		{"https://git.example.com/o/..", "", false},
+	} {
+		err := ExtraRepository{URL: tt.url, Ref: tt.ref}.Validate()
+		if (err == nil) != tt.ok {
+			t.Errorf("%q %q: err = %v, want ok %v", tt.url, tt.ref, err, tt.ok)
+		}
+	}
+	if n := (ExtraRepository{URL: "git@h:o/lib.git"}).Name(); n != "lib" {
+		t.Errorf("Name = %q", n)
+	}
+}
+
+func TestValidateRefusesTwoExtraRepositoriesWithOneName(t *testing.T) {
+	c := Config{Projects: []Project{{URL: "https://cs.example.com", Key: "CSR", Repository: "https://git.example.com/o/r",
+		ExtraRepositories: []ExtraRepository{{URL: "https://git.example.com/a/lib"}, {URL: "https://git.example.com/b/lib"}}}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "named lib") {
+		t.Errorf("err = %v", err)
+	}
+}

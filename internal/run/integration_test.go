@@ -151,7 +151,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	cl := &client.Claude{Project: project, Env: env, Credential: itCredential, MCPURL: "http://host.docker.internal/mcp", Tools: mount}
 
 	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: "claude", Turn: client.Turn{
-		Dir: dir, Prompt: CodingPrompt(team, ref, "Add hello.txt", "Add a file.", branch, project), MaxTurns: 10, MaxMinutes: team.MaxMinutes,
+		Dir: dir, Prompt: CodingPrompt(team, ref, "Add hello.txt", "Add a file.", branch, project, nil), MaxTurns: 10, MaxMinutes: team.MaxMinutes,
 	}})
 	if err != nil {
 		t.Fatalf("Attempts: %v", err)

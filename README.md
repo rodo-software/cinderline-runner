@@ -98,6 +98,12 @@ Then start it with `cinderline run` (foreground, until Ctrl-C) or as a service (
 
 `cinderline run -v` also prints the log on the terminal, one readable line per event, and adds Debug lines (each runner API request) to both the terminal and the log file.
 
+### Extra repositories
+
+A run can read other repositories of the project, read-only. `cinderline add-repo --project KEY` asks for a repository URL (`https://host/path`, `ssh://git@host/path` or `git@host:path`, without credentials), an optional branch or tag (empty for the default branch) and a git token, and checks with `git ls-remote` that the token can read it. Only HTTPS works in practice: the token is given to git as an HTTPS password, so an SSH URL fails that check. Each token is stored for its URL alone. `cinderline list-repos --project KEY` lists them and `cinderline remove-repo --project KEY NAME` removes one (NAME is the folder name `list-repos` shows, or the URL).
+
+Before each run the runner fetches them in a git container that alone gets their tokens and mounts them read-only at `/extra/NAME` in the agent's container; the prompt lists them. One that fails to fetch is left out and the run says so in a progress update. Cinderline knows nothing about them (Ember decision 2026-11-11-extra-repositories-in-runner).
+
 ### Sign a client in instead of storing a key
 
 `cinderline login claude --project KEY`, `cinderline login codex --project KEY` or `cinderline login gemini --project KEY` runs the CLI's own sign-in (`claude auth login`, `codex login --device-auth`, Gemini CLI's own Google sign-in) in a container. Open the link it prints and paste the code back. The credentials stay on that project's state volume of that client, which only that client's runs mount; the runner never reads them. When the keychain holds no Anthropic, OpenAI or Gemini key for the project, runs then use this login; a stored key still wins. OpenCode uses the project's OpenRouter key only. After `login gemini`, type `/quit` once it says "Authentication succeeded": the interactive Gemini CLI stays open after signing in.
@@ -118,9 +124,9 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 - `build_image`: `true` builds the default image locally instead of pulling it.
 - `keep_sessions_for`: how long a finished run's agent session and worktree are kept after its last run, so that moving the issue back to To do continues the same session with its full context; days such as `"7d"` or hours such as `"36h"`, `"7d"` by default, `"off"` for no age limit. Sessions of Done, Cancelled or archived issues are always deleted.
 - `min_free_disk`: when free space on Docker's disk (where the worktree and session volumes are) is below this, kept sessions are deleted oldest first; such as `"10GB"`, in `MB`, `GB` or `TB`, `"10GB"` by default, `"off"` to never delete them for space. The runner checks both limits at start and before each run, per project; a paused run (waiting for an answer, or between an orchestrator's rounds) and a worktree with unpushed commits are never deleted. A follow-up whose session was deleted starts fresh and says so in a comment.
-- Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key.
+- Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key; `extra_repositories`, which `add-repo` writes (see "Extra repositories").
 
-Unknown fields are refused. `add`, `key set` and `login` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
+Unknown fields are refused. `add`, `key set`, `login`, `add-repo` and `remove-repo` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
 
 ## Network
 

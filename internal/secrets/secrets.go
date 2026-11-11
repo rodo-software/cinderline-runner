@@ -4,6 +4,7 @@
 package secrets
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,20 @@ const (
 	// GeminiKey is a Gemini API key or a Vertex AI express-mode key, for Gemini CLI.
 	GeminiKey Kind = "gemini"
 )
+
+// ExtraGitToken is the kind of an extra repository's git token: one per URL,
+// so a token only ever goes to the URL it was added with (CSR-160). Config
+// has checked the URL holds no whitespace, as entry needs.
+func ExtraGitToken(repoURL string) Kind { return Kind("git-token:" + repoURL) }
+
+// Kinds are all the kinds of secret p may hold, for removing them.
+func Kinds(p config.Project) []Kind {
+	ks := []Kind{RunnerToken, GitToken, AnthropicCredential, OpenRouterKey, OpenAIKey, GeminiKey}
+	for _, r := range p.ExtraRepositories {
+		ks = append(ks, ExtraGitToken(r.URL))
+	}
+	return ks
+}
 
 // ClientKeys is the model credential each agent client runs with.
 var ClientKeys = map[string]Kind{"claude": AnthropicCredential, "codex": OpenAIKey, "opencode": OpenRouterKey, "gemini": GeminiKey}
@@ -79,7 +94,7 @@ func entry(p config.Project, k Kind) string {
 func (s *Secrets) Get(p config.Project, k Kind) (string, Store, error) {
 	v, st, err := s.get(p, k)
 	if err == nil {
-		redact.Add(labels[k], v)
+		redact.Add(cmp.Or(labels[k], "git token"), v) // extra repositories' tokens have no fixed kind
 	}
 	return v, st, err
 }

@@ -38,7 +38,7 @@ func (c *CLI) remove(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey, secrets.GeminiKey} {
+	for _, k := range secrets.Kinds(p) {
 		if err := c.Secrets.Delete(p, k); err != nil {
 			return c.fail(err)
 		}
