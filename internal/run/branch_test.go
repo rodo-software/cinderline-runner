@@ -333,7 +333,7 @@ func TestResumedRoundsCatchUpFirst(t *testing.T) {
 			if _, err := r.run(t, context.Background(), p); err != nil {
 				t.Fatalf("Rounds = %v", err)
 			}
-			calls := r.ws.Calls()
+			calls := r.ws.Calls()[1:] // after Exists
 			if len(calls) < 2 || calls[0].Method != "Commit" || calls[0].Args[1] != "CSR-1: Parent" || calls[1].Method != "MergeBase" {
 				t.Errorf("workspace calls = %+v, want the commit, then the merge first", calls)
 			}

@@ -7,9 +7,7 @@ package run
 import (
 	"context"
 	"errors"
-	"io/fs"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,42 +27,14 @@ func PausedDir(state string, p config.Project) string {
 // Recover puts back what a previous process left: a project has one runner
 // and it works on one issue at a time, so at start none of its In progress
 // issues is really being worked on. First it removes the containers and
-// networks a previous process left (review item 9), then it drops the paused
-// notes of issues a person has since closed (0114).
+// networks a previous process left (review item 9), puts back the issues left
+// In progress and pushes stranded branches; then Prune drops the notes,
+// clones and sessions of issues a person has since closed (0114) and the
+// kept sessions over their limits (CSR-145).
 func (p Project) Recover(ctx context.Context, c *cinderline.Client) error {
 	if err := p.Env.Cleanup(ctx); err != nil {
 		// Only hygiene: a failure must not keep the project from working.
 		p.Log.Warn("stale containers and networks not removed", "project", p.Config.Key, "err", err)
-	}
-	dir := PausedDir(p.State, p.Config)
-	entries, err := os.ReadDir(dir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		p.Log.Warn("paused notes not read", "project", p.Config.Key, "err", err)
-	}
-	for _, e := range entries {
-		ref, ok := strings.CutSuffix(e.Name(), ".json")
-		if !ok {
-			continue
-		}
-		issue, err := c.GetIssue(ctx, ref)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			// A note the runner cannot check must not keep it from working.
-			p.Log.Warn("paused note not checked", "project", p.Config.Key, "issue", ref, "err", err)
-			continue
-		}
-		// A team's note on an issue left In progress resumes it after the restart (decision 0122).
-		switch issue.Status.Value {
-		case "blocked", "todo", "in_progress":
-			continue
-		}
-		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			p.Log.Warn("paused note not dropped", "project", p.Config.Key, "issue", ref, "err", err)
-			continue
-		}
-		p.Log.Info("paused note dropped", "project", p.Config.Key, "issue", ref, "status", issue.Status.Value)
 	}
 
 	issues, err := c.ListIssues(ctx, "in_progress")
@@ -83,8 +53,12 @@ func (p Project) Recover(ctx context.Context, c *cinderline.Client) error {
 		p.Log.Info("back to To do after a restart", "project", p.Config.Key, "issue", issue.Ref)
 	}
 
-	// Stranded branch recovery (decision 2026-11-07-publish-resilience point 3).
-	return p.pushStranded(ctx, c)
+	// Stranded branch recovery (decision 2026-11-07-publish-resilience point 3),
+	// before pruning deletes any clone.
+	if err := p.pushStranded(ctx, c); err != nil {
+		return err
+	}
+	return p.Prune(ctx, c)
 }
 
 // pushStranded pushes any stranded branches and opens pull requests for

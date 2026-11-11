@@ -343,3 +343,35 @@ func TestAllowHostsField(t *testing.T) {
 		t.Errorf("AllowHosts = %q", p.AllowHosts)
 	}
 }
+
+func TestKeptSessionLimits(t *testing.T) {
+	for _, tt := range []struct {
+		keep, free string
+		age        time.Duration
+		bytes      int64
+	}{
+		{"", "", 7 * 24 * time.Hour, 10e9},
+		{"30d", "500MB", 30 * 24 * time.Hour, 500e6},
+		{"36h", "2TB", 36 * time.Hour, 2e12},
+		{"off", "off", 0, 0},
+	} {
+		c := Config{KeepSessionsFor: tt.keep, MinFreeDisk: tt.free}
+		if err := c.Validate(); err != nil {
+			t.Errorf("Validate(%q, %q) = %v", tt.keep, tt.free, err)
+		}
+		if got := c.KeepSessions(); got != tt.age {
+			t.Errorf("KeepSessions(%q) = %v, want %v", tt.keep, got, tt.age)
+		}
+		if got := c.MinFree(); got != tt.bytes {
+			t.Errorf("MinFree(%q) = %d, want %d", tt.free, got, tt.bytes)
+		}
+	}
+	for _, bad := range []Config{
+		{KeepSessionsFor: "0d"}, {KeepSessionsFor: "-1h"}, {KeepSessionsFor: "week"}, {KeepSessionsFor: "0"},
+		{MinFreeDisk: "20"}, {MinFreeDisk: "0GB"}, {MinFreeDisk: "1.5GB"}, {MinFreeDisk: "20gb"}, {MinFreeDisk: "99999999999TB"},
+	} {
+		if err := bad.Validate(); err == nil {
+			t.Errorf("Validate(%+v) accepted it", bad)
+		}
+	}
+}

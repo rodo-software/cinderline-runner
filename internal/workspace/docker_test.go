@@ -549,3 +549,93 @@ func TestDockerAgentRefusesDirOutsideRuns(t *testing.T) {
 		}
 	}
 }
+
+// runsShellCalls are runsShell's calls: the runs volume, then script as root.
+func runsShellCalls(issue, script string, args ...string) []execCall {
+	labels := projectLabel
+	if issue != "" {
+		labels = []string{"--label", "cinderline.project=CSR", "--label", "cinderline.issue=" + issue}
+	}
+	argv := append([]string{"docker", "run", "--rm"}, labels...)
+	argv = append(argv, "--network", "none", "-v", "cinderline-CSR-runs:/runs", "--entrypoint", "sh", GitImage, "-c", script, "sh")
+	return []execCall{
+		{nil, []string{"docker", "volume", "create", "--label", "cinderline.project=CSR", "cinderline-CSR-runs"}},
+		{nil, append(argv, args...)},
+	}
+}
+
+func TestDockerExists(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		errs map[int]error
+		want bool
+	}{
+		{"a clone", nil, true},
+		{"gone", map[int]error{1: exitErr(1)}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d, calls := scripted(nil, tt.errs)
+			got, err := d.Exists(context.Background(), dir)
+			if err != nil || got != tt.want {
+				t.Fatalf("Exists = %v, %v; want %v", got, err, tt.want)
+			}
+			checkCalls(t, *calls, runsShellCalls("CSR-30", `test -d "$1/.git"`, dir))
+		})
+	}
+	if _, err := (&Docker{}).Exists(context.Background(), "/etc"); err == nil {
+		t.Fatal("Exists accepted a dir outside the runs volume")
+	}
+}
+
+func TestDockerRemove(t *testing.T) {
+	d, calls := scripted(nil, nil)
+	if err := d.Remove(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	checkCalls(t, *calls, runsShellCalls("CSR-30", `rm -rf -- "$1"`, dir))
+	if err := d.Remove(context.Background(), "/runs/../etc"); err == nil {
+		t.Fatal("Remove accepted a dir outside the runs volume")
+	}
+}
+
+func TestDockerFree(t *testing.T) {
+	d, calls := scripted([]string{"", "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/vda1 100 60 40 60% /runs\n"}, nil)
+	got, err := d.Free(context.Background())
+	if err != nil || got != 40*1024 {
+		t.Fatalf("Free = %d, %v; want %d", got, err, 40*1024)
+	}
+	checkCalls(t, *calls, runsShellCalls("", `df -Pk "$1"`, "/runs"))
+	if _, err := parseDF("nonsense"); err == nil {
+		t.Fatal("parseDF accepted nonsense")
+	}
+}
+
+func TestDockerFastForward(t *testing.T) {
+	status := execCall{nil, agentArgv("status", "--porcelain")}
+	merging := execCall{nil, agentArgv("rev-parse", "--verify", "--quiet", "MERGE_HEAD")}
+	fetch := execCall{nil, agentArgv("fetch", "--quiet", "--prune", "--no-tags", "/repo", "+refs/heads/*:refs/remotes/origin/*")}
+	remote := execCall{nil, agentArgv("rev-parse", "--verify", "--quiet", "refs/remotes/origin/cinderline/CSR-30")}
+	merge := execCall{nil, agentArgv("merge", "--quiet", "--ff-only", "origin/cinderline/CSR-30")}
+	clean := append([]execCall{status, merging}, fetchCalls()...)
+	for _, tt := range []struct {
+		name  string
+		outs  []string
+		errs  map[int]error
+		calls []execCall
+		ok    bool
+	}{
+		{"fast-forwarded", nil, map[int]error{1: exitErr(1)}, append(clean, fetch, remote, merge), true},
+		{"remote branch gone", nil, map[int]error{1: exitErr(1), 6: exitErr(1)}, append(clean, fetch, remote), true},
+		{"diverged", nil, map[int]error{1: exitErr(1), 7: exitErr(128)}, append(clean, fetch, remote, merge), false},
+		{"not clean", []string{"?? x\n"}, nil, []execCall{status}, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d, calls := scripted(tt.outs, tt.errs)
+			err := d.FastForward(context.Background(), dir, "cinderline/CSR-30")
+			if (err == nil) != tt.ok {
+				t.Fatalf("FastForward = %v, want ok %v", err, tt.ok)
+			}
+			checkCalls(t, *calls, tt.calls)
+		})
+	}
+}

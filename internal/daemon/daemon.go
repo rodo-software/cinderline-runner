@@ -189,6 +189,7 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			projects = append(projects, st)
 			continue
 		}
+		proj.KeepFor, proj.MinFree = cfg.KeepSessions(), cfg.MinFree()
 		wg.Go(func() {
 			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
 			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}

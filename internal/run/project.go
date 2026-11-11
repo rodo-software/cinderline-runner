@@ -1,12 +1,14 @@
 package run
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
@@ -33,6 +35,15 @@ type Project struct {
 	Clients   map[string]client.Client // by agent client name
 	Workspace workspace.Workspace
 	Forge     func(kind string) (forge.Forge, error)
+
+	// The limits on sessions kept after a finished run (CSR-145), from
+	// config's keep_sessions_for and min_free_disk; 0 turns each off.
+	KeepFor time.Duration
+	MinFree int64
+
+	// deleteSession removes an issue's client session files from the state
+	// volume, set only by NewProject. Nil in tests.
+	deleteSession func(ctx context.Context, ref, session string) error
 
 	// run is the state shared by the hooks of one slot, set by Hooks().
 	run *runState
@@ -133,6 +144,9 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	if exec == nil {
 		exec = workspace.RunCommand
 	}
+	p.deleteSession = func(ctx context.Context, ref, session string) error {
+		return client.DeleteSession(ctx, exec, cfg.Key, ref, session)
+	}
 	p.detect = func(ctx context.Context) []cinderline.ReportClient {
 		image, err := env.Image(ctx)
 		if err != nil {
@@ -184,6 +198,11 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 			p.run.ready = true
 		}
 		p.run.mu.Unlock()
+	}
+
+	// A run may need the space; only a stop keeps it from starting.
+	if err := p.Prune(ctx, c); err != nil {
+		return notStarted(err)
 	}
 
 	team, err := c.GetTeam(ctx, issue.Team.ID)
@@ -243,7 +262,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 
 	dir := ""
 	session := ""
-	note, resumed := p.TakePaused(ref, agent.Client)
+	note, resumed := p.TakePaused(ctx, c, p.Workspace, ref, branch, agent.Client)
 	if resumed {
 		dir = note.Dir
 		session = note.Session
@@ -271,7 +290,11 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 		MaxMinutes: team.MaxMinutes, Model: deref(agent.Model),
 		Token: token, Ponytail: team.Ponytail,
 	}
-	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: agent.Client, Turn: turn, Resume: session})
+	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: agent.Client, Turn: turn, Resume: session, FollowUp: resumed && !note.Kept.IsZero()})
+	if ctx.Err() == nil && !out.Paused {
+		// Kept for a follow-up even when the run failed: the next run can continue it.
+		p.keep(ref, Paused{Dir: dir, Session: cmp.Or(out.SessionID, session), Client: agent.Client})
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {

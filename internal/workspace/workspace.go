@@ -41,6 +41,15 @@ type Workspace interface {
 	// branch has: work never pushed, or not since its last commit
 	// (decision 2026-11-07-publish-resilience).
 	Stranded(ctx context.Context) ([]Clone, error)
+	// Exists reports whether dir is still a clone.
+	Exists(ctx context.Context, dir string) (bool, error)
+	// FastForward brings a clean clone up to the remote's branch; it fails
+	// when the clone is not clean or the branch cannot fast-forward.
+	FastForward(ctx context.Context, dir, branch string) error
+	// Remove deletes the clone at dir.
+	Remove(ctx context.Context, dir string) error
+	// Free returns the bytes available where the clones are kept.
+	Free(ctx context.Context) (int64, error)
 }
 
 // Clone is one per-issue clone and the branch it is on.

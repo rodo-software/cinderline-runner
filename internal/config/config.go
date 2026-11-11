@@ -3,9 +3,11 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -35,8 +37,15 @@ type Config struct {
 	MergePollSeconds int `json:"merge_poll_seconds,omitempty"`
 	// BuildImage makes the runner build the default image locally instead of
 	// pulling the published one (decision on CSR-49).
-	BuildImage bool      `json:"build_image,omitempty"`
-	Projects   []Project `json:"projects"`
+	BuildImage bool `json:"build_image,omitempty"`
+	// KeepSessionsFor is how long a finished run's session and clone are
+	// kept for a follow-up after its last run, such as "7d" or "36h"; "off"
+	// keeps them until min_free_disk or a closed issue needs them gone.
+	KeepSessionsFor string `json:"keep_sessions_for,omitempty"`
+	// MinFreeDisk is the free space below which kept sessions are deleted,
+	// oldest first, such as "10GB"; "off" never deletes them for space.
+	MinFreeDisk string    `json:"min_free_disk,omitempty"`
+	Projects    []Project `json:"projects"`
 }
 
 // MergePoll is the merge check interval, 60 seconds unless set.
@@ -45,6 +54,62 @@ func (c *Config) MergePoll() time.Duration {
 		return time.Duration(c.MergePollSeconds) * time.Second
 	}
 	return 60 * time.Second
+}
+
+// Defaults of keep_sessions_for and min_free_disk.
+const (
+	DefaultKeepSessionsFor = "7d"
+	DefaultMinFreeDisk     = "10GB"
+)
+
+// KeepSessions is how long kept sessions live after their last run; 0 is off.
+// Validate has checked the value.
+func (c *Config) KeepSessions() time.Duration {
+	d, _ := parseAge(cmp.Or(c.KeepSessionsFor, DefaultKeepSessionsFor))
+	return d
+}
+
+// MinFree is the free disk space in bytes that pruning keeps; 0 is off.
+// Validate has checked the value.
+func (c *Config) MinFree() int64 {
+	n, _ := parseSize(cmp.Or(c.MinFreeDisk, DefaultMinFreeDisk))
+	return n
+}
+
+// parseAge reads "off", a number of days such as "7d", or a Go duration
+// such as "36h".
+func parseAge(s string) (time.Duration, error) {
+	if s == "off" {
+		return 0, nil
+	}
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil || n <= 0 {
+			return 0, errors.New(`keep_sessions_for must be "off", days such as "7d" or hours such as "36h"`)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0, errors.New(`keep_sessions_for must be "off", days such as "7d" or hours such as "36h"`)
+	}
+	return d, nil
+}
+
+// parseSize reads "off" or a whole number of MB, GB or TB (powers of 1000).
+func parseSize(s string) (int64, error) {
+	if s == "off" {
+		return 0, nil
+	}
+	for unit, bytes := range map[string]int64{"MB": 1e6, "GB": 1e9, "TB": 1e12} {
+		if num, ok := strings.CutSuffix(s, unit); ok {
+			n, err := strconv.ParseInt(strings.TrimSpace(num), 10, 64)
+			if err == nil && n > 0 && n <= math.MaxInt64/bytes {
+				return n * bytes, nil
+			}
+		}
+	}
+	return 0, errors.New(`min_free_disk must be "off" or a size such as "10GB", in MB, GB or TB`)
 }
 
 // Project is one Cinderline project, identified by the pair (URL, Key).
@@ -137,6 +202,12 @@ func Load(path string) (*Config, error) {
 func (c *Config) Validate() error {
 	if c.MergePollSeconds < 0 {
 		return errors.New("merge_poll_seconds must not be negative")
+	}
+	if _, err := parseAge(cmp.Or(c.KeepSessionsFor, DefaultKeepSessionsFor)); err != nil {
+		return err
+	}
+	if _, err := parseSize(cmp.Or(c.MinFreeDisk, DefaultMinFreeDisk)); err != nil {
+		return err
 	}
 	type id struct{ url, key string }
 	seen := map[id]bool{}

@@ -92,6 +92,9 @@ func TestFakeEmptyQueues(t *testing.T) {
 		{"ConflictMarkers", func() (bool, error) { y, err := f.ConflictMarkers(ctx, "/d", nil); return !y, err }},
 		{"Reset", func() (bool, error) { return true, f.Reset(ctx, "/d", "c") }},
 		{"Log", func() (bool, error) { l, err := f.Log(ctx, "/d", "main"); return l == "", err }},
+		{"FastForward", func() (bool, error) { return true, f.FastForward(ctx, "/d", "b") }},
+		{"Remove", func() (bool, error) { return true, f.Remove(ctx, "/d") }},
+		{"Free", func() (bool, error) { n, err := f.Free(ctx); return n == 0, err }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method, func(t *testing.T) {

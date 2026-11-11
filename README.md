@@ -113,6 +113,8 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 
 - `merge_poll_seconds`: how often the merge status of Review issues is checked; 60 by default.
 - `build_image`: `true` builds the default image locally instead of pulling it.
+- `keep_sessions_for`: how long a finished run's agent session and worktree are kept after its last run, so that moving the issue back to To do continues the same session with its full context; days such as `"7d"` or hours such as `"36h"`, `"7d"` by default, `"off"` for no age limit. Sessions of Done, Cancelled or archived issues are always deleted.
+- `min_free_disk`: when free space on Docker's disk (where the worktree and session volumes are) is below this, kept sessions are deleted oldest first; such as `"10GB"`, in `MB`, `GB` or `TB`, `"10GB"` by default, `"off"` to never delete them for space. The runner checks both limits at start and before each run, per project; a paused run (waiting for an answer, or between an orchestrator's rounds) and a worktree with unpushed commits are never deleted. A follow-up whose session was deleted starts fresh and says so in a comment.
 - Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key.
 
 Unknown fields are refused. `add`, `key set` and `login` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. After `remove` or a hand edit, restart the runner.

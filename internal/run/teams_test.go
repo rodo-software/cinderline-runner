@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -364,16 +365,16 @@ func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 	// under its ref and title, then pushed (0122).
 	var steps []string
 	for _, c := range r.ws.Calls() {
-		steps = append(steps, c.Method+" "+strings.ReplaceAll(c.Args[0].(string), clone, "clone")+" "+c.Args[1].(string))
+		steps = append(steps, c.Method+" "+strings.ReplaceAll(c.Args[0].(string), clone, "clone")+" "+fmt.Sprint(c.Args[1:]...))
 	}
-	wantSteps := []string{"Commit clone CSR-1: Parent", "MergeBase clone main", "Commit clone CSR-3: Mine", "Push clone cinderline/CSR-1", "Commit clone CSR-2: Part", "Push clone cinderline/CSR-1"}
+	wantSteps := []string{"Exists clone ", "Commit clone CSR-1: Parent", "MergeBase clone main", "Commit clone CSR-3: Mine", "Push clone cinderline/CSR-1", "Commit clone CSR-2: Part", "Push clone cinderline/CSR-1"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Errorf("workspace = %q, want %q", steps, wantSteps)
 	}
 
-	// A finished run leaves no note and no tokens.
-	if _, ok := p.TakePaused("CSR-1", "claude"); ok {
-		t.Error("the note is still there after the run finished")
+	// A finished run keeps its session for a follow-up (CSR-145) and leaves no tokens.
+	if n, _ := p.readPaused("CSR-1"); n.Session != "the-session" || n.Dir != clone || n.Kept.IsZero() {
+		t.Errorf("note after the run finished = %+v, want the session kept", n)
 	}
 	if got := r.writes("DELETE /runs/"); !slices.Equal(got, []string{"DELETE /runs/CSR-3/agent-token", "DELETE /runs/CSR-1/agent-token"}) {
 		t.Errorf("token deletes = %q", got)
@@ -421,8 +422,9 @@ func TestAFreshTeamRunPlansRunsAndReviews(t *testing.T) {
 	if got := r.progress(); !slices.Equal(got, []string{"Builder is planning", "Running Qwen on CSR-2 Part", "Builder is reviewing the sub-issues"}) {
 		t.Errorf("progress = %q", got)
 	}
-	if _, ok := p.readPaused("CSR-1"); ok {
-		t.Error("the note is still there after the run finished")
+	// Kept for a follow-up (CSR-145).
+	if n, _ := p.readPaused("CSR-1"); n.Session != "s1" || n.Dir != "/fresh" || n.Kept.IsZero() {
+		t.Errorf("note after the run finished = %+v, want the session kept", n)
 	}
 }
 
@@ -549,8 +551,9 @@ func TestNoSubIssueCouldStart(t *testing.T) {
 	if len(r.opencode.Calls()) != 0 {
 		t.Error("the worker ran on a sub-issue it did not claim")
 	}
-	if _, ok := p.readPaused("CSR-1"); ok {
-		t.Error("the note is still there after the run ended")
+	// A failed run is kept too: a follow-up can continue it (CSR-145).
+	if n, _ := p.readPaused("CSR-1"); n.Session != "s1" || n.Kept.IsZero() {
+		t.Errorf("note after the run ended = %+v, want the session kept", n)
 	}
 }
 
@@ -629,6 +632,7 @@ func TestARoundThatFailsTwiceEndsTheRun(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "last lines") {
 		t.Fatalf("Rounds error = %v, want the tail", err)
 	}
+	// No session to keep.
 	if _, ok := p.readPaused("CSR-1"); ok {
 		t.Error("the note is still there after the run ended")
 	}

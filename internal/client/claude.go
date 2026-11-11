@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -103,6 +104,34 @@ func PrepareState(ctx context.Context, x workspace.Exec, project string) error {
 		return fmt.Errorf("state volume: %w", err)
 	}
 	return nil
+}
+
+// sessionName is what a session ID or issue ref may hold before it goes
+// into a find pattern: no glob or path characters.
+var sessionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+// DeleteSession removes a finished issue's client files from the project's
+// state volume: every file or folder whose name holds session, and Claude
+// Code's folder for the issue's clone /runs/<ref>, which also holds its
+// workers' sessions. A nil x means workspace.RunCommand.
+//
+// shortcut: by name, so Gemini CLI's chat files (named by an ID prefix) and
+// OpenCode's message parts or database rows stay; delete per client when
+// those grow large.
+func DeleteSession(ctx context.Context, x workspace.Exec, project, ref, session string) error {
+	if x == nil {
+		x = workspace.RunCommand
+	}
+	if !sessionName.MatchString(ref) || session != "" && (len(session) < 8 || !sessionName.MatchString(session)) {
+		return fmt.Errorf("delete session: %q / %q is not an issue ref and session ID", ref, session)
+	}
+	match := `-name "-runs-$1"`
+	if session != "" {
+		match = `\( ` + match + ` -o -name "*$2*" \)`
+	}
+	_, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none", "-v", workspace.Volume(project, "state")+":/s",
+		"--entrypoint", "sh", workspace.GitImage, "-c", `find /s -mindepth 1 `+match+` -prune -exec rm -rf -- {} +`, "sh", ref, session)
+	return err
 }
 
 // newSessionID is a random UUID v4: Claude Code's --session-id needs one.

@@ -40,6 +40,8 @@ type Job struct {
 	Client string      // the agent's CLI, kept in a paused note
 	Turn   client.Turn // the fresh first turn
 	Resume string      // a paused session to resume first with ResumePrompt, from TakePaused
+	// FollowUp resumes a finished run's kept session with FollowUpPrompt instead.
+	FollowUp bool
 	// NoComments leaves the comments to the caller: a team's rounds read
 	// them only after the last round, as legacy rounds() does.
 	NoComments bool
@@ -98,6 +100,9 @@ func (p Project) Attempts(ctx context.Context, c *cinderline.Client, cl client.C
 	next := t
 	if j.Resume != "" {
 		next = resume(j.Resume, ResumePrompt(j.Ref))
+		if j.FollowUp {
+			next = resume(j.Resume, FollowUpPrompt(j.Ref))
+		}
 	}
 
 	// An answer to ask_person is in already, so it is never delivered twice.

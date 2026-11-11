@@ -417,3 +417,85 @@ done`
 	}
 	return clones, nil
 }
+
+// runsShell runs script as root in a throwaway container with the runs
+// volume and no network, with args as $1...; root, as the volume's root
+// belongs to root.
+func (d *Docker) runsShell(ctx context.Context, issue, script string, args ...string) (string, error) {
+	labels := d.labels(issue)
+	if err := d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, d.labels("")...), d.volume("runs"))...); err != nil {
+		return "", err
+	}
+	argv := append([]string{"docker", "run", "--rm"}, labels...)
+	argv = append(argv, "--network", "none", "-v", d.volume("runs")+":"+RunsPath, "--entrypoint", "sh", GitImage, "-c", script, "sh")
+	return d.output(ctx, nil, append(argv, args...)...)
+}
+
+// Exists reports whether dir is a clone, without running git in it.
+func (d *Docker) Exists(ctx context.Context, dir string) (bool, error) {
+	if err := checkDir(dir); err != nil {
+		return false, err
+	}
+	_, err := d.runsShell(ctx, path.Base(dir), `test -d "$1/.git"`, dir)
+	var exit interface{ ExitCode() int }
+	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// FastForward brings a clean clone up to the remote's branch, which a person
+// may have pushed to since the clone's last run. A remote branch that is
+// gone leaves the clone as it is; a clone that is not clean, or a branch that
+// cannot fast-forward, is an error and the clone stays as it was.
+func (d *Docker) FastForward(ctx context.Context, dir, branch string) error {
+	if clean, err := d.Clean(ctx, dir); err != nil {
+		return err
+	} else if !clean {
+		return errors.New("the clone has uncommitted changes")
+	}
+	if err := d.Fetch(ctx); err != nil {
+		return err
+	}
+	if _, err := d.git(ctx, dir, "fetch", "--quiet", "--prune", "--no-tags", RepoPath, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+		return err
+	}
+	if ok, err := d.succeeds(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch); !ok || err != nil {
+		return err
+	}
+	_, err := d.git(ctx, dir, "merge", "--quiet", "--ff-only", "origin/"+branch)
+	return err
+}
+
+// Remove deletes the clone at dir; one that is gone already is no error.
+func (d *Docker) Remove(ctx context.Context, dir string) error {
+	if err := checkDir(dir); err != nil {
+		return fmt.Errorf("remove: %w", err)
+	}
+	_, err := d.runsShell(ctx, path.Base(dir), `rm -rf -- "$1"`, dir)
+	return err
+}
+
+// Free returns the bytes available on the filesystem that holds the runs
+// volume: Docker's, where the state volume is too.
+func (d *Docker) Free(ctx context.Context) (int64, error) {
+	out, err := d.runsShell(ctx, "", `df -Pk "$1"`, RunsPath)
+	if err != nil {
+		return 0, err
+	}
+	return parseDF(out)
+}
+
+// parseDF reads the available KiB from df -Pk's last line, in bytes.
+func parseDF(out string) (int64, error) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	f := strings.Fields(lines[len(lines)-1])
+	if len(lines) < 2 || len(f) < 4 {
+		return 0, fmt.Errorf("free space: cannot parse %q", out)
+	}
+	kb, err := strconv.ParseInt(f[3], 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("free space: cannot parse %q", out)
+	}
+	return kb * 1024, nil
+}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // The cases of legacy runner.test.mjs, lib.test.mjs and lib.prompt.test.mjs
@@ -30,6 +31,11 @@ func pausedNote(t *testing.T, p Project, n Paused) Paused {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// take is TakePaused for a paused (not kept) note, which needs no API.
+func take(p Project, ref, client string) (Paused, bool) {
+	return p.TakePaused(context.Background(), nil, &workspace.Fake{}, ref, "cinderline/"+ref, client)
 }
 
 func noteFile(p Project) string {
@@ -128,7 +134,7 @@ func TestCommentCursor(t *testing.T) {
 func TestAnsweredIssueResumesAndCanPauseAgain(t *testing.T) {
 	p := project(t)
 	note := pausedNote(t, p, Paused{Session: "the-session", Client: "claude"})
-	got, ok := p.TakePaused("CSR-7", "claude")
+	got, ok := take(p, "CSR-7", "claude")
 	if !ok || got != note {
 		t.Fatalf("TakePaused = %+v, %v; want %+v", got, ok, note)
 	}
@@ -152,7 +158,7 @@ func TestAnsweredIssueResumesAndCanPauseAgain(t *testing.T) {
 	if w := api.writes(); len(w) != 0 {
 		t.Fatalf("writes = %q, want none", w)
 	}
-	again, ok := p.TakePaused("CSR-7", "claude")
+	again, ok := take(p, "CSR-7", "claude")
 	if !ok || again != note {
 		t.Fatalf("note after the pause = %+v, %v; want %+v", again, ok, note)
 	}
@@ -176,7 +182,7 @@ func TestAQuestionPausesTheRun(t *testing.T) {
 			if err != nil || !out.Paused || len(cl.Calls()) != 1 {
 				t.Fatalf("Attempts = %+v, %v after %d runs; want paused after 1", out, err, len(cl.Calls()))
 			}
-			got, ok := p.TakePaused("CSR-7", "claude")
+			got, ok := take(p, "CSR-7", "claude")
 			if want := (Paused{Dir: j.Turn.Dir, Session: "s1", Client: "claude"}); !ok || got != want {
 				t.Fatalf("note = %+v, %v; want %+v", got, ok, want)
 			}
@@ -184,7 +190,8 @@ func TestAQuestionPausesTheRun(t *testing.T) {
 	}
 }
 
-// A finished run leaves no note, so the next claim starts fresh.
+// Attempts writes no note for a finished run: its caller keeps the session
+// for a follow-up (CSR-145).
 func TestAFinishedRunDoesNotPause(t *testing.T) {
 	p := project(t)
 	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1"}}}}
@@ -216,7 +223,7 @@ func TestTakePaused(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := project(t)
 			note := pausedNote(t, p, tt.note)
-			got, ok := p.TakePaused("CSR-7", tt.client)
+			got, ok := take(p, "CSR-7", tt.client)
 			if ok != tt.ok || ok && got != note {
 				t.Fatalf("TakePaused = %+v, %v; want %+v, %v", got, ok, note, tt.ok)
 			}
@@ -225,7 +232,7 @@ func TestTakePaused(t *testing.T) {
 			}
 		})
 	}
-	if _, ok := project(t).TakePaused("CSR-7", "claude"); ok {
+	if _, ok := take(project(t), "CSR-7", "claude"); ok {
 		t.Fatal("TakePaused found a note that was never written")
 	}
 }
