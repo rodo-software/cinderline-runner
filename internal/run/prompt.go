@@ -18,8 +18,9 @@ import (
 // (the API lists it first) runs it; a team with workers also gets the team
 // section. The agent's instructions come first and the issue text last, as
 // data (decision 2026-11-06-prompts).
-// Extra repositories the run can read get one line each (CSR-160).
-func CodingPrompt(team cinderline.Team, ref, title, body, branch, projectKey string, extras []config.ExtraRepository) string {
+// Extra repositories the run can read get one line each (CSR-160), and so
+// do linked projects (CSR-161).
+func CodingPrompt(team cinderline.Team, ref, title, body, branch, projectKey string, extras []config.ExtraRepository, links []Linked) string {
 	others := ""
 	if len(extras) > 0 {
 		others = "\nOther repositories of the project, read-only, for reference:\n\n"
@@ -27,6 +28,7 @@ func CodingPrompt(team cinderline.Team, ref, title, body, branch, projectKey str
 			others += "- `" + workspace.ExtraPath + "/" + r.Name() + "`: " + r.URL + "\n"
 		}
 	}
+	others += LinkedSection(links)
 	section := ""
 	if len(team.Agents) > 1 {
 		section = teamSection(team, ref, branch)
@@ -51,6 +53,33 @@ Rules from the runner:
 ## Issue ` + ref + ": " + title + `
 
 ` + cmp.Or(strings.TrimSpace(body), "(no description)") + "\n"
+}
+
+// Linked is a project this project's agents may reach (decision
+// 2026-11-11-project-links), with the folders of its repositories this run
+// fetched under workspace.LinkedPath, as KEY/name.
+type Linked struct {
+	Key, Name string
+	Paths     []string
+}
+
+// LinkedSection is one line per linked project for the orchestrator's
+// prompts; empty without links. The resume and follow-up prompts get it
+// too, as links can change between turns.
+func LinkedSection(links []Linked) string {
+	if len(links) == 0 {
+		return ""
+	}
+	s := "\nLinked projects: you may read and edit their issues with the Cinderline tools. Their repositories are read-only and for reference only: every change to code goes into this run's own repository.\n\n"
+	for _, l := range links {
+		code := "its code is not available in this run"
+		if len(l.Paths) > 0 {
+			code = "its repositories, read-only: `" + workspace.LinkedPath + "/" + strings.Join(l.Paths, "`, `"+workspace.LinkedPath+"/") + "`"
+		}
+		// The name is the app's data: kept to one line.
+		s += "- " + l.Key + " (" + strings.Join(strings.Fields(l.Name), " ") + "): " + code + "\n"
+	}
+	return s
 }
 
 // clientLabels are the names of the agent CLIs for the team section; legacy

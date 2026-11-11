@@ -139,11 +139,12 @@ func TestAFollowUpResumesTheOrchestrator(t *testing.T) {
 	r.ws.FastForwards = []error{nil}
 	r.ws.MergeBases = []workspace.MergeBaseReply{{}}
 	r.claude.Runs = []client.RunReply{ok("the-session", "Answered.")}
+	r.job.Links = "\nLinks.\n"
 	if _, err := r.run(t, context.Background(), p); err != nil {
 		t.Fatalf("Rounds = %v", err)
 	}
 	ts := turns(&r.claude.Fake)
-	if len(ts) != 1 || ts[0].SessionID != "the-session" || ts[0].Prompt != FollowUpPrompt("CSR-1") || ts[0].Dir != clone {
+	if len(ts) != 1 || ts[0].SessionID != "the-session" || ts[0].Prompt != FollowUpPrompt("CSR-1")+"\nLinks.\n" || ts[0].Dir != clone {
 		t.Fatalf("turns = %+v, want the follow-up in the-session", ts)
 	}
 	if n, _ := p.readPaused("CSR-1"); n.Session != "the-session" || !n.Kept.After(time1) {

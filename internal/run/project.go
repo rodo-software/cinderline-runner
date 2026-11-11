@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,10 @@ type Project struct {
 	Workspace workspace.Workspace
 	Forge     func(kind string) (forge.Forge, error)
 
+	// Others are all the projects added on this runner, for the code of
+	// linked projects (CSR-161).
+	Others []config.Project
+
 	// The limits on sessions kept after a finished run (CSR-145), from
 	// config's keep_sessions_for and min_free_disk; 0 turns each off.
 	KeepFor time.Duration
@@ -53,9 +58,9 @@ type Project struct {
 	// NewProject as a closure over the Docker environment. Nil in tests.
 	prepare func(ctx context.Context) error
 
-	// fetchExtras fetches the extra repositories, set only by NewProject.
-	// Nil in tests.
-	fetchExtras func(ctx context.Context, repos []workspace.Extra) map[string]error
+	// fetchExtras fetches repositories into the volume of path (ExtraPath
+	// or LinkedPath), set only by NewProject. Nil in tests.
+	fetchExtras func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
 
 	// detect is overridden by tests; nil means detectClients is called.
 	detect func(ctx context.Context) []cinderline.ReportClient
@@ -167,10 +172,13 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		if err != nil {
 			return err
 		}
+		// Every agent container gets the tools mount's flags; the extra and
+		// linked repositories ride along. Links can change between runs, so
+		// the linked volume is always mounted; every run fills it first.
 		if len(cfg.ExtraRepositories) > 0 {
-			// Every agent container gets the tools mount's flags; the extra repositories ride along.
-			mount.Args = append(mount.Args, workspace.ExtraMount(cfg.Key)...)
+			mount.Args = append(mount.Args, workspace.ExtraMount(cfg.Key, workspace.ExtraPath)...)
 		}
+		mount.Args = append(mount.Args, workspace.ExtraMount(cfg.Key, workspace.LinkedPath)...)
 		for _, cl := range p.Clients {
 			switch c := cl.(type) {
 			case *client.Claude:
@@ -189,8 +197,8 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	if exec == nil {
 		exec = workspace.RunCommand
 	}
-	p.fetchExtras = func(ctx context.Context, repos []workspace.Extra) map[string]error {
-		return workspace.FetchExtras(ctx, exec, cfg.Key, repos)
+	p.fetchExtras = func(ctx context.Context, path string, repos []workspace.Extra) map[string]error {
+		return workspace.FetchExtras(ctx, exec, cfg.Key, path, repos)
 	}
 	p.deleteSession = func(ctx context.Context, ref, session string) error {
 		return client.DeleteSession(ctx, exec, cfg.Key, ref, session)
@@ -284,12 +292,14 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 
 	title := full.Title
 	body := deref(full.Body)
-	prompt := CodingPrompt(team, ref, title, body, branch, p.Config.Key, p.extraRepositories(ctx, c, ref))
+	// Fetched on every Run, so a resume and a follow-up read fresh code too (CSR-161).
+	links := p.linkedProjects(ctx, c, ref, proj.LinkedProjects)
+	prompt := CodingPrompt(team, ref, title, body, branch, p.Config.Key, p.extraRepositories(ctx, c, ref), links)
 
 	if len(team.Agents) > 1 {
 		// Team with workers.
 		out, err := p.Rounds(ctx, c, p.Clients, p.Workspace, TeamJob{
-			Ref: ref, Branch: branch, Base: base, MaxTurns: maxTurns, Team: team, Prompt: prompt,
+			Ref: ref, Branch: branch, Base: base, MaxTurns: maxTurns, Team: team, Prompt: prompt, Links: LinkedSection(links),
 		})
 		if err != nil {
 			return err
@@ -338,7 +348,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 		MaxMinutes: team.MaxMinutes, Model: deref(agent.Model),
 		Token: token, Ponytail: team.Ponytail,
 	}
-	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: agent.Client, Turn: turn, Resume: session, FollowUp: resumed && !note.Kept.IsZero()})
+	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: agent.Client, Turn: turn, Resume: session, FollowUp: resumed && !note.Kept.IsZero(), Links: LinkedSection(links)})
 	if ctx.Err() == nil && !out.Paused {
 		// Kept for a follow-up even when the run failed: the next run can continue it.
 		p.keep(ref, Paused{Dir: dir, Session: cmp.Or(out.SessionID, session), Client: agent.Client})
@@ -381,7 +391,7 @@ func (p *Project) extraRepositories(ctx context.Context, c *cinderline.Client, r
 		}
 		repos = append(repos, workspace.Extra{Name: r.Name(), URL: r.URL, Ref: r.Ref, Token: token})
 	}
-	maps.Copy(failed, p.fetchExtras(ctx, repos))
+	maps.Copy(failed, p.fetchExtras(ctx, workspace.ExtraPath, repos))
 	var ok []config.ExtraRepository
 	for _, r := range p.Config.ExtraRepositories {
 		if err := failed[r.Name()]; err != nil {
@@ -392,6 +402,72 @@ func (p *Project) extraRepositories(ctx context.Context, c *cinderline.Client, r
 		ok = append(ok, r)
 	}
 	return ok
+}
+
+// linkedProjects fetches the repositories of the linked projects that are
+// added on this runner: each one's own repository at its base branch and its
+// extra repositories, each with the token stored for its URL. A linked
+// project not added here, or a repository that fails, is reported in a
+// progress line and the run goes on without it (CSR-161). The linked volume
+// is filled even without links, so a removed link's code is gone.
+func (p *Project) linkedProjects(ctx context.Context, c *cinderline.Client, ref string, linked []cinderline.LinkedProject) []Linked {
+	if p.fetchExtras == nil {
+		return nil
+	}
+	links := make([]Linked, len(linked))
+	var repos []workspace.Extra
+	failed := map[string]error{}
+	urls := map[string]string{} // by folder, for the progress lines
+	for i, l := range linked {
+		links[i] = Linked{Key: l.Key, Name: l.Name}
+		j := slices.IndexFunc(p.Others, func(o config.Project) bool {
+			return o.Key == l.Key && strings.TrimRight(o.URL, "/") == strings.TrimRight(p.Config.URL, "/")
+		})
+		if j < 0 {
+			p.Log.Info("linked project not added on this runner", "project", p.Config.Key, "issue", ref, "linked", l.Key)
+			p.progress(ctx, c, ref, "Linked project "+l.Key+" is not added on this runner, so the run goes on without its code; `"+name.Name+" add` it to give runs its code")
+			continue
+		}
+		b := p.Others[j]
+		names := map[string]bool{}
+		for k, r := range append([]config.ExtraRepository{{URL: b.Repository, Ref: l.BaseBranch}}, b.ExtraRepositories...) {
+			folder := l.Key + "/" + r.Name()
+			kind := secrets.ExtraGitToken(r.URL)
+			if k == 0 {
+				kind = secrets.GitToken
+			}
+			if names[r.Name()] {
+				// The one already listed keeps the folder.
+				p.progress(ctx, c, ref, "Repository "+r.URL+" of linked project "+l.Key+" not fetched: another of its repositories has the same name")
+				continue
+			}
+			names[r.Name()] = true
+			links[i].Paths = append(links[i].Paths, folder)
+			urls[folder] = r.URL
+			err := r.CheckRefAndName()
+			token := ""
+			if err == nil {
+				token, _, err = p.Secrets.Get(b, kind)
+			}
+			if err != nil {
+				failed[folder] = err
+				continue
+			}
+			repos = append(repos, workspace.Extra{Name: folder, URL: r.URL, Ref: r.Ref, Token: token})
+		}
+	}
+	maps.Copy(failed, p.fetchExtras(ctx, workspace.LinkedPath, repos))
+	for i := range links {
+		links[i].Paths = slices.DeleteFunc(links[i].Paths, func(folder string) bool {
+			err := failed[folder]
+			if err != nil {
+				p.Log.Warn("linked repository not fetched", "project", p.Config.Key, "issue", ref, "repository", urls[folder], "err", err)
+				p.progress(ctx, c, ref, "Repository "+urls[folder]+" of linked project "+links[i].Key+" not fetched; the run goes on without it")
+			}
+			return err != nil
+		})
+	}
+	return links
 }
 
 func (p *Project) setHandoff(ref, title, body, dir, base string, team cinderline.Team, maxTurns int, forgeKind string, unread bool, session, token string) {

@@ -22,6 +22,7 @@ type TeamJob struct {
 	MaxTurns int
 	Team     cinderline.Team // the API lists its orchestrator first
 	Prompt   string          // the orchestrator's fresh prompt
+	Links    string          // LinkedSection, added to the first resumed prompt of this run
 }
 
 // Ran is a sub-issue a round ran, for the orchestrator's next prompt.
@@ -190,6 +191,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 	}
 
 	var finished *client.Result // the work done while its session reads comments
+	links := j.Links            // a fresh prompt has them already
 	for {
 		cs, err := c.ListComments(ctx, j.Ref, 0)
 		if err != nil {
@@ -213,6 +215,10 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 			turn.Prompt = RoundPrompt(j.Ref, ran)
 			p.progress(ctx, c, j.Ref, orch.Name+" is reviewing the sub-issues")
 		}
+		if session != "" {
+			turn.Prompt += links
+		}
+		links = ""
 		tok, err := c.CreateAgentToken(ctx, j.Ref, cinderline.KindOrchestrator, orch.Name)
 		if err != nil {
 			return Outcome{}, err

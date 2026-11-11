@@ -104,6 +104,10 @@ A run can read other repositories of the project, read-only. `cinderline add-rep
 
 Before each run the runner fetches them in a git container that alone gets their tokens and mounts them read-only at `/extra/NAME` in the agent's container; the prompt lists them. One that fails to fetch is left out and the run says so in a progress update. Cinderline knows nothing about them (Ember decision 2026-11-11-extra-repositories-in-runner).
 
+### Linked projects
+
+A project can link to another one in Cinderline: "A may reach B", one way, never chained (decision 2026-11-11-project-links). Links are managed in Cinderline; the runner only reads them. A run of A can then read and edit B's issues over MCP, and, when B is also added on this runner (same Cinderline URL and key), read all of B's repositories: B's own repository at its base branch and B's extra repositories, mounted read-only at `/linked/KEY/NAME`. They are fetched before every run, resume and follow-up, each with the token stored for its URL, and the prompt lists them. All changes still go into A's own repository; the runner never pushes to B's. When B is not added on this runner, the run goes on without its code and says so in a progress update; `cinderline add` it to give runs its code. A repository that fails to fetch is left out and reported, as above.
+
 ### Sign a client in instead of storing a key
 
 `cinderline login claude --project KEY`, `cinderline login codex --project KEY` or `cinderline login gemini --project KEY` runs the CLI's own sign-in (`claude auth login`, `codex login --device-auth`, Gemini CLI's own Google sign-in) in a container. Open the link it prints and paste the code back. The credentials stay on that project's state volume of that client, which only that client's runs mount; the runner never reads them. When the keychain holds no Anthropic, OpenAI or Gemini key for the project, runs then use this login; a stored key still wins. OpenCode uses the project's OpenRouter key only. After `login gemini`, type `/quit` once it says "Authentication succeeded": the interactive Gemini CLI stays open after signing in.

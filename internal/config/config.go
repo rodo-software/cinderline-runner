@@ -154,6 +154,13 @@ func (r ExtraRepository) Validate() error {
 	if err := CheckRepositoryURL(r.URL); err != nil {
 		return err
 	}
+	return r.CheckRefAndName()
+}
+
+// CheckRefAndName is Validate without the URL check, for a linked project's
+// own repository: config checked its URL as a repository, and its ref comes
+// from Cinderline (CSR-161).
+func (r ExtraRepository) CheckRefAndName() error {
 	if r.Ref != "" && !validRef(r.Ref) {
 		return fmt.Errorf("%q is not a plain branch or tag name", r.Ref)
 	}

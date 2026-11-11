@@ -453,7 +453,9 @@ paths:
       summary: Create a short-lived token for one agent run on this issue.
       description: |
         The token an agent uses for the Cinderline MCP tools. It is scoped to
-        the issue `ref` and its tree; no kind reaches other issues. See
+        the issue `ref` and its tree; outside the issue tree, a token reaches
+        only the issues of projects its project links to, with the tools
+        listed in `AgentTokenKind`. See
         `AgentTokenKind` for what each kind may do. The token is named after
         the issue's team and the agent, so the app detects the agent from it
         (0045). It expires after the team's `max_minutes` plus a margin. The
@@ -811,7 +813,7 @@ components:
           minLength: 1
     Project:
       type: object
-      required: [key, name, repository_url, forge, base_branch, environment]
+      required: [key, name, repository_url, forge, base_branch, environment, linked_projects]
       properties:
         key:
           type: string
@@ -831,6 +833,24 @@ components:
         environment:
           description: Where runs happen; set by admins in the app, never from issue text (0098).
           enum: [default, docker, existing]
+        linked_projects:
+          description: The projects this project's agents may reach, one direction per link. Empty when there are none.
+          type: array
+          items:
+            type: object
+            required: [key, name, repository_url, base_branch]
+            properties:
+              key:
+                type: string
+                examples: [EMBER]
+              name:
+                type: string
+              repository_url:
+                type: string
+                format: uri
+              base_branch:
+                type: string
+                examples: [main]
     Team:
       type: object
       required: [id, name, max_minutes, trusted, max_sub_issues, ponytail, agents]
@@ -943,6 +963,12 @@ components:
         - `reader`: for the orchestrator's own sub-issue, only `get_issue` and
           `list_comments`.
 
-        No kind reaches issues outside the issue tree, and no kind has the
-        `runner` ability.
+        Outside the issue tree, a token reaches only the issues of projects
+        its project links to, with the tools listed here: in a linked project
+        an `orchestrator` or `writer` token may use `get_issue`,
+        `list_comments`, `list_issues`, `search`, `add_comment`,
+        `create_issue` (top-level only) and `update_issue` (title, body,
+        priority, status; the rule for `done` unchanged). The `reader` kind
+        reaches no linked project. No kind has the `runner` ability
+        (decision 2026-11-11-project-links).
       enum: [orchestrator, writer, reader]

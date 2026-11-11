@@ -3,50 +3,64 @@ package workspace
 import (
 	"cmp"
 	"context"
+	"strings"
 )
 
 // ExtraPath is where agent containers see a project's extra repositories,
-// read-only, one folder per repository (CSR-160).
-const ExtraPath = "/extra"
+// read-only, one folder per repository (CSR-160). LinkedPath is where they
+// see the repositories of linked projects, one folder per project key with
+// a folder per repository in it (CSR-161).
+const (
+	ExtraPath  = "/extra"
+	LinkedPath = "/linked"
+)
 
-// Extra is one extra repository to fetch: its folder name, URL, ref (empty
-// for the default branch) and the git token stored for that URL.
+// Extra is one repository to fetch: its folder under the mount (KEY/name
+// under LinkedPath), URL, ref (empty for the default branch) and the git
+// token stored for that URL.
 type Extra struct {
 	Name, URL, Ref, Token string
 }
 
-// ExtraMount is the docker run flags that mount the project's extra
-// repositories read-only.
-func ExtraMount(project string) []string {
-	return []string{"-v", Volume(project, "extra") + ":" + ExtraPath + ":ro"}
+// ExtraMount is the docker run flags that mount the volume of path
+// (ExtraPath or LinkedPath) read-only.
+func ExtraMount(project, path string) []string {
+	return []string{"-v", volumeOf(project, path) + ":" + path + ":ro"}
 }
 
-// pruneExtraScript removes every folder under ExtraPath not named in its
-// arguments: repositories removed from the config.
-const pruneExtraScript = `cd ` + ExtraPath + ` || exit 1
-for d in * .[!.]*; do
+// volumeOf is the volume mounted at path: cinderline-<KEY>-extra or -linked.
+func volumeOf(project, path string) string { return Volume(project, strings.TrimPrefix(path, "/")) }
+
+// pruneExtraScript, run in the mount, removes every entry in the top two
+// levels that is not a folder named in its arguments, inside one, or above
+// one: repositories and links that are gone.
+const pruneExtraScript = `for d in * .[!.]* */* */.[!.]*; do
   [ -e "$d" ] || continue
   keep=
-  for n in "$@"; do [ "$d" = "$n" ] && keep=1; done
+  for n in "$@"; do
+    case "$d" in "$n"|"$n"/*) keep=1 ;; esac
+    case "$n" in "$d"/*) keep=1 ;; esac
+  done
   [ -n "$keep" ] || rm -rf -- "$d"
 done`
 
 // fetchExtraScript fetches $3 (a branch or tag, or HEAD for the default
-// branch) of URL $2 into folder $1 and checks it out. A failure removes the
-// folder, so a run never reads a stale copy. The URL is given on every fetch,
-// never stored as a remote.
-const fetchExtraScript = `d=` + ExtraPath + `/$1
-{ [ -d "$d/.git" ] || git init --quiet "$d"; } &&
+// branch) of URL $2 into folder $1 of the mount and checks it out. A failure
+// removes the folder, so a run never reads a stale copy. The URL is given on
+// every fetch, never stored as a remote.
+const fetchExtraScript = `d=$PWD/$1
+{ [ -d "$d/.git" ] || { mkdir -p "$d" && git init --quiet "$d"; }; } &&
   git -C "$d" fetch --quiet --depth 1 --no-tags "$2" "$3" &&
   git -C "$d" checkout --quiet --force --detach FETCH_HEAD &&
   git -C "$d" clean --quiet -ffdx ||
   { rm -rf -- "$d"; exit 1; }`
 
-// FetchExtras brings the project's extra-repository volume up to repos, each
-// in its own throwaway helper container that gets only that repository's
-// token. It returns the error of each repository that failed, by name; a
-// failure to prepare the volume fails them all. A nil x means RunCommand.
-func FetchExtras(ctx context.Context, x Exec, project string, repos []Extra) map[string]error {
+// FetchExtras brings the project's volume of path (ExtraPath or LinkedPath)
+// up to repos, each in its own throwaway helper container that gets only
+// that repository's token. It returns the error of each repository that
+// failed, by name; a failure to prepare the volume fails them all. A nil x
+// means RunCommand.
+func FetchExtras(ctx context.Context, x Exec, project, path string, repos []Extra) map[string]error {
 	if x == nil {
 		x = RunCommand
 	}
@@ -58,12 +72,13 @@ func FetchExtras(ctx context.Context, x Exec, project string, repos []Extra) map
 		return m
 	}
 	labels := Labels(project, "")
-	vol := Volume(project, "extra")
-	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, labels...), vol)...); err != nil {
+	mount := []string{"-v", volumeOf(project, path) + ":" + path, "-w", path}
+	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, labels...), volumeOf(project, path))...); err != nil {
 		return fail(err)
 	}
 	argv := append([]string{"docker", "run", "--rm"}, labels...)
-	argv = append(argv, "--network", "none", "-v", vol+":"+ExtraPath, "--entrypoint", "sh", GitImage, "-c", pruneExtraScript, "sh")
+	argv = append(append(argv, "--network", "none"), mount...)
+	argv = append(argv, "--entrypoint", "sh", GitImage, "-c", pruneExtraScript, "sh")
 	for _, r := range repos {
 		argv = append(argv, r.Name)
 	}
@@ -72,7 +87,7 @@ func FetchExtras(ctx context.Context, x Exec, project string, repos []Extra) map
 	}
 	failed := map[string]error{}
 	for _, r := range repos {
-		if err := withToken(ctx, x, labels, []string{"-v", vol + ":" + ExtraPath}, r.Token, fetchExtraScript, r.Name, r.URL, cmp.Or(r.Ref, "HEAD")); err != nil {
+		if err := withToken(ctx, x, labels, mount, r.Token, fetchExtraScript, r.Name, r.URL, cmp.Or(r.Ref, "HEAD")); err != nil {
 			failed[r.Name] = err
 		}
 	}

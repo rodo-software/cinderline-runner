@@ -29,7 +29,7 @@ func TestExtraRepositories(t *testing.T) {
 		}
 	}
 	var got []workspace.Extra
-	p.fetchExtras = func(_ context.Context, repos []workspace.Extra) map[string]error {
+	p.fetchExtras = func(_ context.Context, _ string, repos []workspace.Extra) map[string]error {
 		got = repos
 		return map[string]error{"bad": errors.New("fetch failed")}
 	}
@@ -51,7 +51,7 @@ func TestExtraRepositories(t *testing.T) {
 		t.Errorf("progress for lib:\n%s", w)
 	}
 
-	prompt := CodingPrompt(soloTeam, "CSR-1", "T", "Body.", "b", "CSR", ok)
+	prompt := CodingPrompt(soloTeam, "CSR-1", "T", "Body.", "b", "CSR", ok, nil)
 	if !strings.Contains(prompt, "read-only, for reference:\n\n- `/extra/lib`: https://git.example/o/lib\n") ||
 		strings.Index(prompt, "/extra/lib") > strings.Index(prompt, "## Issue") {
 		t.Errorf("prompt:\n%s", prompt)

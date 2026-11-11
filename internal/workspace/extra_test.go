@@ -19,7 +19,7 @@ func TestFetchExtras(t *testing.T) {
 		}
 		return "", nil
 	}
-	failed := FetchExtras(context.Background(), x, "CSR", []Extra{
+	failed := FetchExtras(context.Background(), x, "CSR", ExtraPath, []Extra{
 		{Name: "lib", URL: "https://git.example.com/o/lib", Ref: "v1.0", Token: "tok-lib"},
 		{Name: "bad", URL: "https://git.example.com/o/bad", Token: "tok-bad"},
 	})
@@ -52,7 +52,7 @@ func TestFetchExtras(t *testing.T) {
 
 func TestFetchExtrasVolumeFailureFailsAll(t *testing.T) {
 	x := func(context.Context, []string, ...string) (string, error) { return "", errors.New("no docker") }
-	failed := FetchExtras(context.Background(), x, "CSR", []Extra{{Name: "a"}, {Name: "b"}})
+	failed := FetchExtras(context.Background(), x, "CSR", ExtraPath, []Extra{{Name: "a"}, {Name: "b"}})
 	if len(failed) != 2 {
 		t.Fatalf("failed = %v", failed)
 	}
@@ -81,7 +81,10 @@ func TestLsRemote(t *testing.T) {
 }
 
 func TestExtraMountIsReadOnly(t *testing.T) {
-	if got := strings.Join(ExtraMount("CSR"), " "); got != "-v cinderline-CSR-extra:/extra:ro" {
+	if got := strings.Join(ExtraMount("CSR", ExtraPath), " "); got != "-v cinderline-CSR-extra:/extra:ro" {
+		t.Errorf("ExtraMount = %q", got)
+	}
+	if got := strings.Join(ExtraMount("CSR", LinkedPath), " "); got != "-v cinderline-CSR-linked:/linked:ro" {
 		t.Errorf("ExtraMount = %q", got)
 	}
 }

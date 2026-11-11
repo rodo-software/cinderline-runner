@@ -83,6 +83,18 @@ type Project struct {
 	Forge         string `json:"forge"`
 	BaseBranch    string `json:"base_branch"`
 	Environment   string `json:"environment"`
+	// LinkedProjects are the projects this project's agents may reach, one
+	// direction per link (decision 2026-11-11-project-links). An app that
+	// does not send it yet means none.
+	LinkedProjects []LinkedProject `json:"linked_projects"`
+}
+
+// LinkedProject is a project another project links to.
+type LinkedProject struct {
+	Key           string `json:"key"`
+	Name          string `json:"name"`
+	RepositoryURL string `json:"repository_url"`
+	BaseBranch    string `json:"base_branch"`
 }
 
 // TeamAgent is one agent of a team. Instructions is untrusted text.

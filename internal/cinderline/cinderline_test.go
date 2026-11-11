@@ -89,7 +89,7 @@ type operation struct {
 var operations = []operation{
 	{"getProject", func(ctx context.Context, c *Client) (any, error) { return c.GetProject(ctx) },
 		"GET", "/api/runner/v1/project", "", "", 200,
-		`{"key":"CSR","name":"Runner","repository_url":"https://git.example.com/r","forge":"forgejo","base_branch":"main","environment":"docker"}`},
+		`{"key":"CSR","name":"Runner","repository_url":"https://git.example.com/r","forge":"forgejo","base_branch":"main","environment":"docker","linked_projects":[{"key":"EMBER","name":"App","repository_url":"https://git.example.com/app","base_branch":"main"}]}`},
 	{"getWork", func(ctx context.Context, c *Client) (any, error) {
 		iss, err := c.Work(ctx)
 		return map[string]any{"issue": iss}, err
