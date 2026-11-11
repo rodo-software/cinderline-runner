@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
@@ -84,6 +85,7 @@ func (c *CLI) uninstall(args []string) int {
 		}
 	}
 	fmt.Fprintf(c.Stdout, "Delete the binary yourself: %s\n", exe)
+	fmt.Fprintf(c.Stdout, "If the installer added %s to your PATH, remove it from your shell profile or user PATH yourself\n", filepath.Dir(exe))
 	return 0
 }
 

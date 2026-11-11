@@ -27,7 +27,7 @@ Install the latest `cinderline` binary with one line — no sudo or elevation re
 curl -fsSL https://raw.githubusercontent.com/rodo-software/cinderline-runner/main/scripts/install.sh | sh
 ```
 
-Installs to `~/.local/bin/cinderline`. If that directory is not on your `PATH`, the script prints a line to add to your shell profile.
+Installs to `~/.local/bin/cinderline`. If that directory is not on your `PATH`, the script appends `export PATH="$HOME/.local/bin:$PATH"` to your shell's profile (`~/.zshrc` for zsh, `~/.bashrc` for bash or `~/.bash_profile` on macOS, `~/.profile` otherwise), once, and tells you to open a new terminal. For fish and other shells with a different syntax, or with `CINDERLINE_NO_MODIFY_PATH=1` set (`curl … | CINDERLINE_NO_MODIFY_PATH=1 sh`), it leaves the profile alone and prints the line to add yourself.
 
 **Windows (PowerShell 5.1+):**
 
@@ -35,7 +35,7 @@ Installs to `~/.local/bin/cinderline`. If that directory is not on your `PATH`, 
 irm https://raw.githubusercontent.com/rodo-software/cinderline-runner/main/scripts/install.ps1 | iex
 ```
 
-Installs to `%LocalAppData%\Programs\cinderline\cinderline.exe`. If that directory is not on your user `PATH`, the script prints a command to add it.
+Installs to `%LocalAppData%\Programs\cinderline\cinderline.exe`. If that directory is not on your user `PATH`, the script adds it there (the user `PATH`, not the machine one) and tells you to open a new terminal. With `$env:CINDERLINE_NO_MODIFY_PATH = '1'` set first, it prints the command to add it instead.
 
 To pin a specific version, set `CINDERLINE_DOWNLOAD_URL` before running (e.g.
 `https://github.com/rodo-software/cinderline-runner/releases/download/v0.1.0`).

@@ -47,10 +47,17 @@ try {
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($userPath -split ';' -notcontains $installDir) {
-        Write-Output "Warning: $installDir is not in your PATH."
-        Write-Output 'Run this command to add it:'
-        Write-Output ""
-        Write-Output "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$installDir', 'User')"
+        if (-not $env:CINDERLINE_NO_MODIFY_PATH) {
+            $newPath = if ($userPath) { "$($userPath.TrimEnd(';'));$installDir" } else { $installDir }
+            [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+            Write-Output "Added $installDir to your user PATH; open a new terminal to use cinderline."
+        }
+        else {
+            Write-Output "Warning: $installDir is not in your PATH."
+            Write-Output 'Run this command to add it:'
+            Write-Output ""
+            Write-Output "  [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$installDir', 'User')"
+        }
     }
 
     Write-Output ""

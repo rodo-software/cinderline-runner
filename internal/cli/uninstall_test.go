@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -148,7 +149,8 @@ func TestUninstallDeletesSecretsConfigAndService(t *testing.T) {
 	}
 }
 
-// TestUninstallRevokeList: each project's URL and key, and the binary's path.
+// TestUninstallRevokeList: each project's URL and key, the binary's path and
+// its folder for the PATH line the installer may have added.
 func TestUninstallRevokeList(t *testing.T) {
 	c, _, _, out, errb := uninstallCLI(t, "")
 	if code := c.Run([]string{"uninstall", "--yes"}); code != 0 {
@@ -160,6 +162,7 @@ func TestUninstallRevokeList(t *testing.T) {
 		"  WEB at https://a.example.com\n",
 		"  API at https://b.example.com\n",
 		"Delete the binary yourself: " + exe + "\n",
+		"If the installer added " + filepath.Dir(exe) + " to your PATH, remove it from your shell profile or user PATH yourself\n",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("stdout %q lacks %q", out.String(), want)
