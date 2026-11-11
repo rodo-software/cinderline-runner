@@ -128,7 +128,7 @@ func (p Project) Attempts(ctx context.Context, c *cinderline.Client, cl client.C
 		readFail int
 	)
 	for attempt := 1; attempt <= 2; {
-		if berr := p.checkBudget(ctx, c, j.Workspace, j.Ref, t.Dir); berr != nil {
+		if berr := p.checkBudget(ctx, c, j.Workspace, j.Ref, t.Dir, t.Author); berr != nil {
 			if !errors.Is(berr, errBudget) {
 				return Outcome{Result: res}, berr
 			}

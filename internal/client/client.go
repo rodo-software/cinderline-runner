@@ -23,6 +23,9 @@ type Turn struct {
 	// Environment stops it; 0: none.
 	MaxMinutes int
 	Model      string // the agent's model; empty: the client's default
+	// Author is the agent's git identity, "<team> / <agent>", the name of its
+	// Cinderline token; the clients set it with workspace.Identity (CSR-169).
+	Author string
 	// Token is the run's scoped Cinderline token for the MCP server; empty
 	// gives the agent none, as workers and the Merge Resolver (0122). Never log it.
 	Token string

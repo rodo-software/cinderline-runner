@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ func (c *Codex) Run(ctx context.Context, t Turn) (Result, error) {
 		Issue:  path.Base(t.Dir),
 		Dir:    t.Dir,
 		Mounts: agentMounts(c.Project, "codex", c.Tools),
-		Env:    append(append([]string(nil), c.Tools.Env...), codexEnv(c.Key, t)...),
+		Env:    slices.Concat(c.Tools.Env, codexEnv(c.Key, t), workspace.Identity(c.Project, t.Author)),
 		Cmd: append([]string{
 			"sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`,
 			tools.Path + "/bin/codex",

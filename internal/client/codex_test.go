@@ -123,7 +123,7 @@ func TestCodexRunFresh(t *testing.T) {
 			return "", nil
 		},
 	}
-	turn := Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "gpt-5.5", Token: "tok"}
+	turn := Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "gpt-5.5", Author: "Dev / Coder", Token: "tok"}
 	res, err := c.Run(context.Background(), turn)
 	if err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestCodexRunFresh(t *testing.T) {
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
 		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-codex:/state", "-v", "tools:/opt/cinderline:ro"},
-		Env:     append([]string{"DISABLE_AUTOUPDATER=1"}, codexEnv("sk-oa", turn)...),
+		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1"}, codexEnv("sk-oa", turn), wantIdentity),
 		Cmd:     append([]string{"sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`, "/opt/cinderline/bin/codex"}, codexArgs(turn, "https://cs.example/mcp", "")...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,

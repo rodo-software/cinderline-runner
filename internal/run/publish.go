@@ -109,7 +109,7 @@ func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[
 	// Built here, never passed in, so the push can never target the base.
 	branch := name.Name + "/" + pub.Ref
 	title := pullRequestTitle(pub.Ref, pub.Title)
-	if _, err := ws.Commit(ctx, pub.Dir, title); err != nil {
+	if _, err := ws.Commit(ctx, pub.Dir, leadAuthor(pub.Team), title); err != nil {
 		return err
 	}
 

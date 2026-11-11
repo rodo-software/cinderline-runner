@@ -9,6 +9,7 @@ You work in the current directory, a git worktree on branch `cinderline/CSR-3`. 
 Rules from the runner:
 
 - Do the task below: edit and test code in this directory, and run the checks that apply. You may commit with git; the runner commits whatever you leave.
+- Git is set up: your commits get this team's and agent's name as author and committer. Do not change that identity: no `git config user.*`, no `--author`, no `GIT_AUTHOR_*` or `GIT_COMMITTER_*` variables.
 - Do not push, switch branches or rewrite commits that are already there.
 - Never edit files under `.forgejo/`, `.github/` or `.gitlab/`, or `.gitlab-ci.yml` or `bitbucket-pipelines.yml` (CI, deploy and repository settings) and never commit secrets or `.env` files.
 - You have no access to Cinderline or to people. If you have a question for a person, or something blocks you, say so in your report and do what you can.

@@ -273,10 +273,10 @@ func TestPublishPushesTheIssueBranch(t *testing.T) {
 		if err := r.run(t); err == nil || !strings.Contains(err.Error(), "forge unreachable") {
 			t.Fatalf("Publish = %v, want the forge's error", err)
 		}
-		want := []workspace.Call{{Method: "Commit", Args: []any{"/clone", "CSR-1: T"}}}
+		want := []workspace.Call{{Method: "Commit", Args: []any{"/clone", "Dev / Builder", "CSR-1: T"}}}
 		for range 5 {
 			want = append(want,
-				workspace.Call{Method: "MergeBase", Args: []any{"/clone", "main"}},
+				workspace.Call{Method: "MergeBase", Args: []any{"/clone", "main", "Dev / Builder"}},
 				workspace.Call{Method: "IsAncestor", Args: []any{"/clone", "HEAD", "main"}},
 				workspace.Call{Method: "Push", Args: []any{"/clone", "cinderline/CSR-1"}})
 		}

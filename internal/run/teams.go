@@ -75,6 +75,7 @@ You work in the current directory, a git worktree on branch ` + "`" + branch + "
 Rules from the runner:
 
 - Do the task below: edit and test code in this directory, and run the checks that apply. You may commit with git; the runner commits whatever you leave.
+` + gitIdentityRule + `
 - Do not push, switch branches or rewrite commits that are already there.
 - Never edit files under ` + "`.forgejo/`, `.github/` or `.gitlab/`, or `.gitlab-ci.yml` or `bitbucket-pipelines.yml`" + ` (CI, deploy and repository settings) and never commit secrets or ` + "`.env`" + ` files.
 ` + access + `
@@ -96,6 +97,23 @@ func subIssuesToRun(subs []cinderline.SubIssue, afterRestart bool) []cinderline.
 		}
 	}
 	return out
+}
+
+// gitAuthor is agent's git identity: the name Cinderline gives its token,
+// "<team> / <agent>" cut to 100 characters (app decision 0045, CSR-169).
+func gitAuthor(team cinderline.Team, agent string) string {
+	r := []rune(team.Name + " / " + agent)
+	return string(r[:min(len(r), 100)])
+}
+
+// leadAuthor is the run's lead agent's (the solo agent or the orchestrator)
+// git identity, for the commits the runner makes itself; a team without
+// agents leaves the runner's own.
+func leadAuthor(team cinderline.Team) string {
+	if len(team.Agents) == 0 {
+		return ""
+	}
+	return gitAuthor(team, team.Agents[0].Name)
 }
 
 func deref(s *string) string {
@@ -212,7 +230,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 		}
 		cursor := newestCommentID(cs)
 
-		turn := client.Turn{Dir: dir, SessionID: session, MaxTurns: j.MaxTurns, MaxMinutes: j.Team.MaxMinutes, Model: deref(orch.Model), Ponytail: j.Team.Ponytail}
+		turn := client.Turn{Dir: dir, SessionID: session, MaxTurns: j.MaxTurns, MaxMinutes: j.Team.MaxMinutes, Model: deref(orch.Model), Author: gitAuthor(j.Team, orch.Name), Ponytail: j.Team.Ponytail}
 		switch {
 		case session == "":
 			turn.Prompt = j.Prompt
@@ -371,6 +389,7 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderline.Client, clients 
 		MaxTurns:   j.MaxTurns,
 		MaxMinutes: j.Team.MaxMinutes,
 		Model:      deref(agent.Model),
+		Author:     gitAuthor(j.Team, agent.Name),
 		Ponytail:   j.Team.Ponytail,
 	}
 	if self {
@@ -393,7 +412,7 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderline.Client, clients 
 	var res client.Result
 	for attempt := 1; attempt <= 2; attempt++ {
 		// The budget is the parent's (app decision 2026-11-05-cost-per-issue-and-budget).
-		if err := p.checkBudget(ctx, c, ws, j.Ref, dir); err != nil {
+		if err := p.checkBudget(ctx, c, ws, j.Ref, dir, turn.Author); err != nil {
 			return "", err
 		}
 		log.Info("run started", "agent", agent.Name, "attempt", attempt, "session", next.SessionID)
@@ -415,7 +434,7 @@ func (p Project) runSubIssue(ctx context.Context, c *cinderline.Client, clients 
 	if ctx.Err() != nil {
 		return "", ctx.Err()
 	}
-	if _, cerr := ws.Commit(ctx, dir, r.Ref+": "+sub.Title); cerr != nil {
+	if _, cerr := ws.Commit(ctx, dir, turn.Author, r.Ref+": "+sub.Title); cerr != nil {
 		return "", cerr
 	}
 	if err != nil {

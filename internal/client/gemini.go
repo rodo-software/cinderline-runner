@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -171,7 +172,7 @@ func (c *Gemini) Run(ctx context.Context, t Turn) (Result, error) {
 		Issue:  path.Base(t.Dir),
 		Dir:    t.Dir,
 		Mounts: agentMounts(c.Project, "gemini", c.Tools),
-		Env:    append(append(append([]string(nil), c.Tools.Env...), c.Tools.OpenCodeEnv...), geminiEnv(c.Key, c.Vertex, t, c.MCPURL)...),
+		Env:    slices.Concat(c.Tools.Env, c.Tools.OpenCodeEnv, geminiEnv(c.Key, c.Vertex, t, c.MCPURL), workspace.Identity(c.Project, t.Author)),
 		Cmd: append([]string{
 			"sh", "-c", `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' "$` + geminiSettingsVar + `" > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`,
 			tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js",

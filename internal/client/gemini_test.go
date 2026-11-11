@@ -183,7 +183,7 @@ func TestGeminiRunFresh(t *testing.T) {
 			return "", nil
 		},
 	}
-	turn := Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "gemini-2.5-pro", Token: "tok"}
+	turn := Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "gemini-2.5-pro", Author: "Dev / Coder", Token: "tok"}
 	res, err := c.Run(context.Background(), turn)
 	if err != nil {
 		t.Fatal(err)
@@ -196,7 +196,7 @@ func TestGeminiRunFresh(t *testing.T) {
 		Issue:  "CSR-7",
 		Dir:    "/runs/CSR-7",
 		Mounts: []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-gemini:/state", "-v", "tools:/opt/cinderline:ro"},
-		Env:    append([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, geminiEnv("AIza-key", false, turn, "https://cs.example/mcp")...),
+		Env:    slices.Concat([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, geminiEnv("AIza-key", false, turn, "https://cs.example/mcp"), wantIdentity),
 		Cmd: append([]string{
 			"sh", "-c", `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' "$CINDERLINE_GEMINI_SETTINGS" > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`,
 			"/opt/cinderline/bin/node", "/opt/cinderline/gemini/bundle/gemini.js",

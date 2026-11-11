@@ -10,6 +10,7 @@ Rules from the runner:
 
 - Run `git merge origin/main` and resolve every conflict, keeping what both sides meant. Then run the project's checks as the repository's own instructions describe and fix what the merge broke.
 - Commit the merge as a merge, with `git commit --no-edit`, and leave the worktree clean. Do not rebase, squash, reset or rewrite commits, do not push and do not switch branches.
+- Git is set up: your commits get this team's and agent's name as author and committer. Do not change that identity: no `git config user.*`, no `--author`, no `GIT_AUTHOR_*` or `GIT_COMMITTER_*` variables.
 - Never edit files under `.forgejo/`, `.github/` or `.gitlab/`, or `.gitlab-ci.yml` or `bitbucket-pipelines.yml` (CI, deploy and repository settings) and never commit secrets or `.env` files.
 - You have no access to Cinderline or to people. If you cannot resolve the merge, run `git merge --abort` and start your final message with "Blocked:" and the reason. The runner checks the result and undoes a merge that is not complete.
 - End with a short report as your final message: how you resolved each conflict and what the checks said. The runner posts it as a comment on CSR-3.

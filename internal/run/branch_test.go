@@ -129,7 +129,7 @@ func TestUpdateBranchMergesCleanly(t *testing.T) {
 	if conflicts != nil || err != nil {
 		t.Fatalf("UpdateBranch = %v, %v", conflicts, err)
 	}
-	if got := r.ws.Calls(); !reflect.DeepEqual(got, []workspace.Call{{Method: "MergeBase", Args: []any{"/clone", "main"}}}) {
+	if got := r.ws.Calls(); !reflect.DeepEqual(got, []workspace.Call{{Method: "MergeBase", Args: []any{"/clone", "main", " / Builder"}}}) {
 		t.Errorf("workspace calls = %+v", got)
 	}
 	if len(r.opencode.Calls()) != 0 || len(r.api.writes()) != 0 {
@@ -252,7 +252,7 @@ func TestUpdateBranchResolver(t *testing.T) {
 				t.Fatalf("resolver runs = %d, want 1 (never a retry)", len(runs))
 			}
 			turn := runs[0].Args[0].(client.Turn)
-			if turn.Token != "" || turn.SessionID != "" || turn.Dir != "/clone" || turn.Model != "openrouter/qwen" || turn.MaxTurns != 30 || turn.MaxMinutes != 45 || !turn.Ponytail {
+			if turn.Token != "" || turn.SessionID != "" || turn.Dir != "/clone" || turn.Model != "openrouter/qwen" || turn.MaxTurns != 30 || turn.MaxMinutes != 45 || !turn.Ponytail || turn.Author != "Dev / Merge Resolver" {
 				t.Errorf("resolver turn = %+v, want a fresh session in the clone without a token (0122)", turn)
 			}
 			if !strings.HasPrefix(turn.Prompt, "Resolve merges.") || !strings.Contains(turn.Prompt, "# Your task: merge main into cinderline/CSR-1") ||
@@ -334,7 +334,7 @@ func TestResumedRoundsCatchUpFirst(t *testing.T) {
 				t.Fatalf("Rounds = %v", err)
 			}
 			calls := r.ws.Calls()[1:] // after Exists
-			if len(calls) < 2 || calls[0].Method != "Commit" || calls[0].Args[1] != "CSR-1: Parent" || calls[1].Method != "MergeBase" {
+			if len(calls) < 2 || calls[0].Method != "Commit" || calls[0].Args[1] != "Dev / Builder" || calls[0].Args[2] != "CSR-1: Parent" || calls[1].Method != "MergeBase" {
 				t.Errorf("workspace calls = %+v, want the commit, then the merge first", calls)
 			}
 			want := []string{"orchestrator"}
@@ -477,6 +477,10 @@ func TestReviewBranches(t *testing.T) {
 				case "Prepare":
 					if !reflect.DeepEqual(c.Args, []any{"cinderline/CSR-1", "main"}) {
 						t.Errorf("Prepare %v", c.Args)
+					}
+				case "MergeBase":
+					if c.Args[2] != "Dev / Builder" {
+						t.Errorf("MergeBase %v: want the lead agent's identity", c.Args)
 					}
 				case "Push":
 					if !reflect.DeepEqual(c.Args, []any{"/review", "cinderline/CSR-1"}) {

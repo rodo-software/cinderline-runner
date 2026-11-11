@@ -100,7 +100,7 @@ func TestAFollowUpResumesTheKeptSession(t *testing.T) {
 				}
 			}
 			if tt.comment == "" {
-				want := client.Turn{Dir: clone, Prompt: FollowUpPrompt("CSR-7"), SessionID: "s1", MaxTurns: 50, MaxMinutes: 30, Token: "scoped"}
+				want := client.Turn{Dir: clone, Prompt: FollowUpPrompt("CSR-7"), SessionID: "s1", MaxTurns: 50, MaxMinutes: 30, Author: "Dev / Coder", Token: "scoped"}
 				if second != want {
 					t.Fatalf("second turn = %+v, want %+v", second, want)
 				}

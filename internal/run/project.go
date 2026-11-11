@@ -384,7 +384,7 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	turn := client.Turn{
 		Dir: dir, Prompt: prompt, MaxTurns: maxTurns,
 		MaxMinutes: team.MaxMinutes, Model: deref(agent.Model),
-		Token: token, Ponytail: team.Ponytail,
+		Author: gitAuthor(team, agent.Name), Token: token, Ponytail: team.Ponytail,
 	}
 	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Agent: agent.Name, Client: agent.Client, Workspace: p.Workspace, Turn: turn, Resume: session, FollowUp: resumed && !note.Kept.IsZero(), Links: LinkedSection(links)})
 	if ctx.Err() == nil && !out.Paused {

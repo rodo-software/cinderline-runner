@@ -11,13 +11,14 @@ type Workspace interface {
 	// Prepare makes or reuses the clone for branch, starting from base when
 	// the branch is new, and returns its dir.
 	Prepare(ctx context.Context, branch, base string) (string, error)
-	// Commit commits everything left in dir and reports whether there was
-	// anything to commit.
-	Commit(ctx context.Context, dir, message string) (bool, error)
+	// Commit commits everything left in dir, with author ("<team> / <agent>")
+	// as author and committer, and reports whether there was anything to
+	// commit.
+	Commit(ctx context.Context, dir, author, message string) (bool, error)
 	// MergeBase fetches and merges base into the clone's branch and returns
 	// the conflicting files; none means the merge succeeded. A conflicted
-	// merge is aborted, so the clone is as it was.
-	MergeBase(ctx context.Context, dir, base string) ([]string, error)
+	// merge is aborted, so the clone is as it was. A merge commit is author's.
+	MergeBase(ctx context.Context, dir, base, author string) ([]string, error)
 	// IsAncestor reports whether commit ancestor is an ancestor of
 	// descendant. A branch name other than the clone's own means the
 	// remote's branch as last fetched.

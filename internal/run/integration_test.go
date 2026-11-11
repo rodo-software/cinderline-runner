@@ -56,7 +56,9 @@ func (s *scripted) Run(ctx context.Context, spec environment.Spec) (string, erro
 // agentScript checks what a real agent relies on, then does the work: the
 // tools volume's Claude Code runs on the image's libc, the prompt arrives on
 // stdin, the credential arrives by name, MySQL is on the private network and
-// the clone is on the issue's branch. It ends with Claude Code's JSON result.
+// the clone is on the issue's branch. It commits hello.txt with the identity
+// the runner set and leaves left.txt for the runner to commit (CSR-169). It
+// ends with Claude Code's JSON result.
 func agentScript(ref string) string {
 	return `set -eu
 ` + tools.Path + `/bin/claude --version
@@ -65,6 +67,9 @@ test "$ANTHROPIC_API_KEY" = ` + itCredential + `
 getent hosts mysql
 test "$(git rev-parse --abbrev-ref HEAD)" = ` + name.Name + `/` + ref + `
 echo 'written by the scripted agent' > hello.txt
+git add hello.txt
+git commit --quiet -m 'Add hello.txt'
+echo 'left for the runner' > left.txt
 echo '{"type":"result","subtype":"success","result":"Added hello.txt."}'`
 }
 
@@ -152,6 +157,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 
 	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: "claude", Turn: client.Turn{
 		Dir: dir, Prompt: CodingPrompt(team, ref, "Add hello.txt", "Add a file.", branch, project, nil, nil), MaxTurns: 10, MaxMinutes: team.MaxMinutes,
+		Author: gitAuthor(team, "Coder"),
 	}})
 	if err != nil {
 		t.Fatalf("Attempts: %v", err)
@@ -175,6 +181,20 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	}
 	if got := get(t, ctx, forgejoURL+"/api/v1/repos/it/repo/raw/hello.txt?ref="+branch, token); got != "written by the scripted agent\n" {
 		t.Errorf("hello.txt on %s = %q", branch, got)
+	}
+	// CSR-169: the agent's commit and the runner's, and nothing else, carry
+	// the run's one identity as author and committer.
+	var commits []struct {
+		Commit struct{ Author, Committer struct{ Name, Email string } }
+	}
+	if err := json.Unmarshal([]byte(get(t, ctx, forgejoURL+"/api/v1/repos/it/repo/commits?sha="+branch+"&limit=2&stat=false&files=false", token)), &commits); err != nil || len(commits) != 2 {
+		t.Fatalf("commits on %s = %+v, %v; want the runner's and the agent's", branch, commits, err)
+	}
+	who := struct{ Name, Email string }{"Dev / Coder", "runner-" + strings.ToLower(project) + "@runner.invalid"}
+	for i, c := range commits {
+		if c.Commit.Author != who || c.Commit.Committer != who {
+			t.Errorf("commit %d on %s by %+v, committed by %+v; want %+v", i, branch, c.Commit.Author, c.Commit.Committer, who)
+		}
 	}
 	api.mu.Lock()
 	final := status

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -210,6 +211,25 @@ func agentArgvGit(dir, issue string, git ...string) []string {
 	return append(argv, git...)
 }
 
+// asAuthor is agent-side argv with "Solo / Coder" as author and committer,
+// the -e flags right after the labels.
+func asAuthor(argv []string) []string {
+	ident := []string{"-e", "GIT_AUTHOR_NAME=Solo / Coder", "-e", "GIT_AUTHOR_EMAIL=runner-csr@runner.invalid",
+		"-e", "GIT_COMMITTER_NAME=Solo / Coder", "-e", "GIT_COMMITTER_EMAIL=runner-csr@runner.invalid"}
+	return slices.Concat(argv[:7], ident, argv[7:])
+}
+
+func TestIdentity(t *testing.T) {
+	want := []string{"GIT_AUTHOR_NAME=Opus 5.5 Solo / Feature Coder", "GIT_AUTHOR_EMAIL=runner-csr@runner.invalid",
+		"GIT_COMMITTER_NAME=Opus 5.5 Solo / Feature Coder", "GIT_COMMITTER_EMAIL=runner-csr@runner.invalid"}
+	if got := Identity("CSR", "Opus 5.5 Solo / Feature Coder"); !reflect.DeepEqual(got, want) {
+		t.Errorf("Identity = %q, want %q", got, want)
+	}
+	if got := Identity("CSR", ""); got != nil {
+		t.Errorf("Identity without an author = %q, want none", got)
+	}
+}
+
 // fetchCalls are the helper's Fetch, as Prepare and MergeBase start with it.
 func fetchCalls() []execCall {
 	return []execCall{
@@ -288,7 +308,7 @@ func TestDockerCommit(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			d, calls := scripted(nil, map[int]error{1: tt.staged})
-			got, err := d.Commit(context.Background(), dir, "CSR-30: -m a title")
+			got, err := d.Commit(context.Background(), dir, "Solo / Coder", "CSR-30: -m a title")
 			if err != nil || got != tt.want {
 				t.Fatalf("Commit = %v, %v; want %v", got, err, tt.want)
 			}
@@ -297,7 +317,7 @@ func TestDockerCommit(t *testing.T) {
 				{nil, agentArgv("diff", "--cached", "--quiet")},
 			}
 			if tt.commits {
-				want = append(want, execCall{nil, agentArgv("commit", "--quiet", "--no-verify", "-m", "CSR-30: -m a title")})
+				want = append(want, execCall{nil, asAuthor(agentArgv("commit", "--quiet", "--no-verify", "-m", "CSR-30: -m a title"))})
 			}
 			checkCalls(t, *calls, want)
 		})
@@ -305,18 +325,18 @@ func TestDockerCommit(t *testing.T) {
 }
 
 func TestDockerMergeBase(t *testing.T) {
-	merge := execCall{nil, agentArgv("merge", "--quiet", "--no-edit", "origin/main")}
+	merge := execCall{nil, asAuthor(agentArgv("merge", "--quiet", "--no-edit", "origin/main"))}
 	fetch := execCall{nil, agentArgv("fetch", "--quiet", "--prune", "--no-tags", "/repo", "+refs/heads/*:refs/remotes/origin/*")}
 
 	d, calls := scripted(nil, nil)
-	conflicts, err := d.MergeBase(context.Background(), dir, "main")
+	conflicts, err := d.MergeBase(context.Background(), dir, "main", "Solo / Coder")
 	if err != nil || conflicts != nil {
 		t.Fatalf("MergeBase = %q, %v; want merged", conflicts, err)
 	}
 	checkCalls(t, *calls, append(fetchCalls(), fetch, merge))
 
 	d, calls = scripted([]string{5: "a.go\x00dir/b c.go\x00"}, map[int]error{4: exitErr(1)})
-	conflicts, err = d.MergeBase(context.Background(), dir, "main")
+	conflicts, err = d.MergeBase(context.Background(), dir, "main", "Solo / Coder")
 	if err != nil || !reflect.DeepEqual(conflicts, []string{"a.go", "dir/b c.go"}) {
 		t.Fatalf("MergeBase = %q, %v; want the two conflicts", conflicts, err)
 	}
@@ -327,7 +347,7 @@ func TestDockerMergeBase(t *testing.T) {
 
 	// A failed merge without conflicts is an error, not "merged".
 	d, _ = scripted(nil, map[int]error{4: exitErr(1)})
-	if _, err := d.MergeBase(context.Background(), dir, "main"); err == nil {
+	if _, err := d.MergeBase(context.Background(), dir, "main", "Solo / Coder"); err == nil {
 		t.Error("MergeBase = nil error for a failed merge without conflicts")
 	}
 }

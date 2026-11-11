@@ -120,10 +120,10 @@ func (f *Fake) Prepare(_ context.Context, branch, base string) (string, error) {
 	return r.Dir, r.Err
 }
 
-func (f *Fake) Commit(_ context.Context, dir, message string) (bool, error) {
+func (f *Fake) Commit(_ context.Context, dir, author, message string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("Commit", dir, message)
+	f.record("Commit", dir, author, message)
 	if len(f.Commits) == 0 {
 		return false, fmt.Errorf("%w for Commit", ErrNotScripted)
 	}
@@ -132,10 +132,10 @@ func (f *Fake) Commit(_ context.Context, dir, message string) (bool, error) {
 	return r.Committed, r.Err
 }
 
-func (f *Fake) MergeBase(_ context.Context, dir, base string) ([]string, error) {
+func (f *Fake) MergeBase(_ context.Context, dir, base, author string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("MergeBase", dir, base)
+	f.record("MergeBase", dir, base, author)
 	if len(f.MergeBases) == 0 {
 		return nil, fmt.Errorf("%w for MergeBase", ErrNotScripted)
 	}

@@ -194,7 +194,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 			return "", nil
 		},
 	}
-	turn := Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "openrouter/q/c", Token: "tok"}
+	turn := Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "openrouter/q/c", Author: "Dev / Coder", Token: "tok"}
 	res, err := c.Run(context.Background(), turn)
 	if err != nil {
 		t.Fatal(err)
@@ -207,7 +207,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
 		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-opencode:/state", "-v", "tools:/opt/cinderline:ro"},
-		Env:     append([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp")...),
+		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp"), wantIdentity),
 		Cmd:     append([]string{"/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,

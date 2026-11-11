@@ -68,7 +68,7 @@ func TestAnIssueOverItsBudgetRunsNoAgentIsBlockedAndKeepsItsNote(t *testing.T) {
 	for _, c := range ws.Calls() {
 		steps = append(steps, c.Method+" "+fmt.Sprint(c.Args[1:]...))
 	}
-	want := []string{"Exists ", "Commit CSR-7: T", "MergeBase main", "Commit CSR-7: T", "Push cinderline/CSR-7"}
+	want := []string{"Exists ", "Commit Dev / BuilderCSR-7: T", "MergeBase mainDev / Builder", "Commit Dev / BuilderCSR-7: T", "Push cinderline/CSR-7"}
 	if !slices.Equal(steps, want) {
 		t.Errorf("workspace = %q, want %q", steps, want)
 	}

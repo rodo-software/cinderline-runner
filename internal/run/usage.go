@@ -89,8 +89,9 @@ func (p Project) reportUsage(ctx context.Context, c *cinderline.Client, top stri
 // EMBER-143; Willem on CSR-76), moves top to Blocked with a "Budget reached"
 // comment and returns errBudget. A running CLI is never stopped (app
 // decision 2026-11-05-cost-per-issue-and-budget). The usage of this run is
-// reported only at its end, so its known cost is added here.
-func (p Project) checkBudget(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, top, dir string) error {
+// reported only at its end, so its known cost is added here. The commit is
+// author's, the agent's that was about to run.
+func (p Project) checkBudget(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, top, dir, author string) error {
 	issue, err := c.GetIssue(ctx, top)
 	if err != nil {
 		return err
@@ -99,7 +100,7 @@ func (p Project) checkBudget(ctx context.Context, c *cinderline.Client, ws works
 	if !issue.OverBudget && (issue.BudgetUSD == nil || spent < *issue.BudgetUSD) {
 		return nil
 	}
-	if _, err := ws.Commit(ctx, dir, top+": "+issue.Title); err != nil {
+	if _, err := ws.Commit(ctx, dir, author, top+": "+issue.Title); err != nil {
 		return err
 	}
 	if err := ws.Push(ctx, dir, name.Name+"/"+top); err != nil {

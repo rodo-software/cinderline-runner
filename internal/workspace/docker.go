@@ -243,21 +243,33 @@ func (d *Docker) Prepare(ctx context.Context, branch, base string) (string, erro
 	return dir, nil
 }
 
-// Commit commits everything in the clone, without hooks.
-func (d *Docker) Commit(ctx context.Context, dir, message string) (bool, error) {
+// Identity is the git environment that makes author the author and
+// committer of a project's commits, with the address of the project's runner
+// user in Cinderline: fixed and non-routable, never a person's (CSR-169).
+// An empty author is none.
+func Identity(project, author string) []string {
+	if author == "" {
+		return nil
+	}
+	email := "runner-" + strings.ToLower(project) + "@runner.invalid"
+	return []string{"GIT_AUTHOR_NAME=" + author, "GIT_AUTHOR_EMAIL=" + email, "GIT_COMMITTER_NAME=" + author, "GIT_COMMITTER_EMAIL=" + email}
+}
+
+// Commit commits everything in the clone as author, without hooks.
+func (d *Docker) Commit(ctx context.Context, dir, author, message string) (bool, error) {
 	if _, err := d.git(ctx, dir, "add", "--all"); err != nil {
 		return false, err
 	}
 	if same, err := d.succeeds(ctx, dir, "diff", "--cached", "--quiet"); same || err != nil {
 		return false, err
 	}
-	_, err := d.git(ctx, dir, "commit", "--quiet", "--no-verify", "-m", message)
+	_, err := d.gitAs(ctx, dir, author, "commit", "--quiet", "--no-verify", "-m", message)
 	return err == nil, err
 }
 
 // MergeBase fetches into the helper's clone and from there into the agent's,
-// then merges the base. A conflicted merge is aborted.
-func (d *Docker) MergeBase(ctx context.Context, dir, base string) ([]string, error) {
+// then merges the base as author. A conflicted merge is aborted.
+func (d *Docker) MergeBase(ctx context.Context, dir, base, author string) ([]string, error) {
 	if err := checkDir(dir); err != nil {
 		return nil, err
 	}
@@ -268,7 +280,8 @@ func (d *Docker) MergeBase(ctx context.Context, dir, base string) ([]string, err
 	if _, err := d.git(ctx, dir, "fetch", "--quiet", "--prune", "--no-tags", RepoPath, "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		return nil, err
 	}
-	merged, mergeErr := d.succeeds(ctx, dir, "merge", "--quiet", "--no-edit", "origin/"+base)
+	_, err := d.gitAs(ctx, dir, author, "merge", "--quiet", "--no-edit", "origin/"+base)
+	merged, mergeErr := exitedZero(err)
 	if merged || mergeErr != nil {
 		return nil, mergeErr
 	}
@@ -345,6 +358,11 @@ func (d *Docker) Log(ctx context.Context, dir, base string) (string, error) {
 // other failure an error.
 func (d *Docker) succeeds(ctx context.Context, dir string, args ...string) (bool, error) {
 	_, err := d.git(ctx, dir, args...)
+	return exitedZero(err)
+}
+
+// exitedZero is git's err as succeeds reports it.
+func exitedZero(err error) (bool, error) {
 	var exit interface{ ExitCode() int }
 	if errors.As(err, &exit) && exit.ExitCode() == 1 {
 		return false, nil
@@ -358,10 +376,19 @@ func (d *Docker) succeeds(ctx context.Context, dir string, args ...string) (bool
 // and global config are ignored, so the host's never applies. Hooks are off:
 // the git image lacks the project's toolchain, and the agent can write them.
 func (d *Docker) git(ctx context.Context, dir string, args ...string) (string, error) {
+	return d.gitAs(ctx, dir, "", args...)
+}
+
+// gitAs is git with author as the author and committer of what it commits;
+// empty leaves gitConfig's.
+func (d *Docker) gitAs(ctx context.Context, dir, author string, args ...string) (string, error) {
 	if err := checkDir(dir); err != nil {
 		return "", err
 	}
 	argv := append([]string{"docker", "run", "--rm"}, d.labels(path.Base(dir))...)
+	for _, kv := range Identity(d.Project, author) {
+		argv = append(argv, "-e", kv)
+	}
 	argv = append(argv, "--network", "none", "--user", AgentUser,
 		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
 		"-v", d.volume("repo")+":"+RepoPath+":ro", "-v", d.volume("runs")+":"+RunsPath,

@@ -396,7 +396,7 @@ func TestReclaimedParentRunsOpenSubIssuesThenResumes(t *testing.T) {
 	for _, c := range r.ws.Calls() {
 		steps = append(steps, c.Method+" "+strings.ReplaceAll(c.Args[0].(string), clone, "clone")+" "+fmt.Sprint(c.Args[1:]...))
 	}
-	wantSteps := []string{"Exists clone ", "Commit clone CSR-1: Parent", "MergeBase clone main", "Commit clone CSR-3: Mine", "Push clone cinderline/CSR-1", "Commit clone CSR-2: Part", "Push clone cinderline/CSR-1"}
+	wantSteps := []string{"Exists clone ", "Commit clone Dev / BuilderCSR-1: Parent", "MergeBase clone mainDev / Builder", "Commit clone Dev / BuilderCSR-3: Mine", "Push clone cinderline/CSR-1", "Commit clone Dev / QwenCSR-2: Part", "Push clone cinderline/CSR-1"}
 	if !slices.Equal(steps, wantSteps) {
 		t.Errorf("workspace = %q, want %q", steps, wantSteps)
 	}
@@ -439,10 +439,10 @@ func TestAFreshTeamRunPlansRunsAndReviews(t *testing.T) {
 		t.Errorf("Prepare calls = %+v", got)
 	}
 	plan := turns(&r.claude.Fake)[0]
-	if want := (client.Turn{Dir: "/fresh", Prompt: "plan CSR-1", MaxTurns: 30, MaxMinutes: 45, Model: "m", Token: "orchestrator-CSR-1", Ponytail: true}); plan != want {
+	if want := (client.Turn{Dir: "/fresh", Prompt: "plan CSR-1", MaxTurns: 30, MaxMinutes: 45, Model: "m", Author: "Dev / Builder", Token: "orchestrator-CSR-1", Ponytail: true}); plan != want {
 		t.Errorf("planning turn = %+v, want %+v", plan, want)
 	}
-	if w := turns(&r.opencode.Fake)[0]; w.Dir != "/fresh" || w.Token != "" || w.MaxMinutes != 45 || !w.Ponytail {
+	if w := turns(&r.opencode.Fake)[0]; w.Dir != "/fresh" || w.Token != "" || w.MaxMinutes != 45 || !w.Ponytail || w.Author != "Dev / Qwen" {
 		t.Errorf("worker turn = %+v", w)
 	}
 	if want := (Paused{Dir: "/fresh", Session: "s1", Client: "claude"}); noteDuringWorker != want {
@@ -755,5 +755,19 @@ func TestTeamCursorSeesAPersonsCommentPastTheCap(t *testing.T) {
 	}
 	if ts := turns(&r.claude.Fake); len(ts) != 2 || ts[1].Prompt != CommentsPrompt("CSR-1") {
 		t.Fatalf("turns = %+v", ts)
+	}
+}
+
+// CSR-169: an agent's git name is its token's name, cut as the app cuts it.
+func TestGitAuthor(t *testing.T) {
+	if got := gitAuthor(cinderline.Team{Name: "Opus 5.5 Solo"}, "Feature Coder"); got != "Opus 5.5 Solo / Feature Coder" {
+		t.Errorf("gitAuthor = %q", got)
+	}
+	long := gitAuthor(cinderline.Team{Name: strings.Repeat("é", 99)}, "Coder")
+	if want := strings.Repeat("é", 99) + " "; long != want {
+		t.Errorf("gitAuthor of a long name = %q, want 100 characters", long)
+	}
+	if got := leadAuthor(cinderline.Team{Name: "Empty"}); got != "" {
+		t.Errorf("leadAuthor without agents = %q, want none", got)
 	}
 }

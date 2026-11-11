@@ -28,11 +28,11 @@ func TestFake(t *testing.T) {
 		t.Errorf("Prepare = %q, %v", d, err)
 	}
 	for _, want := range []bool{true, false} {
-		if c, err := f.Commit(ctx, dir, "msg"); c != want || err != nil {
+		if c, err := f.Commit(ctx, dir, "T / A", "msg"); c != want || err != nil {
 			t.Errorf("Commit = %v, %v; want %v", c, err, want)
 		}
 	}
-	if c, err := f.MergeBase(ctx, dir, "main"); !reflect.DeepEqual(c, []string{"a.go", "b.go"}) || err != nil {
+	if c, err := f.MergeBase(ctx, dir, "main", "T / A"); !reflect.DeepEqual(c, []string{"a.go", "b.go"}) || err != nil {
 		t.Errorf("MergeBase = %v, %v", c, err)
 	}
 	if yes, err := f.IsAncestor(ctx, dir, "main", "HEAD"); !yes || err != nil {
@@ -59,9 +59,9 @@ func TestFake(t *testing.T) {
 
 	want := []Call{
 		{"Prepare", []any{"x/WEB-1", "main"}},
-		{"Commit", []any{dir, "msg"}},
-		{"Commit", []any{dir, "msg"}},
-		{"MergeBase", []any{dir, "main"}},
+		{"Commit", []any{dir, "T / A", "msg"}},
+		{"Commit", []any{dir, "T / A", "msg"}},
+		{"MergeBase", []any{dir, "main", "T / A"}},
 		{"IsAncestor", []any{dir, "main", "HEAD"}},
 		{"Push", []any{dir, "x/WEB-1"}},
 		{"Head", []any{dir}},
@@ -83,8 +83,8 @@ func TestFakeEmptyQueues(t *testing.T) {
 		call   func() (zero bool, err error)
 	}{
 		{"Prepare", func() (bool, error) { d, err := f.Prepare(ctx, "b", "main"); return d == "", err }},
-		{"Commit", func() (bool, error) { c, err := f.Commit(ctx, "/d", "m"); return !c, err }},
-		{"MergeBase", func() (bool, error) { c, err := f.MergeBase(ctx, "/d", "main"); return c == nil, err }},
+		{"Commit", func() (bool, error) { c, err := f.Commit(ctx, "/d", "T / A", "m"); return !c, err }},
+		{"MergeBase", func() (bool, error) { c, err := f.MergeBase(ctx, "/d", "main", "T / A"); return c == nil, err }},
 		{"IsAncestor", func() (bool, error) { y, err := f.IsAncestor(ctx, "/d", "a", "b"); return !y, err }},
 		{"Push", func() (bool, error) { return true, f.Push(ctx, "/d", "b") }},
 		{"Head", func() (bool, error) { c, err := f.Head(ctx, "/d"); return c == "", err }},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func (c *OpenCode) Run(ctx context.Context, t Turn) (Result, error) {
 		Dir:    t.Dir,
 		Mounts: agentMounts(c.Project, "opencode", c.Tools),
 		// OpenCodeEnv: on musl, the libraries the binary needs from the tools volume.
-		Env:     append(append(append([]string(nil), c.Tools.Env...), c.Tools.OpenCodeEnv...), opencodeEnv(c.Key, t, c.MCPURL)...),
+		Env:     slices.Concat(c.Tools.Env, c.Tools.OpenCodeEnv, opencodeEnv(c.Key, t, c.MCPURL), workspace.Identity(c.Project, t.Author)),
 		Cmd:     append([]string{tools.Path + "/bin/opencode"}, opencodeArgs(t)...),
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,

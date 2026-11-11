@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -61,7 +62,7 @@ func (c *Claude) Run(ctx context.Context, t Turn) (Result, error) {
 		Issue:   path.Base(t.Dir), // the clone is RunsPath/<REF>
 		Dir:     t.Dir,
 		Mounts:  agentMounts(c.Project, "claude", c.Tools),
-		Env:     append(append([]string(nil), c.Tools.Env...), claudeEnv(c.Credential, t)...),
+		Env:     slices.Concat(c.Tools.Env, claudeEnv(c.Credential, t), workspace.Identity(c.Project, t.Author)),
 		Cmd:     append([]string{tools.Path + "/bin/claude"}, claudeArgs(t, session, c.MCPURL)...),
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,

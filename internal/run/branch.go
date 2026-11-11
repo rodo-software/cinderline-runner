@@ -51,6 +51,7 @@ Rules from the runner:
 
 - Run ` + "`git merge origin/" + base + "`" + ` and resolve every conflict, keeping what both sides meant. Then run the project's checks as the repository's own instructions describe and fix what the merge broke.
 - Commit the merge as a merge, with ` + "`git commit --no-edit`" + `, and leave the worktree clean. Do not rebase, squash, reset or rewrite commits, do not push and do not switch branches.
+` + gitIdentityRule + `
 - Never edit files under ` + "`.forgejo/`, `.github/` or `.gitlab/`, or `.gitlab-ci.yml` or `bitbucket-pipelines.yml`" + ` (CI, deploy and repository settings) and never commit secrets or ` + "`.env`" + ` files.
 - You have no access to Cinderline or to people. If you cannot resolve the merge, run ` + "`git merge --abort`" + ` and start your final message with "Blocked:" and the reason. The runner checks the result and undoes a merge that is not complete.
 - End with a short report as your final message: how you resolved each conflict and what the checks said. The runner posts it as a comment on ` + ref + `.
@@ -91,7 +92,7 @@ func reportsBlocked(msg string) bool { return blocked.MatchString(msg) }
 // issue reached its budget the agent does not run and the error is errBudget.
 func (p Project) UpdateBranch(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, u Upkeep) ([]string, error) {
 	log := p.Log.With("project", p.Config.Key, "issue", u.Ref)
-	conflicts, err := ws.MergeBase(ctx, u.Dir, u.Base)
+	conflicts, err := ws.MergeBase(ctx, u.Dir, u.Base, leadAuthor(u.Team))
 	if err != nil || len(conflicts) == 0 {
 		return nil, err
 	}
@@ -132,13 +133,14 @@ func (p Project) UpdateBranch(ctx context.Context, c *cinderline.Client, clients
 		MaxTurns:   u.MaxTurns,
 		MaxMinutes: u.Team.MaxMinutes,
 		Model:      deref(agent.Model),
+		Author:     gitAuthor(u.Team, agent.Name),
 		Ponytail:   u.Team.Ponytail,
 	}
 	if solo {
 		turn.SessionID = u.Session
 		turn.Token = u.Token
 	}
-	if err := p.checkBudget(ctx, c, ws, u.Ref, u.Dir); err != nil {
+	if err := p.checkBudget(ctx, c, ws, u.Ref, u.Dir, turn.Author); err != nil {
 		return conflicts, err
 	}
 	res, runErr := cl.Run(ctx, turn)
@@ -204,7 +206,7 @@ func verifyMerge(ctx context.Context, ws workspace.Workspace, dir, base, head st
 // errBudget: the Merge Resolver did not run and the run must pause.
 func (p Project) CatchUp(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, u Upkeep, title string) error {
 	log := p.Log.With("project", p.Config.Key, "issue", u.Ref)
-	if _, err := ws.Commit(ctx, u.Dir, u.Ref+": "+title); err != nil {
+	if _, err := ws.Commit(ctx, u.Dir, leadAuthor(u.Team), u.Ref+": "+title); err != nil {
 		log.Warn("base not merged in", "err", err)
 		return nil
 	}
@@ -267,7 +269,7 @@ func (p Project) ReviewBranches(ctx context.Context, c *cinderline.Client, ws wo
 	if err != nil {
 		return err
 	}
-	trusted := map[int]bool{}
+	teams := map[int]cinderline.Team{}
 	for _, issue := range issues {
 		branch := name.Name + "/" + issue.Ref
 		if issue.Team == nil || issue.Parent != nil { // a sub-issue's branch is its parent's
@@ -276,15 +278,15 @@ func (p Project) ReviewBranches(ctx context.Context, c *cinderline.Client, ws wo
 		if keep[branch] || !slices.Contains(behind, branch) {
 			continue
 		}
-		if _, ok := trusted[issue.Team.ID]; !ok {
+		if _, ok := teams[issue.Team.ID]; !ok {
 			team, err := c.GetTeam(ctx, issue.Team.ID)
 			if err != nil {
 				p.Log.Warn("branch not updated", "project", p.Config.Key, "issue", issue.Ref, "err", err)
 				continue
 			}
-			trusted[issue.Team.ID] = team.Trusted
+			teams[issue.Team.ID] = team
 		}
-		if err := p.reviewBranch(ctx, c, ws, fg, issue, base, trusted[issue.Team.ID]); err != nil {
+		if err := p.reviewBranch(ctx, c, ws, fg, issue, base, teams[issue.Team.ID]); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -295,7 +297,7 @@ func (p Project) ReviewBranches(ctx context.Context, c *cinderline.Client, ws wo
 }
 
 // reviewBranch brings one Review issue's branch up to date with base.
-func (p Project) reviewBranch(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, fg forge.Forge, issue cinderline.Issue, base string, trusted bool) error {
+func (p Project) reviewBranch(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, fg forge.Forge, issue cinderline.Issue, base string, team cinderline.Team) error {
 	log := p.Log.With("project", p.Config.Key, "issue", issue.Ref)
 	branch := name.Name + "/" + issue.Ref
 	// A branch the remote lacks starts from base, so the first check skips it.
@@ -309,13 +311,13 @@ func (p Project) reviewBranch(ctx context.Context, c *cinderline.Client, ws work
 	if current, err := ws.IsAncestor(ctx, dir, base, "HEAD"); current || err != nil {
 		return err
 	}
-	conflicts, err := ws.MergeBase(ctx, dir, base)
+	conflicts, err := ws.MergeBase(ctx, dir, base, leadAuthor(team))
 	if err != nil {
 		return err
 	}
 	if len(conflicts) > 0 {
 		log.Info("behind the base with conflicts", "base", base, "conflicts", conflicts)
-		if trusted && deref(issue.MergeStatus) != "issue" {
+		if team.Trusted && deref(issue.MergeStatus) != "issue" {
 			p.setMergeStatus(ctx, c, issue.Ref, "issue")
 		}
 		return nil
@@ -327,7 +329,7 @@ func (p Project) reviewBranch(ctx context.Context, c *cinderline.Client, ws work
 	log.Info("base merged in", "base", base, "branch", branch)
 
 	// Only a trusted team merges without a person (0114).
-	if !trusted {
+	if !team.Trusted {
 		return nil
 	}
 	pr, open, err := fg.FindPullRequest(ctx, branch)

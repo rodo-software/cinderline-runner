@@ -148,6 +148,10 @@ func TestParseClaudeRecordedError(t *testing.T) {
 	}
 }
 
+// wantIdentity is the git identity of a turn by "Dev / Coder" in project
+// CSR, which every client puts last in the agent's environment (CSR-169).
+var wantIdentity = []string{"GIT_AUTHOR_NAME=Dev / Coder", "GIT_AUTHOR_EMAIL=runner-csr@runner.invalid", "GIT_COMMITTER_NAME=Dev / Coder", "GIT_COMMITTER_EMAIL=runner-csr@runner.invalid"}
+
 // Run: a fresh turn gets a session ID of its own, runs the tools volume's
 // claude in the issue's clone with the prompt on stdin, only its own
 // credential and token, the state volume prepared for the agent user, and the
@@ -164,7 +168,7 @@ func TestClaudeRunFresh(t *testing.T) {
 			return "", nil
 		},
 	}
-	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "m", Token: "tok"})
+	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Model: "m", Author: "Dev / Coder", Token: "tok"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +185,7 @@ func TestClaudeRunFresh(t *testing.T) {
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
 		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-claude:/state", "-v", "tools:/opt/cinderline:ro"},
-		Env:     append([]string{"DISABLE_AUTOUPDATER=1"}, claudeEnv("sk-ant-api03-k", Turn{Token: "tok"})...),
+		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1"}, claudeEnv("sk-ant-api03-k", Turn{Token: "tok"}), wantIdentity),
 		Cmd:     append([]string{"/opt/cinderline/bin/claude"}, claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, session, "https://cs.example/mcp")...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,

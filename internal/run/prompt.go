@@ -13,6 +13,10 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
+// gitIdentityRule tells an agent its git identity is set already: the
+// runner gives every run's commits one (CSR-169).
+const gitIdentityRule = "- Git is set up: your commits get this team's and agent's name as author and committer. Do not change that identity: no `git config user.*`, no `--author`, no `GIT_AUTHOR_*` or `GIT_COMMITTER_*` variables."
+
 // CodingPrompt is the fresh prompt of a coding run, the text of legacy
 // lib.mjs buildPrompt with the Cinderline renames. The team's orchestrator
 // (the API lists it first) runs it; a team with workers also gets the team
@@ -44,6 +48,7 @@ You work in the current directory, a git worktree on branch ` + "`" + branch + "
 Rules from the runner:
 
 - Implement the issue below. Run the project's checks. Commit your work with git, in one or more commits with clear messages.
+` + gitIdentityRule + `
 - Do not push and do not change the issue's status: the runner pushes, opens the pull request and moves the issue to review.
 - Never edit files under ` + "`.forgejo/`, `.github/` or `.gitlab/`, or `.gitlab-ci.yml` or `bitbucket-pipelines.yml`" + ` (CI, deploy and repository settings) and never commit secrets or ` + "`.env`" + ` files.
 - If only a person can answer something, call ask_person on ` + ref + ` with the question and any options, then end your turn at once, without guessing. If you are a subagent, tell your caller to end its turn too. You continue in this session, with this directory as you left it, once the person has answered. Use ask_person only when you need an answer before you can go on.
