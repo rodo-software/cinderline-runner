@@ -12,6 +12,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // Ported from lib.test.mjs "claudeArgs gives a worker no MCP server at all".
@@ -241,5 +242,36 @@ func TestClaudeRunStateVolumeFails(t *testing.T) {
 	}
 	if len(env.Calls()) != 0 {
 		t.Error("the turn ran without its state volume")
+	}
+}
+
+func TestDeleteSession(t *testing.T) {
+	var got [][]string
+	x := func(_ context.Context, _ []string, argv ...string) (string, error) {
+		got = append(got, argv)
+		return "", nil
+	}
+	if err := DeleteSession(context.Background(), x, "CSR", "CSR-7", "abcd1234-uuid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteSession(context.Background(), x, "CSR", "CSR-7", ""); err != nil {
+		t.Fatal(err)
+	}
+	prefix := []string{"docker", "run", "--rm", "--network", "none", "-v", "cinderline-CSR-state:/s", "--entrypoint", "sh", workspace.GitImage, "-c"}
+	want := [][]string{
+		append(append([]string(nil), prefix...), `find /s -mindepth 1 \( -name "-runs-$1" -o -name "*$2*" \) -prune -exec rm -rf -- {} +`, "sh", "CSR-7", "abcd1234-uuid"),
+		append(append([]string(nil), prefix...), `find /s -mindepth 1 -name "-runs-$1" -prune -exec rm -rf -- {} +`, "sh", "CSR-7", ""),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv =\n%q\nwant\n%q", got, want)
+	}
+	// Nothing that could widen the pattern reaches find.
+	for _, bad := range [][2]string{{"CSR-7", "*"}, {"CSR-7", "short"}, {"../x", "abcd1234"}, {"CSR-7", "abcd/1234"}, {"", "abcd1234"}} {
+		if err := DeleteSession(context.Background(), x, "CSR", bad[0], bad[1]); err == nil {
+			t.Errorf("DeleteSession(%q, %q) succeeded", bad[0], bad[1])
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("%d docker runs, want 2", len(got))
 	}
 }

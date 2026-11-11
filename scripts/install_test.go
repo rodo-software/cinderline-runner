@@ -94,56 +94,171 @@ func zipped(t *testing.T) []byte {
 
 var urlEnv = strings.ToUpper(name.Name) + "_DOWNLOAD_URL"
 
-// runSh runs install.sh with HOME in a temporary directory and a PATH
-// without ~/.local/bin. It returns the install path, output and error.
-func runSh(t *testing.T, srv *httptest.Server) (string, string, error) {
+// runSh runs install.sh with HOME in a temporary directory, a PATH without
+// ~/.local/bin and SHELL set to zsh; env overrides any of these. It returns
+// HOME, output and error.
+func runSh(t *testing.T, srv *httptest.Server, env ...string) (string, string, error) {
+	t.Helper()
+	home := t.TempDir()
+	out, err := runShIn(t, home, srv, env...)
+	return home, out, err
+}
+
+// runShIn is runSh with a given HOME.
+func runShIn(t *testing.T, home string, srv *httptest.Server, env ...string) (string, error) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is for macOS and Linux")
 	}
-	home := t.TempDir()
 	cmd := exec.Command("sh", "install.sh")
-	cmd.Env = append(os.Environ(), "HOME="+home, urlEnv+"="+srv.URL)
+	cmd.Env = append(append(os.Environ(), "HOME="+home, urlEnv+"="+srv.URL, "SHELL=/bin/zsh", noModifyEnv+"="), env...)
 	out, err := cmd.CombinedOutput()
-	return filepath.Join(home, ".local", "bin", name.Name), string(out), err
+	return string(out), err
 }
 
+func installed(home string) string { return filepath.Join(home, ".local", "bin", name.Name) }
+
 func TestInstallShGoodChecksumInstallsIntoLocalBin(t *testing.T) {
-	path, out, err := runSh(t, release(t, false))
+	home, out, err := runSh(t, release(t, false))
 	if err != nil {
 		t.Fatalf("install.sh failed: %v\n%s", err, out)
 	}
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(installed(home))
 	if err != nil {
 		t.Fatalf("binary not installed: %v\n%s", err, out)
 	}
 	if !bytes.Equal(got, binary) {
 		t.Fatalf("installed %q, want %q", got, binary)
 	}
-	if info, _ := os.Stat(path); info.Mode()&0o111 == 0 {
+	if info, _ := os.Stat(installed(home)); info.Mode()&0o111 == 0 {
 		t.Fatalf("installed binary is not executable: %v", info.Mode())
 	}
 }
 
-func TestInstallShPrintsPathLineWhenLocalBinNotOnPath(t *testing.T) {
-	_, out, err := runSh(t, release(t, false))
+const pathLine = `export PATH="$HOME/.local/bin:$PATH"`
+
+var noModifyEnv = strings.ToUpper(name.Name) + "_NO_MODIFY_PATH"
+
+// files lists every file under home except the installed binary.
+func files(t *testing.T, home string) []string {
+	t.Helper()
+	var got []string
+	err := filepath.WalkDir(home, func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && p != installed(home) {
+			got = append(got, p)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestInstallShAddsPathLineToTheShellsProfile(t *testing.T) {
+	bash := ".bashrc"
+	if runtime.GOOS == "darwin" {
+		bash = ".bash_profile"
+	}
+	for shell, profile := range map[string]string{"/bin/zsh": ".zshrc", "/usr/local/bin/bash": bash, "/bin/dash": ".profile"} {
+		home, out, err := runSh(t, release(t, false), "SHELL="+shell)
+		if err != nil {
+			t.Fatalf("%s: install.sh failed: %v\n%s", shell, err, out)
+		}
+		got, err := os.ReadFile(filepath.Join(home, profile))
+		if err != nil {
+			t.Fatalf("%s: %s not written: %v\n%s", shell, profile, err, out)
+		}
+		if !strings.Contains(string(got), pathLine+"\n") {
+			t.Errorf("%s: %s lacks the PATH line:\n%s", shell, profile, got)
+		}
+		if !strings.Contains(out, filepath.Join(home, profile)) || !strings.Contains(out, "new terminal") {
+			t.Errorf("%s: output does not name %s and a new terminal:\n%s", shell, profile, out)
+		}
+		if f := files(t, home); len(f) != 1 {
+			t.Errorf("%s: files changed %v, want only %s", shell, f, profile)
+		}
+	}
+}
+
+func TestInstallShTwiceAddsPathLineOnce(t *testing.T) {
+	srv := release(t, false)
+	home, out, err := runSh(t, srv)
 	if err != nil {
 		t.Fatalf("install.sh failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, `export PATH="$HOME/.local/bin:$PATH"`) {
-		t.Fatalf("no PATH line in output:\n%s", out)
+	before, _ := os.ReadFile(filepath.Join(home, ".zshrc"))
+	if out, err := runShIn(t, home, srv); err != nil {
+		t.Fatalf("second install.sh failed: %v\n%s", err, out)
+	}
+	after, _ := os.ReadFile(filepath.Join(home, ".zshrc"))
+	if !bytes.Equal(before, after) || strings.Count(string(after), pathLine) != 1 {
+		t.Fatalf(".zshrc changed by the second run:\n%s\nthen\n%s", before, after)
+	}
+}
+
+func TestInstallShLeavesProfilesAloneWhenLocalBinOnPath(t *testing.T) {
+	home := t.TempDir()
+	out, err := runShIn(t, home, release(t, false), "PATH="+filepath.Join(home, ".local", "bin")+":"+os.Getenv("PATH"))
+	if err != nil {
+		t.Fatalf("install.sh failed: %v\n%s", err, out)
+	}
+	if f := files(t, home); len(f) != 0 {
+		t.Fatalf("files changed %v, want none\n%s", f, out)
+	}
+	if strings.Contains(out, "Warning") {
+		t.Fatalf("warned although ~/.local/bin is on the PATH:\n%s", out)
+	}
+}
+
+// The opt-out, a shell with a different syntax and a profile that cannot be
+// written all leave the profiles alone, print today's warning and exit 0.
+func TestInstallShPrintsPathLineWhenItDoesNotEditTheProfile(t *testing.T) {
+	for _, tc := range []struct {
+		desc string
+		env  []string
+	}{
+		{"opt-out", []string{noModifyEnv + "=1"}},
+		{"fish", []string{"SHELL=/usr/bin/fish"}},
+		{"tcsh", []string{"SHELL=/bin/tcsh"}},
+	} {
+		home, out, err := runSh(t, release(t, false), tc.env...)
+		if err != nil {
+			t.Fatalf("%s: install.sh failed: %v\n%s", tc.desc, err, out)
+		}
+		if f := files(t, home); len(f) != 0 {
+			t.Errorf("%s: files changed %v, want none", tc.desc, f)
+		}
+		if !strings.Contains(out, "Warning") || !strings.Contains(out, pathLine) {
+			t.Errorf("%s: no warning with the PATH line:\n%s", tc.desc, out)
+		}
+	}
+}
+
+func TestInstallShUnwritableProfileWarnsAndSucceeds(t *testing.T) {
+	home := t.TempDir()
+	// A directory cannot be appended to, even by root.
+	if err := os.Mkdir(filepath.Join(home, ".zshrc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runShIn(t, home, release(t, false))
+	if err != nil {
+		t.Fatalf("install.sh failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Warning") || !strings.Contains(out, pathLine) {
+		t.Fatalf("no warning with the PATH line:\n%s", out)
 	}
 }
 
 func TestInstallShTamperedChecksumRefuses(t *testing.T) {
-	path, out, err := runSh(t, release(t, true))
+	home, out, err := runSh(t, release(t, true))
 	if err == nil {
 		t.Fatalf("install.sh succeeded with a tampered checksum:\n%s", out)
 	}
 	if !strings.Contains(strings.ToLower(out), "checksum") {
 		t.Fatalf("refusal does not mention the checksum:\n%s", out)
 	}
-	if _, err := os.Stat(path); err == nil {
+	if _, err := os.Stat(installed(home)); err == nil {
 		t.Fatal("binary installed despite checksum mismatch")
 	}
 }
@@ -171,7 +286,9 @@ func runPs(t *testing.T, srv *httptest.Server) (string, string, error) {
 		}
 		env = append(env, e)
 	}
-	env = append(env, "LOCALAPPDATA="+local, urlEnv+"="+srv.URL)
+	// The opt-out keeps the test from adding a temporary folder to the
+	// machine's real user PATH.
+	env = append(env, "LOCALAPPDATA="+local, urlEnv+"="+srv.URL, noModifyEnv+"=1")
 	cmd := exec.Command(ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "install.ps1")
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()

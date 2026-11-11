@@ -55,16 +55,35 @@ mv "$HOME/.local/bin/.cinderline.tmp" "$HOME/.local/bin/cinderline"
 
 echo "Installed cinderline to $HOME/.local/bin/cinderline"
 
+LINE='export PATH="$HOME/.local/bin:$PATH"'
+
 case ":${PATH:-}:" in
 *:"$HOME/.local/bin":*) ;;
 *)
-	echo "Warning: $HOME/.local/bin is not in your PATH."
-	echo "Add this line to your ~/.profile, ~/.bashrc or ~/.zshrc:"
-	echo
-	echo '  export PATH="$HOME/.local/bin:$PATH"'
+	case "${SHELL:-}" in
+	*/zsh) PROFILE="$HOME/.zshrc" ;;
+	*/bash)
+		PROFILE="$HOME/.bashrc"
+		# Terminal.app starts login shells, which read ~/.bash_profile, not ~/.bashrc.
+		[ "$OS" = darwin ] && PROFILE="$HOME/.bash_profile"
+		;;
+	*/fish|*/csh|*/tcsh|*/nu|*/elvish|*/xonsh|*/pwsh) PROFILE= ;;
+	*) PROFILE="$HOME/.profile" ;;
+	esac
+	[ -n "${CINDERLINE_NO_MODIFY_PATH:-}" ] && PROFILE=
+
+	if [ -n "$PROFILE" ] && grep -qsxF "$LINE" "$PROFILE"; then
+		echo "$PROFILE already adds $HOME/.local/bin to your PATH; open a new terminal or run: . \"$PROFILE\""
+	elif [ -n "$PROFILE" ] && { printf '\n# Added by the cinderline installer\n%s\n' "$LINE" >>"$PROFILE"; } 2>/dev/null; then
+		echo "Added $HOME/.local/bin to your PATH in $PROFILE; open a new terminal or run: . \"$PROFILE\""
+	else
+		echo "Warning: $HOME/.local/bin is not in your PATH."
+		echo "Add this line to your ~/.profile, ~/.bashrc or ~/.zshrc:"
+		echo
+		echo "  $LINE"
+	fi
 	;;
 esac
-
 echo
 echo "To check the build provenance: gh attestation verify $FILE --repo rodo-software/cinderline-runner"
 echo "(Download the archive first with: curl -fsSL -o \"$FILE\" \"$BASE/$FILE\")"

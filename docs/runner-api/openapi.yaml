@@ -144,7 +144,7 @@ paths:
               $ref: '#/components/schemas/StatusValue'
       responses:
         '200':
-          description: The issues, in board order, without their comments.
+          description: At most 200 issues, the first in board order, without their comments.
           headers:
             Cinderline-Api-Version:
               $ref: '#/components/headers/ApiVersion'
@@ -192,6 +192,11 @@ paths:
         A `status` change needs `expected_status`; when the issue's current
         status differs the app answers `409` and changes nothing. At least one
         of `status` and `merge_status` is required.
+
+        The runner token may not move a top-level issue to `done`: that is `403`
+        "This token may not move issues to done." Finished work goes to
+        `review`. A sub-issue may be moved to `done`, because its orchestrator
+        reviews it (decision 2026-11-08-runner-tokens-without-done).
       parameters:
         - $ref: '#/components/parameters/RunnerVersion'
       requestBody:
@@ -267,7 +272,7 @@ paths:
       - $ref: '#/components/parameters/Ref'
     get:
       operationId: listComments
-      summary: An issue's comments, oldest first.
+      summary: An issue's latest comments, at most 200, oldest first.
       description: |
         Returns at most 200 comments, oldest first. With after, the oldest 200
         comments whose ID is greater than after; without it, the newest 200.

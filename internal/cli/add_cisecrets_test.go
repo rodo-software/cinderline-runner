@@ -58,3 +58,18 @@ func TestAddCISecretsUnknownWarnsAndGoesOn(t *testing.T) {
 		}
 	}
 }
+
+func TestAddCISecretsPartialWarnsBoth(t *testing.T) {
+	code, out, _ := addWithCISecrets(t, forge.CISecretsReply{
+		Exposed: []string{"repository secret DEPLOY_KEY"},
+		Err:     errors.New("organization secrets not checked: 403"),
+	})
+	if code != 0 || !strings.Contains(out, "Added WEB at ") {
+		t.Fatalf("code %d:\n%s", code, out)
+	}
+	for _, s := range []string{"can read: repository secret DEPLOY_KEY", "organization secrets not checked", "README"} {
+		if !strings.Contains(out, s) {
+			t.Errorf("stdout lacks %q:\n%s", s, out)
+		}
+	}
+}

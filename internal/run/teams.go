@@ -148,13 +148,13 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 		return Outcome{}, notStarted(fmt.Errorf("agent %s runs on %s, which this runner does not run", orch.Name, orch.Client))
 	}
 
-	var dir string
+	var dir, session string
 	defer func() {
 		if ctx.Err() != nil {
 			return // a stop: the note resumes the run after the restart
 		}
 		if !out.Paused {
-			p.dropPaused(j.Ref)
+			p.keep(j.Ref, Paused{Dir: dir, Session: session, Client: orch.Client})
 		}
 		if err == nil {
 			out.Dir = dir
@@ -164,9 +164,9 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 		}
 	}()
 
-	note, resumed := p.resumable(j.Ref, orch.Client)
-	dir = note.Dir
-	session := note.Session
+	note, resumed := p.resumable(ctx, c, ws, j.Ref, j.Branch, orch.Client)
+	dir, session = note.Dir, note.Session
+	followUp := !note.Kept.IsZero()
 	if !resumed {
 		if dir, err = ws.Prepare(ctx, j.Branch, j.Base); err != nil {
 			return Outcome{}, notStarted(err)
@@ -202,6 +202,10 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 		case session == "":
 			turn.Prompt = j.Prompt
 			p.progress(ctx, c, j.Ref, orch.Name+" is planning")
+		case followUp:
+			turn.Prompt = FollowUpPrompt(j.Ref)
+			followUp = false
+			p.progress(ctx, c, j.Ref, orch.Name+" is reading the follow-up")
 		case finished != nil:
 			turn.Prompt = CommentsPrompt(j.Ref)
 			p.progress(ctx, c, j.Ref, "Reading new comments from a person")

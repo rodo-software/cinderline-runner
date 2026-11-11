@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 )
 
@@ -76,18 +77,21 @@ type LogReply struct {
 // the next reply in order and is recorded. An empty queue returns the zero
 // value and ErrNotScripted.
 type Fake struct {
-	Prepares   []PrepareReply
-	Commits    []CommitReply
-	MergeBases []MergeBaseReply
-	Ancestors  []IsAncestorReply
-	Pushes     []error // replies to Push
-	Heads      []HeadReply
-	Cleans     []BoolReply
-	Markers    []BoolReply // replies to ConflictMarkers
-	Resets     []error
-	Logs       []LogReply
-	Strandeds  []StrandedReply
-	Behinds    []BehindReply
+	Prepares     []PrepareReply
+	Commits      []CommitReply
+	MergeBases   []MergeBaseReply
+	Ancestors    []IsAncestorReply
+	Pushes       []error // replies to Push
+	Heads        []HeadReply
+	Cleans       []BoolReply
+	Markers      []BoolReply // replies to ConflictMarkers
+	Resets       []error
+	Logs         []LogReply
+	Strandeds    []StrandedReply
+	Behinds      []BehindReply
+	FastForwards []error
+	Removes      []error
+	Frees        []FreeReply
 
 	mu    sync.Mutex
 	calls []Call
@@ -246,4 +250,56 @@ func (f *Fake) Behind(_ context.Context, base string) ([]string, error) {
 	r := f.Behinds[0]
 	f.Behinds = f.Behinds[1:]
 	return r.Branches, r.Err
+}
+
+// FreeReply is one scripted reply to Free.
+type FreeReply struct {
+	Bytes int64
+	Err   error
+}
+
+// Exists reports whether dir exists on the host: tests make their clones
+// with t.TempDir.
+func (f *Fake) Exists(_ context.Context, dir string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Exists", dir)
+	_, err := os.Stat(dir)
+	return err == nil, nil
+}
+
+func (f *Fake) FastForward(_ context.Context, dir, branch string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("FastForward", dir, branch)
+	if len(f.FastForwards) == 0 {
+		return fmt.Errorf("%w for FastForward", ErrNotScripted)
+	}
+	r := f.FastForwards[0]
+	f.FastForwards = f.FastForwards[1:]
+	return r
+}
+
+func (f *Fake) Remove(_ context.Context, dir string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Remove", dir)
+	if len(f.Removes) == 0 {
+		return fmt.Errorf("%w for Remove", ErrNotScripted)
+	}
+	r := f.Removes[0]
+	f.Removes = f.Removes[1:]
+	return r
+}
+
+func (f *Fake) Free(_ context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("Free")
+	if len(f.Frees) == 0 {
+		return 0, fmt.Errorf("%w for Free", ErrNotScripted)
+	}
+	r := f.Frees[0]
+	f.Frees = f.Frees[1:]
+	return r.Bytes, r.Err
 }

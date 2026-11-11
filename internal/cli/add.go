@@ -183,10 +183,11 @@ func (c *CLI) add(args []string) int {
 	if err == nil {
 		exposed, err = fg.CISecrets(context.Background())
 	}
+	if len(exposed) > 0 { // with an error too on a partial check
+		say("Warning: CI on any branch, including the runner's %s/ branches, can read: %s.", name.Name, strings.Join(exposed, ", "))
+	}
 	if err != nil {
 		say("Warning: could not check whether CI on the runner's branches can read secrets: %v.", err)
-	} else if len(exposed) > 0 {
-		say("Warning: CI on any branch, including the runner's %s/ branches, can read: %s.", name.Name, strings.Join(exposed, ", "))
 	}
 	if err != nil || len(exposed) > 0 {
 		say(`Move them to a protected environment or protected branches: see "CI secrets" in the README.`)

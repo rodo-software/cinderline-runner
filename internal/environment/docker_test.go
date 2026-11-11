@@ -16,6 +16,7 @@ import (
 
 	defaultimage "github.com/rodo-software/cinderline-runner/images/default"
 	proxyimage "github.com/rodo-software/cinderline-runner/images/proxy"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 )
 
 // execCall is one recorded call through the Exec seam.
@@ -632,5 +633,24 @@ func TestStreamCommand(t *testing.T) {
 	}
 	if err := streamCommand(context.Background(), nil, "", &out, "no-such-command-here"); err == nil {
 		t.Error("a command that does not exist ran")
+	}
+}
+
+// TestRunRedactsSplitValue: a secret split over two writes of the agent's
+// output is still redacted in the log, which gets complete lines (CSR-157).
+func TestRunRedactsSplitValue(t *testing.T) {
+	const key = "sk-ant-api03-splitvalue-0123456789"
+	redact.Add("anthropic key", key)
+	d, _, logs := runner(nil, func(_ context.Context, out io.Writer) error {
+		io.WriteString(out, "env: ANTHROPIC_API_KEY="+key[:12])
+		io.WriteString(out, key[12:]+"\ndone\n")
+		return nil
+	})
+	d.Log = slog.New(redact.Handler(slog.NewTextHandler(logs, nil)))
+	if _, err := d.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), key[:12]) || !strings.Contains(logs.String(), "[redacted anthropic key]") {
+		t.Errorf("log:\n%s", logs.String())
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
@@ -68,9 +69,9 @@ func Run(ctx context.Context, o Options) error {
 	var log *slog.Logger
 	if o.Verbose != nil {
 		debug := &slog.HandlerOptions{Level: slog.LevelDebug}
-		log = slog.New(slog.NewMultiHandler(slog.NewJSONHandler(lf, debug), slog.NewTextHandler(o.Verbose, debug)))
+		log = slog.New(redact.Handler(slog.NewMultiHandler(slog.NewJSONHandler(lf, debug), slog.NewTextHandler(o.Verbose, debug))))
 	} else {
-		log = slog.New(slog.NewJSONHandler(lf, nil))
+		log = slog.New(redact.Handler(slog.NewJSONHandler(lf, nil)))
 	}
 	d := &daemon{sched: &scheduler.Scheduler{Log: log}}
 
@@ -197,6 +198,7 @@ func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			projects = append(projects, st)
 			continue
 		}
+		proj.KeepFor, proj.MinFree = cfg.KeepSessions(), cfg.MinFree()
 		wg.Go(func() {
 			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
 			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default"}}

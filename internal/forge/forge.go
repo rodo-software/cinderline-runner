@@ -30,7 +30,8 @@ type Forge interface {
 	// branch; non-empty = the secrets reachable from any branch, each
 	// described like "repository secret DEPLOY_KEY"; error = the check could
 	// not be made (forge API refused or failed). On any HTTP failure the
-	// error is returned at once with no names.
+	// error is returned at once with no names, except a partial check: then
+	// both the names found so far and an error saying what was not checked.
 	CISecrets(ctx context.Context) (exposed []string, err error)
 }
 
