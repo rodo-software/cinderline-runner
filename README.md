@@ -47,9 +47,13 @@ To pin a specific version, set `CINDERLINE_DOWNLOAD_URL` before running (e.g.
 
 A project key can be added once: Docker volumes are named by the key, so a second project with the same key on another instance is refused by `add`, and one written into `config.json` by hand does not run.
 
-`cinderline add` does not ask for model keys (Anthropic API key or `claude setup-token` token, OpenRouter, OpenAI, Gemini), and no command stores one: a project gets them by copying from another project, or uses a sign-in (below).
+Last, `add` asks for the project's model keys, each optional (press Enter to skip): an Anthropic API key or `claude setup-token` token for Claude Code, an OpenRouter key for OpenCode, an OpenAI API key for Codex and a Gemini API key (or a Vertex AI express-mode key, see `gemini_vertex` below) for Gemini CLI. Prefer a spend-limited API key to a subscription. OpenCode runs only with an OpenRouter key. Like the tokens, keys are typed in plain text and stored in the keychain; none is printed back.
+
+`cinderline key set CLIENT --project KEY` (CLIENT is `claude`, `opencode`, `codex` or `gemini`) sets or replaces one key later, read from stdin, e.g. `cinderline key set opencode --project WEB`, then paste the key and press Enter. Add `-url URL` when projects on several instances share the key.
 
 Then start it with `cinderline run` (foreground, until Ctrl-C) or as a service (below).
+
+`cinderline run -v` also prints the log on the terminal, one readable line per event, and adds Debug lines (each runner API request) to both the terminal and the log file.
 
 ### Sign a client in instead of storing a key
 
@@ -71,7 +75,7 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 - `build_image`: `true` builds the default image locally instead of pulling it.
 - Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key.
 
-Unknown fields are refused. `add` and `login` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
+Unknown fields are refused. `add`, `key set` and `login` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
 
 ## Network
 

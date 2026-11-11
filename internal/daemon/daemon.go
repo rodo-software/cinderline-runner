@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -27,7 +28,8 @@ import (
 // Options configure Run.
 type Options struct {
 	Paths   config.Paths
-	Version string // the build version, sent in the client's version header
+	Version string    // the build version, sent in the client's version header
+	Verbose io.Writer // non-nil (run -v): the log also goes here as text, and both outputs log at Debug
 }
 
 // errStopping answers a reload that arrives while the daemon stops.
@@ -63,7 +65,13 @@ func Run(ctx context.Context, o Options) error {
 	}
 	lf := &logFile{path: o.Paths.Log, max: maxLogSize}
 	defer lf.Close()
-	log := slog.New(slog.NewJSONHandler(lf, nil))
+	var log *slog.Logger
+	if o.Verbose != nil {
+		debug := &slog.HandlerOptions{Level: slog.LevelDebug}
+		log = slog.New(slog.NewMultiHandler(slog.NewJSONHandler(lf, debug), slog.NewTextHandler(o.Verbose, debug)))
+	} else {
+		log = slog.New(slog.NewJSONHandler(lf, nil))
+	}
 	d := &daemon{sched: &scheduler.Scheduler{Log: log}}
 
 	reloads := make(chan chan error)

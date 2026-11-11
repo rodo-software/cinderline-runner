@@ -154,6 +154,24 @@ func (c *CLI) add(args []string) int {
 			return code
 		}
 	}
+	// Optional; EOF ends them like the copy offer, as the project is already added.
+	for i := 0; i < len(modelKeys); {
+		m := modelKeys[i]
+		v, err := ask(m.label + " for " + m.client + " [empty to skip]: ")
+		if errors.Is(err, errEOF) {
+			break
+		}
+		if err != nil {
+			return c.fail(err)
+		}
+		if v != "" {
+			if err := c.storeKey(p, m.client, m.label, v); err != nil {
+				say("Not stored: %v.", err) // re-asks, e.g. after a key over the size limit
+				continue
+			}
+		}
+		i++
+	}
 
 	build := c.Forge
 	if build == nil {

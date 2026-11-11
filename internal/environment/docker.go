@@ -35,8 +35,9 @@ const PublishedImage = "ghcr.io/rodo-software/" + name.Name + "-runner-default"
 // publishedDigest pins the published image; publishedSum is the first 12 hex
 // of the SHA-256 of the images/default/Dockerfile it was built from, so a
 // changed Dockerfile is built locally until it is published and pinned again.
-// Both stay empty until the first publish (docs/ci/default-image.yml).
-var publishedDigest, publishedSum = "", ""
+// Pinned to tag v0.1.1 (CSR-151); repeat the pin after every Dockerfile
+// change (.github/workflows/default-image.yml, point 3).
+var publishedDigest, publishedSum = "sha256:22dc9fdeda6197570675db35feb6826639a35ae3f16079151c7b3cddcb95e95d", "8bc0a5e245dc"
 
 // DBEnv are the variables today's compose file sets, so Laravel's tests in
 // the clone reach the run's MySQL; real environment variables win over the
@@ -75,6 +76,9 @@ type Docker struct {
 	Allow []string
 	// OnRefused is called with each host:port the run's proxy refused; nil: none.
 	OnRefused func(hostPort string)
+	// OnFetch is called before the default image is pulled or built, a slow
+	// first-time step; nil: none. A failed pull calls it again for the build.
+	OnFetch func()
 }
 
 var _ Environment = (*Docker)(nil)
@@ -235,10 +239,15 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 	sum := sha256.Sum256(defaultimage.Dockerfile)
 	sumHex := hex.EncodeToString(sum[:6])
 	tag := name.Name + "-default:" + sumHex
+	onFetch := d.OnFetch
 	if !d.BuildImage && publishedDigest != "" && publishedSum == sumHex {
 		ref := PublishedImage + "@" + publishedDigest
 		if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref); err == nil {
 			return ref, nil
+		}
+		if onFetch != nil {
+			onFetch()
+			onFetch = nil // announced once, also when the pull fails and we build
 		}
 		_, err := d.exec(ctx, "docker", "pull", "--quiet", ref)
 		if err == nil {
@@ -246,7 +255,7 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 		}
 		d.log().Warn("default image pull failed, building it locally", "image", ref, "err", err)
 	}
-	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile})
+	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile}, onFetch)
 }
 
 // ProxyImage returns the egress proxy's image, built locally from the
@@ -254,11 +263,12 @@ func (d *Docker) Image(ctx context.Context) (string, error) {
 func (d *Docker) ProxyImage(ctx context.Context) (string, error) {
 	sum := sha256.Sum256(append(append(slices.Clip(proxyimage.Dockerfile), 0), proxyimage.Main...))
 	tag := name.Name + "-proxy:" + hex.EncodeToString(sum[:6])
-	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": proxyimage.Dockerfile, "main.go": proxyimage.Main})
+	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": proxyimage.Dockerfile, "main.go": proxyimage.Main}, nil)
 }
 
-// localImage returns tag, built from files when Docker does not have it.
-func (d *Docker) localImage(ctx context.Context, tag string, files map[string][]byte) (string, error) {
+// localImage returns tag, built from files when Docker does not have it;
+// onBuild, if set, is called before the build.
+func (d *Docker) localImage(ctx context.Context, tag string, files map[string][]byte, onBuild func()) (string, error) {
 	if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", tag); err == nil {
 		return tag, nil
 	}
@@ -271,6 +281,9 @@ func (d *Docker) localImage(ctx context.Context, tag string, files map[string][]
 		if err := os.WriteFile(filepath.Join(dir, f), b, 0o600); err != nil {
 			return "", err
 		}
+	}
+	if onBuild != nil {
+		onBuild()
 	}
 	_, err = d.exec(ctx, "docker", "build", "--quiet", "--tag", tag, dir)
 	return tag, err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
@@ -26,6 +27,7 @@ type CLI struct {
 	Stderr  io.Writer
 
 	exec          workspace.Exec                                            // nil means workspace.RunCommand
+	http          *http.Client                                              // the tools downloads; nil means http.DefaultClient
 	removeService func(exe string) error                                    // nil means uninstallService
 	startService  func(exe string) (bool, error)                            // nil means startService; update restarts the service with it
 	processGone   func(pid int) bool                                        // nil means processGone; drainAndWait waits with it until the daemon's process has exited
@@ -46,7 +48,7 @@ func commands() []command {
 	return []command{
 		{"add", "", "add a project, asking for its details", (*CLI).add},
 		{"remove", "[-url URL] KEY", "remove a project and its secrets", (*CLI).remove},
-		{"run", "", "run in the foreground until Ctrl-C", (*CLI).run},
+		{"run", "[-v]", "run in the foreground until Ctrl-C; -v also logs to stderr, with Debug lines", (*CLI).run},
 		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
 		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
 		{"stop", "[--drain]", "stop the running " + name.Name + " at once, or with --drain once its runs have finished", (*CLI).stopDaemon},
@@ -54,6 +56,7 @@ func commands() []command {
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
 		{"login", "CLIENT --project KEY", "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
+		{"key", "set CLIENT --project KEY [-url URL]", "set or replace a project's model key for a client (claude, opencode, codex, gemini), read from stdin; it wins over a login", (*CLI).key},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

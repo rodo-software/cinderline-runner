@@ -64,6 +64,9 @@ type Tools struct {
 	State string         // the host state folder: the lock and the downloads
 	Exec  workspace.Exec // nil means workspace.RunCommand
 	HTTP  *http.Client   // nil means http.DefaultClient
+	// OnFill is called before an incomplete volume is filled, a slow
+	// first-time step; nil: none.
+	OnFill func()
 
 	pins func(arch string, musl bool) (set, error) // nil means pinned; tests swap it
 }
@@ -121,6 +124,9 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 		return nil
 	}
 
+	if t.OnFill != nil {
+		t.OnFill()
+	}
 	// Download and check everything before the volume is touched.
 	staging := filepath.Join(dir, vol)
 	if err := os.RemoveAll(staging); err != nil {

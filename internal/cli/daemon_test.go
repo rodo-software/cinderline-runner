@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/daemon"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/scheduler"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // daemonCLI is newCLI with a socket and log in a short temp folder: macOS limits socket paths to 104 bytes.
@@ -354,5 +356,95 @@ func TestStopDrainNamesIssuesInFlight(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "CSR-7") {
 		t.Errorf("stdout %q, want it to name CSR-7", out.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer the daemon's goroutines can write while the test reads it.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// CSR-152: run -v also logs to stderr as text, and both outputs log at Debug; no secret is in any line.
+func TestRunVerbose(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // as in TestM2AddRunStatus: keep startup cleanup off the host's Docker
+	const modelKey = "sk-ant-model-secret"
+	for _, verbose := range []bool{true, false} {
+		t.Run(fmt.Sprint("verbose=", verbose), func(t *testing.T) {
+			a := newApp(t)
+			c, _, errb := daemonCLI(t, lines(a.url, goodToken, "", "git-tok-secret"))
+			if code := c.Run([]string{"add"}); code != 0 {
+				t.Fatalf("add: code %d, stderr %q", code, errb.String())
+			}
+			cfg, err := c.loadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Secrets.Set(cfg.Projects[0], secrets.AnthropicCredential, modelKey); err != nil {
+				t.Fatal(err)
+			}
+			stderr := &syncBuffer{}
+			c.Stderr = stderr
+
+			args := []string{"run"}
+			if verbose {
+				args = append(args, "-v")
+			}
+			ran := make(chan int, 1)
+			go func() { ran <- c.Run(args) }()
+			waitFor(t, "a report and a heartbeat", func() bool { r, h := a.counts(); return r > 0 && h > 0 })
+			if code := c.Run([]string{"stop"}); code != 0 {
+				t.Fatalf("stop: code %d", code)
+			}
+			select {
+			case code := <-ran:
+				if code != 0 {
+					t.Fatalf("run: code %d, stderr %q", code, stderr.String())
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("run did not return after stop")
+			}
+
+			raw, err := os.ReadFile(c.Paths.Log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, term := string(raw), stderr.String()
+			if verbose {
+				if !strings.Contains(term, "level=DEBUG") || !strings.Contains(term, `msg="runner api request"`) {
+					t.Errorf("stderr has no Debug request line:\n%s", term)
+				}
+				if !strings.Contains(term, "msg=started") {
+					t.Errorf("stderr lacks the Info lines:\n%s", term)
+				}
+				if !strings.Contains(file, `"level":"DEBUG","msg":"runner api request"`) {
+					t.Errorf("log file has no Debug request line:\n%s", file)
+				}
+			} else {
+				if term != "" {
+					t.Errorf("stderr = %q, want empty", term)
+				}
+				if strings.Contains(file, `"level":"DEBUG"`) {
+					t.Errorf("log file has Debug lines without -v:\n%s", file)
+				}
+			}
+			for _, secret := range []string{goodToken, "git-tok-secret", modelKey} {
+				if strings.Contains(term, secret) || strings.Contains(file, secret) {
+					t.Errorf("%q is in the log:\nstderr:\n%s\nfile:\n%s", secret, term, file)
+				}
+			}
+		})
 	}
 }
