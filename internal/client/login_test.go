@@ -15,11 +15,11 @@ import (
 
 var loginMount = tools.Mount{Args: []string{"-v", "tools:" + tools.Path + ":ro"}, Env: []string{"DISABLE_AUTOUPDATER=1"}}
 
-func loginPrefix(project string) []string {
+func loginPrefix(project, client string) []string {
 	return []string{
 		"docker", "run", "--rm", "--interactive", "--tty",
 		"--user", workspace.AgentUser,
-		"-v", workspace.Volume(project, "state") + ":" + StatePath,
+		"-v", StateVolume(project, client) + ":" + StatePath,
 		"-v", "tools:" + tools.Path + ":ro",
 		"-e", "DISABLE_AUTOUPDATER=1",
 	}
@@ -30,7 +30,7 @@ func TestLoginArgvClaude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append(loginPrefix("WEB"),
+	want := append(loginPrefix("WEB", "claude"),
 		"-e", "CLAUDE_CONFIG_DIR="+StatePath+"/claude",
 		"img:1", tools.Path+"/bin/claude", "auth", "login")
 	if !reflect.DeepEqual(got, want) {
@@ -43,7 +43,7 @@ func TestLoginArgvCodex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append(loginPrefix("WEB"),
+	want := append(loginPrefix("WEB", "codex"),
 		"-e", "CODEX_HOME="+StatePath+"/codex",
 		"img:1", "sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`,
 		tools.Path+"/bin/codex", "login", "--device-auth")
@@ -101,7 +101,7 @@ func TestLoginArgvGemini(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := append(loginPrefix("WEB"),
+	want := append(loginPrefix("WEB", "gemini"),
 		"-e", "LD_LIBRARY_PATH="+tools.Path+"/lib",
 		"-e", "GEMINI_CLI_HOME="+StatePath+"/gemini",
 		"img:1", "sh", "-c",
@@ -124,7 +124,7 @@ func TestGeminiEnvWithoutKeyUsesLogin(t *testing.T) {
 		if !ok {
 			t.Fatalf("vertex %v: env[1] = %q, want the settings", vertex, got[1])
 		}
-		want := decodeSettings(t, geminiSettings(Turn{Token: "tok"}, "https://cs.example/mcp", false))
+		want := decodeSettings(t, geminiSettingsWithAuth(Turn{Token: "tok"}, "https://cs.example/mcp", geminiAuthType(false)))
 		want["security"] = map[string]any{"auth": map[string]any{"selectedType": "oauth-personal"}}
 		if s := decodeSettings(t, settings); !reflect.DeepEqual(s, want) {
 			t.Errorf("vertex %v: settings =\n%v\nwant\n%v", vertex, s, want)

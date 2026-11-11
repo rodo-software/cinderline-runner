@@ -140,40 +140,40 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	if err := download(ctx, hc, s.ClaudeURL, filepath.Join(staging, "claude"), s.ClaudeSHA256); err != nil {
+	if err := Download(ctx, hc, s.ClaudeURL, filepath.Join(staging, "claude"), s.ClaudeSHA256); err != nil {
 		return err
 	}
 	tgz := filepath.Join(staging, "opencode.tgz")
-	if err := download(ctx, hc, s.OpenCodeURL, tgz, s.OpenCodeSRI); err != nil {
+	if err := Download(ctx, hc, s.OpenCodeURL, tgz, s.OpenCodeSRI); err != nil {
 		return err
 	}
-	if err := extract(tgz, "package/bin/opencode", filepath.Join(staging, "opencode")); err != nil {
+	if err := Extract(tgz, "package/bin/opencode", filepath.Join(staging, "opencode")); err != nil {
 		return err
 	}
 	codexTgz := filepath.Join(staging, "codex.tgz")
-	if err := download(ctx, hc, s.CodexURL, codexTgz, s.CodexSHA256); err != nil {
+	if err := Download(ctx, hc, s.CodexURL, codexTgz, s.CodexSHA256); err != nil {
 		return err
 	}
-	if err := extract(codexTgz, s.CodexBinary, filepath.Join(staging, "codex")); err != nil {
+	if err := Extract(codexTgz, s.CodexBinary, filepath.Join(staging, "codex")); err != nil {
 		return err
 	}
 	hostTgz := filepath.Join(staging, "codex-code-mode-host.tgz")
-	if err := download(ctx, hc, s.CodexHostURL, hostTgz, s.CodexHostSHA256); err != nil {
+	if err := Download(ctx, hc, s.CodexHostURL, hostTgz, s.CodexHostSHA256); err != nil {
 		return err
 	}
-	if err := extract(hostTgz, s.CodexHostBinary, filepath.Join(staging, "codex-code-mode-host")); err != nil {
+	if err := Extract(hostTgz, s.CodexHostBinary, filepath.Join(staging, "codex-code-mode-host")); err != nil {
 		return err
 	}
 	geminiTgz := filepath.Join(staging, "gemini.tgz")
-	if err := download(ctx, hc, s.GeminiURL, geminiTgz, s.GeminiSRI); err != nil {
+	if err := Download(ctx, hc, s.GeminiURL, geminiTgz, s.GeminiSRI); err != nil {
 		return err
 	}
 	if s.NodeURL != "" {
 		nodeTgz := filepath.Join(staging, "node.tgz")
-		if err := download(ctx, hc, s.NodeURL, nodeTgz, s.NodeSHA256); err != nil {
+		if err := Download(ctx, hc, s.NodeURL, nodeTgz, s.NodeSHA256); err != nil {
 			return err
 		}
-		if err := extract(nodeTgz, s.NodeBinary, filepath.Join(staging, "node")); err != nil {
+		if err := Extract(nodeTgz, s.NodeBinary, filepath.Join(staging, "node")); err != nil {
 			return err
 		}
 	}
@@ -253,9 +253,9 @@ func (s set) volume() string {
 	return name.Name + "-tools-" + hex.EncodeToString(h[:6])
 }
 
-// download fetches url into dst and keeps it only if it matches sum: a hex
+// Download fetches url into dst and keeps it only if it matches sum: a hex
 // SHA-256, or an npm integrity "sha512-<base64>".
-func download(ctx context.Context, hc *http.Client, url, dst, sum string) error {
+func Download(ctx context.Context, hc *http.Client, url, dst, sum string) error {
 	var h hash.Hash
 	var encode func([]byte) string
 	if b64, ok := strings.CutPrefix(sum, "sha512-"); ok {
@@ -293,8 +293,8 @@ func download(ctx context.Context, hc *http.Client, url, dst, sum string) error 
 	return nil
 }
 
-// extract writes the regular file entry of the gzipped tarball src to dst.
-func extract(src, entry, dst string) error {
+// Extract writes the regular file entry of the gzipped tarball src to dst.
+func Extract(src, entry, dst string) error {
 	f, err := os.Open(src)
 	if err != nil {
 		return err

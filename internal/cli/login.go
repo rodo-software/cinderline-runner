@@ -65,7 +65,7 @@ func (c *CLI) login(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := client.PrepareState(ctx, c.exec, key); err != nil {
+	if err := client.PrepareState(ctx, c.exec, key, clientName); err != nil {
 		return c.fail(err)
 	}
 
@@ -86,7 +86,7 @@ func (c *CLI) login(args []string) int {
 		return c.fail(fmt.Errorf("%s login: %w", clientName, err))
 	}
 
-	fmt.Fprintf(c.Stdout, "%s is signed in for project %s; the credentials are on its state volume\n", clientName, key)
+	fmt.Fprintf(c.Stdout, "%s is signed in for project %s; the credentials are on its %s state volume\n", clientName, key, clientName)
 	if err := (localapi.Client{Socket: c.Paths.Socket}).Reload(context.Background()); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
 		fmt.Fprintf(c.Stdout, "Warning: daemon reload failed: %v.\n", err)
 	}

@@ -1,12 +1,8 @@
 package cli
 
 import (
-	"archive/tar"
 	"archive/zip"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +16,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -99,23 +96,12 @@ func (c *CLI) updateMain() int {
 	}
 	defer os.RemoveAll(dlDir)
 
-	archivePath := filepath.Join(dlDir, asset)
-	if err := downloadFile(ctx, base+"/"+asset, archivePath); err != nil {
-		return c.fail(fmt.Errorf("download: %w", err))
-	}
-
-	checksumsPath := filepath.Join(dlDir, "checksums.txt")
-	if err := downloadFile(ctx, base+"/checksums.txt", checksumsPath); err != nil {
-		return c.fail(fmt.Errorf("download: %w", err))
-	}
-
-	checksumsData, err := os.ReadFile(checksumsPath)
+	checksums, err := fetch(ctx, base+"/checksums.txt")
 	if err != nil {
-		return c.fail(fmt.Errorf("checksum: %w", err))
+		return c.fail(fmt.Errorf("download: %w", err))
 	}
-
 	var expectedSum string
-	for _, line := range strings.Split(strings.TrimSpace(string(checksumsData)), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(string(checksums)), "\n") {
 		parts := strings.Fields(line)
 		if len(parts) >= 2 && parts[1] == asset {
 			expectedSum = parts[0]
@@ -125,15 +111,10 @@ func (c *CLI) updateMain() int {
 	if expectedSum == "" {
 		return c.fail(fmt.Errorf("checksum: no checksum found for %s", asset))
 	}
-
-	archiveData, err := os.ReadFile(archivePath)
-	if err != nil {
-		return c.fail(fmt.Errorf("checksum: %w", err))
-	}
-	h := sha256.Sum256(archiveData)
-	actualSum := hex.EncodeToString(h[:])
-	if actualSum != expectedSum {
-		return c.fail(fmt.Errorf("checksum: mismatch for %s (expected %s, got %s)", asset, expectedSum, actualSum))
+	// Kept only when its SHA-256 is the one checksums.txt names.
+	archivePath := filepath.Join(dlDir, asset)
+	if err := tools.Download(ctx, http.DefaultClient, base+"/"+asset, archivePath, expectedSum); err != nil {
+		return c.fail(fmt.Errorf("download, checked against checksums.txt: %w", err))
 	}
 
 	binaryName := name.Name
@@ -154,7 +135,7 @@ func (c *CLI) updateMain() int {
 			return c.fail(fmt.Errorf("extract: %w", err))
 		}
 	} else {
-		if err := extractFromTarGz(archivePath, binaryName, nextPath); err != nil {
+		if err := tools.Extract(archivePath, binaryName, nextPath); err != nil {
 			return c.fail(fmt.Errorf("extract: %w", err))
 		}
 	}
@@ -216,69 +197,22 @@ func (c *CLI) updateMain() int {
 	return 0
 }
 
-func downloadFile(ctx context.Context, url, dst string) error {
+// fetch returns the body of url, at most 1 MiB: checksums.txt, the one
+// download no hash can check.
+func fetch(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s: %s", url, resp.Status)
+		return nil, fmt.Errorf("%s: %s", url, resp.Status)
 	}
-	f, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(f, resp.Body)
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		os.Remove(dst)
-	}
-	return err
-}
-
-func extractFromTarGz(archivePath, entry, dst string) error {
-	f, err := os.Open(archivePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return fmt.Errorf("no %s in archive", entry)
-		}
-		if err != nil {
-			return err
-		}
-		if hdr.Name != entry || hdr.Typeflag != tar.TypeReg {
-			continue
-		}
-		out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(out, tr)
-		if cerr := out.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			os.Remove(dst)
-		}
-		return err
-	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
 
 func extractFromZip(archivePath, entry, dst string) error {

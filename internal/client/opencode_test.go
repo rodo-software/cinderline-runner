@@ -205,7 +205,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
-		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state:/state", "-v", "tools:/opt/cinderline:ro"},
+		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-opencode:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:     append([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp")...),
 		Cmd:     append([]string{"/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
 		Stdin:   "do it",

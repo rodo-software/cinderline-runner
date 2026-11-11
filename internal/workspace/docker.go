@@ -191,13 +191,15 @@ var gitConfig = [][2]string{
 }
 
 var (
-	issueRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+	// IssueRef is what an issue ref must look like before it goes into a
+	// path or a Docker name.
+	IssueRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 	hash     = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 )
 
 // checkDir refuses anything but a clone directly under the runs volume.
 func checkDir(dir string) error {
-	if path.Clean(dir) != dir || path.Dir(dir) != RunsPath || !issueRef.MatchString(path.Base(dir)) {
+	if path.Clean(dir) != dir || path.Dir(dir) != RunsPath || !IssueRef.MatchString(path.Base(dir)) {
 		return fmt.Errorf("%q is not a clone under %s", dir, RunsPath)
 	}
 	return nil
@@ -209,7 +211,7 @@ func checkDir(dir string) error {
 // does with old worktrees; a paused run keeps its clone by not preparing.
 func (d *Docker) Prepare(ctx context.Context, branch, base string) (string, error) {
 	ref, ok := strings.CutPrefix(branch, name.Name+"/")
-	if !ok || !issueRef.MatchString(ref) {
+	if !ok || !IssueRef.MatchString(ref) {
 		return "", fmt.Errorf("prepare: %q is not a branch %s/<REF>", branch, name.Name)
 	}
 	dir := RunsPath + "/" + ref
@@ -416,6 +418,28 @@ done`
 		clones = append(clones, Clone{Dir: dir, Branch: branch})
 	}
 	return clones, nil
+}
+
+// behindScript lists the branches under refs/heads/$2/ of the helper's clone
+// that are neither merged into $1 nor hold $1's head. A missing $1 fails.
+const behindScript = `git -C ` + RepoPath + ` rev-parse --verify --quiet "$1" >/dev/null || exit 3
+for b in $(git -C ` + RepoPath + ` for-each-ref --format='%(refname)' "refs/heads/$2/"); do
+  git -C ` + RepoPath + ` merge-base --is-ancestor "$b" "$1" && continue
+  git -C ` + RepoPath + ` merge-base --is-ancestor "$1" "$b" && continue
+  echo "${b#refs/heads/}"
+done`
+
+// Behind fetches, then asks the helper's clone in one container without
+// token or network, with the repo volume read-only.
+func (d *Docker) Behind(ctx context.Context, base string) ([]string, error) {
+	if err := d.Fetch(ctx); err != nil {
+		return nil, err
+	}
+	argv := append([]string{"docker", "run", "--rm"}, d.labels("")...)
+	argv = append(argv, "--network", "none", "-v", d.volume("repo")+":"+RepoPath+":ro",
+		"--entrypoint", "sh", GitImage, "-c", behindScript, "sh", "refs/heads/"+base, name.Name)
+	out, err := d.output(ctx, nil, argv...)
+	return strings.Fields(out), err
 }
 
 // runsShell runs script as root in a throwaway container with the runs

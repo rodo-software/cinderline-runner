@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
@@ -110,14 +111,14 @@ func binaryArgv(mount tools.Mount, image, name string) []string {
 	return nil
 }
 
-// loginExists checks whether the login file exists on the state volume.
+// loginExists checks whether the login file exists on the client's state volume.
 func loginExists(ctx context.Context, exec workspace.Exec, project, name string) bool {
 	p := loginFiles[name]
 	if p == "" {
 		return false
 	}
 	argv := []string{"docker", "run", "--rm", "--network", "none",
-		"-v", workspace.Volume(project, "state") + ":/state",
+		"-v", client.StateVolume(project, name) + ":/state",
 		"--entrypoint", "test", workspace.GitImage, "-f", p}
 	_, err := exec(ctx, nil, argv...)
 	var exit interface{ ExitCode() int }

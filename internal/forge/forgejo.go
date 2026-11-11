@@ -58,7 +58,7 @@ func NewForgejo(repository, token string) (*Forgejo, error) {
 		owner: owner,
 		host:  "https://" + host + "/api/v1",
 		token: token,
-		sleep: sleep,
+		sleep: Sleep,
 	}, nil
 }
 
@@ -272,8 +272,8 @@ func (f *Forgejo) do(ctx context.Context, method, u string, in, out any) error {
 	return nil
 }
 
-// sleep waits d, or until ctx ends.
-func sleep(ctx context.Context, d time.Duration) error {
+// Sleep waits d, or until ctx ends.
+func Sleep(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {

@@ -64,6 +64,42 @@ type runState struct {
 	mu      sync.Mutex
 	handoff *runHandoff
 	ready   bool // the clients have their tools mount
+	// noPR is when a Review issue was last found without a pull request, by
+	// ref: a cache CheckMerges may lose.
+	noPR map[string]time.Time
+}
+
+// noPullRequestFor is how long CheckMerges leaves an issue it found without
+// a pull request alone: finding none walks the forge's whole list, and a run
+// that changed no files never gets one (decision 2026-11-11-audit-fixes).
+const noPullRequestFor = 10 * time.Minute
+
+// withoutPullRequest reports whether ref was found without a pull request
+// less than noPullRequestFor ago. A nil runState remembers nothing.
+func (r *runState) withoutPullRequest(ref string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Since(r.noPR[ref]) < noPullRequestFor
+}
+
+// setPullRequest records whether ref has a pull request.
+func (r *runState) setPullRequest(ref string, has bool) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if has {
+		delete(r.noPR, ref)
+		return
+	}
+	if r.noPR == nil {
+		r.noPR = map[string]time.Time{}
+	}
+	r.noPR[ref] = time.Now()
 }
 
 // runHandoff is what Run passes to Publish for the same issue.

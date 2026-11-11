@@ -8,14 +8,13 @@ import (
 )
 
 // LoginArgv returns the docker argv that runs the CLI's own sign-in in an
-// interactive container with the project's state volume mounted at the
-// client's config dir. The credentials land on the volume; the runner never
+// interactive container with the client's state volume of the project mounted. The credentials land on the volume; the runner never
 // reads or copies them.
 func LoginArgv(client, project, image string, t tools.Mount) ([]string, error) {
 	prefix := []string{
 		"docker", "run", "--rm", "--interactive", "--tty",
 		"--user", workspace.AgentUser,
-		"-v", workspace.Volume(project, "state") + ":" + StatePath,
+		"-v", StateVolume(project, client) + ":" + StatePath,
 	}
 	prefix = append(prefix, t.Args...)
 	for _, kv := range t.Env {

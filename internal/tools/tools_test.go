@@ -57,7 +57,7 @@ func TestDownloadChecksHash(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dst := filepath.Join(t.TempDir(), "claude")
-			err := download(context.Background(), http.DefaultClient, base+"/claude", dst, tc.sum)
+			err := Download(context.Background(), http.DefaultClient, base+"/claude", dst, tc.sum)
 			_, statErr := os.Stat(dst)
 			if tc.ok {
 				if err != nil || statErr != nil {
@@ -78,7 +78,7 @@ func TestDownloadChecksHash(t *testing.T) {
 func TestDownloadRefusesHTTPError(t *testing.T) {
 	base := serve(t, nil)
 	dst := filepath.Join(t.TempDir(), "x")
-	if err := download(context.Background(), http.DefaultClient, base+"/missing", dst, sha256Hex(nil)); err == nil {
+	if err := Download(context.Background(), http.DefaultClient, base+"/missing", dst, sha256Hex(nil)); err == nil {
 		t.Fatal("404 accepted")
 	}
 }
@@ -106,13 +106,13 @@ func TestExtractOpenCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(dir, "opencode")
-	if err := extract(src, "package/bin/opencode", dst); err != nil {
+	if err := Extract(src, "package/bin/opencode", dst); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(dst); string(b) != "ELF" {
 		t.Fatalf("got %q", b)
 	}
-	if err := extract(src, "package/bin/missing", filepath.Join(dir, "m")); err == nil {
+	if err := Extract(src, "package/bin/missing", filepath.Join(dir, "m")); err == nil {
 		t.Fatal("missing entry accepted")
 	}
 }

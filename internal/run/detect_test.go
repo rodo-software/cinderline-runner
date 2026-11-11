@@ -12,6 +12,7 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
@@ -131,8 +132,8 @@ func TestDetectNoKeyAndNoLogin(t *testing.T) {
 	}
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js", "--version"}, "0.67.0\n", nil)
 	// Login file checks all return "not found" (test -f exits 1)
-	for _, file := range map[string]string{"claude": "/state/claude/.credentials.json", "codex": "/state/codex/auth.json", "gemini": "/state/gemini/.gemini/oauth_creds.json"} {
-		s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", workspace.Volume("TEST", "state") + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", exitCodeError(1))
+	for name, file := range map[string]string{"claude": "/state/claude/.credentials.json", "codex": "/state/codex/auth.json", "gemini": "/state/gemini/.gemini/oauth_creds.json"} {
+		s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", client.StateVolume("TEST", name) + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", exitCodeError(1))
 	}
 
 	got := testDetect(ctx, s.exec, sec, testCfg)
@@ -269,8 +270,8 @@ func TestDetectLoginFileNoKey(t *testing.T) {
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js", "--version"}, "0.1.0\n", nil)
 
 	// Login files exist (test -f exits 0)
-	for _, file := range map[string]string{"claude": "/state/claude/.credentials.json", "codex": "/state/codex/auth.json", "gemini": "/state/gemini/.gemini/oauth_creds.json"} {
-		s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", workspace.Volume("TEST", "state") + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", nil)
+	for name, file := range map[string]string{"claude": "/state/claude/.credentials.json", "codex": "/state/codex/auth.json", "gemini": "/state/gemini/.gemini/oauth_creds.json"} {
+		s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", client.StateVolume("TEST", name) + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", nil)
 	}
 
 	got := testDetect(ctx, s.exec, sec, testCfg)

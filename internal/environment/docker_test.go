@@ -97,7 +97,7 @@ func TestImageBuiltWhenMissing(t *testing.T) {
 
 func TestDefaultDockerfile(t *testing.T) {
 	s := string(defaultimage.Dockerfile)
-	for _, want := range []string{"php:8.4", "composer", "setup_22.x", " git ", "pdo_mysql", "golang:1.27.3", "staticcheck@", "govulncheck@", "GOTOOLCHAIN=local", "--uid 1000", "USER runner"} {
+	for _, want := range []string{"php:8.4", "composer", "setup_22.x", " git ", "pdo_mysql", "golang:1.27.4", "staticcheck@", "govulncheck@", "GOTOOLCHAIN=local", "--uid 1000", "USER runner"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("Dockerfile lacks %q", want)
 		}
@@ -155,6 +155,22 @@ func TestUpFailureLeavesNothing(t *testing.T) {
 	}
 	if got := (*calls)[len(*calls)-1].Argv; !reflect.DeepEqual(got, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}) {
 		t.Errorf("last call = %q, want the network removed", got)
+	}
+}
+
+// A network a turn's failed removal left is removed and made again, so the
+// issue's later turns still run (decision 2026-11-11-audit-fixes).
+func TestUpRemovesALeftoverNetwork(t *testing.T) {
+	d, calls := scripted(nil, map[int]error{0: errors.New("network already exists")})
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil); err != nil {
+		t.Fatalf("up = %v", err)
+	}
+	var got []string
+	for _, c := range *calls {
+		got = append(got, strings.Join(c.Argv[1:3], " "))
+	}
+	if want := []string{"network create", "rm --force", "network rm", "network create", "run --detach", "network connect", "run --detach"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("calls = %q, want %q", got, want)
 	}
 }
 
@@ -583,8 +599,8 @@ func TestRunWithoutServicesRunsNoAgent(t *testing.T) {
 	if _, err := d.Run(context.Background(), turn); !errors.Is(err, boom) {
 		t.Errorf("Run = %v, want boom", err)
 	}
-	if got := calls(); len(got) != 3 {
-		t.Errorf("calls = %q, want the two image inspects and network create only", got)
+	if got := calls(); len(got) != 6 || got[5].Argv[2] != "create" {
+		t.Errorf("calls = %q, want the two image inspects, network create, the leftovers removed and one more create", got)
 	}
 }
 

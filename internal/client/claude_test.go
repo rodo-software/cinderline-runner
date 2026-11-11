@@ -180,7 +180,7 @@ func TestClaudeRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
-		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state:/state", "-v", "tools:/opt/cinderline:ro"},
+		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-claude:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:     append([]string{"DISABLE_AUTOUPDATER=1"}, claudeEnv("sk-ant-api03-k", Turn{Token: "tok"})...),
 		Cmd:     append([]string{"/opt/cinderline/bin/claude"}, claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, session, "https://cs.example/mcp")...),
 		Stdin:   "do it",

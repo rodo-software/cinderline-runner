@@ -34,13 +34,13 @@ func (c *OpenCode) Hosts() []string { return []string{"openrouter.ai:443"} }
 // Run runs one turn. OpenCode has no turn limit to hit (see opencodeConfig),
 // so HitTurnLimit stays false.
 func (c *OpenCode) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := PrepareState(ctx, c.Exec, c.Project); err != nil {
+	if err := PrepareState(ctx, c.Exec, c.Project, "opencode"); err != nil {
 		return Result{}, err
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
 		Issue:  path.Base(t.Dir), // the clone is RunsPath/<REF>
 		Dir:    t.Dir,
-		Mounts: agentMounts(c.Project, c.Tools),
+		Mounts: agentMounts(c.Project, "opencode", c.Tools),
 		// OpenCodeEnv: on musl, the libraries the binary needs from the tools volume.
 		Env:     append(append(append([]string(nil), c.Tools.Env...), c.Tools.OpenCodeEnv...), opencodeEnv(c.Key, t, c.MCPURL)...),
 		Cmd:     append([]string{tools.Path + "/bin/opencode"}, opencodeArgs(t)...),

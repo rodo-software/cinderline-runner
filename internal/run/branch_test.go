@@ -399,7 +399,11 @@ func newReviewRun(trusted bool, mergeStatus string) *reviewRun {
 			"GET /teams/1":              {200, string(team)},
 			"PATCH /issues/CSR-1":       {200, issueJSON("CSR-1", "review")},
 		}},
-		ws:    &workspace.Fake{Prepares: []workspace.PrepareReply{{Dir: "/review"}}},
+		ws: &workspace.Fake{
+			Prepares:  []workspace.PrepareReply{{Dir: "/review"}},
+			Strandeds: []workspace.StrandedReply{{}},
+			Behinds:   []workspace.BehindReply{{Branches: []string{"cinderline/CSR-1", "cinderline/CSR-4"}}},
+		},
 		forge: &forge.Fake{},
 	}
 }
@@ -444,17 +448,17 @@ func TestReviewBranches(t *testing.T) {
 		log     string
 	}{
 		{"behind main, merging cleanly", true, []workspace.IsAncestorReply{{}, {}}, []workspace.MergeBaseReply{{}},
-			[]string{"Prepare", "IsAncestor", "IsAncestor", "MergeBase", "Push"}, []string{"FindPullRequest", "RequestMerge"}, false, "base merged in"},
+			[]string{"Stranded", "Behind", "Prepare", "IsAncestor", "IsAncestor", "MergeBase", "Push"}, []string{"FindPullRequest", "RequestMerge"}, false, "base merged in"},
 		{"behind main, merging cleanly", false, []workspace.IsAncestorReply{{}, {}}, []workspace.MergeBaseReply{{}},
-			[]string{"Prepare", "IsAncestor", "IsAncestor", "MergeBase", "Push"}, nil, false, "base merged in"},
+			[]string{"Stranded", "Behind", "Prepare", "IsAncestor", "IsAncestor", "MergeBase", "Push"}, nil, false, "base merged in"},
 		{"behind main, with a conflict", true, []workspace.IsAncestorReply{{}, {}}, []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}},
-			[]string{"Prepare", "IsAncestor", "IsAncestor", "MergeBase"}, nil, true, "work.txt"},
+			[]string{"Stranded", "Behind", "Prepare", "IsAncestor", "IsAncestor", "MergeBase"}, nil, true, "work.txt"},
 		{"behind main, with a conflict", false, []workspace.IsAncestorReply{{}, {}}, []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}},
-			[]string{"Prepare", "IsAncestor", "IsAncestor", "MergeBase"}, nil, false, "work.txt"},
+			[]string{"Stranded", "Behind", "Prepare", "IsAncestor", "IsAncestor", "MergeBase"}, nil, false, "work.txt"},
 		{"already merged", true, []workspace.IsAncestorReply{{Yes: true}}, nil,
-			[]string{"Prepare", "IsAncestor"}, nil, false, ""},
+			[]string{"Stranded", "Behind", "Prepare", "IsAncestor"}, nil, false, ""},
 		{"already current", true, []workspace.IsAncestorReply{{}, {Yes: true}}, nil,
-			[]string{"Prepare", "IsAncestor", "IsAncestor"}, nil, false, ""},
+			[]string{"Stranded", "Behind", "Prepare", "IsAncestor", "IsAncestor"}, nil, false, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.state+map[bool]string{true: ", trusted", false: ", untrusted"}[tt.trusted], func(t *testing.T) {
@@ -564,7 +568,7 @@ func TestReviewBranchesFailures(t *testing.T) {
 	if !strings.Contains(r.log.String(), "clone failed") || !strings.Contains(r.log.String(), "CSR-1") {
 		t.Errorf("log = %s", r.log.String())
 	}
-	if got := r.ws.Calls(); len(got) != 3 || got[1].Args[0] != "cinderline/CSR-4" {
+	if got := r.ws.Calls(); len(got) != 5 || got[3].Args[0] != "cinderline/CSR-4" {
 		t.Errorf("workspace calls = %+v, want CSR-4 checked after CSR-1 failed", got)
 	}
 
@@ -572,6 +576,58 @@ func TestReviewBranchesFailures(t *testing.T) {
 	r.api.routes["GET /issues?status=review"] = reply{500, `{"message":"down"}`}
 	if err := r.run(t); err == nil {
 		t.Error("a failed list is no error")
+	}
+}
+
+// A branch that is not behind the base gets no clone: one fetch per tick,
+// not one per Review issue (decision 2026-11-11-audit-fixes).
+func TestReviewBranchesSkipsCurrentBranches(t *testing.T) {
+	r := newReviewRun(true, "")
+	r.ws.Behinds = []workspace.BehindReply{{}}
+	if err := r.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.methods(); !reflect.DeepEqual(got, []string{"Stranded", "Behind"}) {
+		t.Errorf("workspace calls = %v", got)
+	}
+}
+
+// A Review issue's clone with commits the remote lacks (a failed run or
+// publish) is pushed before a fresh clone replaces it, and its pull request
+// opened; while the push fails the clone stays (decision 2026-11-11-audit-fixes).
+func TestReviewBranchesNeverRemovesUnpushedWork(t *testing.T) {
+	clone := []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-1", Branch: "cinderline/CSR-1"}}}}
+
+	r := newReviewRun(false, "")
+	r.ws.Strandeds, r.ws.Pushes = clone, []error{errors.New("forge down")}
+	r.forge.MergeStates = []forge.MergeStateReply{{}}
+	if err := r.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.methods(); !reflect.DeepEqual(got, []string{"Stranded", "Push", "Behind"}) {
+		t.Errorf("after a failed push, workspace calls = %v; want no Prepare", got)
+	}
+
+	r = newReviewRun(false, "")
+	r.ws.Strandeds, r.ws.Pushes = clone, []error{nil}
+	r.ws.Ancestors = []workspace.IsAncestorReply{{}, {Yes: true}}
+	r.forge.MergeStates = []forge.MergeStateReply{{}}
+	r.forge.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{Number: 1, URL: "u"}}}
+	if err := r.run(t); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.methods(); !reflect.DeepEqual(got, []string{"Stranded", "Push", "Behind", "Prepare", "IsAncestor", "IsAncestor"}) {
+		t.Errorf("after the push, workspace calls = %v", got)
+	}
+	if got := r.forgeMethods(); !reflect.DeepEqual(got, []string{"MergeState", "OpenPullRequest"}) {
+		t.Errorf("forge calls = %v", got)
+	}
+
+	// The list failing leaves every clone alone.
+	r = newReviewRun(false, "")
+	r.ws.Strandeds = []workspace.StrandedReply{{Err: errors.New("docker down")}}
+	if err := r.run(t); err == nil || len(r.methods()) != 1 {
+		t.Errorf("ReviewBranches = %v after %v; want an error and no clone", err, r.methods())
 	}
 }
 

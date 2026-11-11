@@ -504,6 +504,27 @@ func mergeCheck(t *testing.T, issues []string, states []forge.MergeStateReply) (
 	return api, fg, log.String()
 }
 
+// An issue without a pull request is not looked up again on the next tick:
+// finding none walks the forge's whole list (decision 2026-11-11-audit-fixes).
+func TestCheckMergesLeavesAnIssueWithoutPullRequestAlone(t *testing.T) {
+	trusted, _ := json.Marshal(cinderline.Team{ID: 1, Name: "Trusted", Trusted: true})
+	api := &fakeAPI{routes: map[string]reply{
+		"GET /issues?status=review": {200, `{"issues":[` + reviewJSON("CSR-1", 1, false, "") + `,` + reviewJSON("CSR-2", 1, false, "") + `]}`},
+		"GET /teams/1":              {200, string(trusted)},
+	}}
+	fg := &forge.Fake{MergeStates: []forge.MergeStateReply{{}, {State: forge.MergePending}, {State: forge.MergePending}}}
+	p := project(t)
+	p.run = &runState{}
+	for range 2 {
+		if err := p.CheckMerges(context.Background(), api.client(t), fg); err != nil {
+			t.Fatalf("CheckMerges = %v", err)
+		}
+	}
+	if got, want := branches(fg), []any{"cinderline/CSR-1", "cinderline/CSR-2", "cinderline/CSR-2"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("looked up %v, want %v", got, want)
+	}
+}
+
 // reviewJSON is a Review issue of team (0: none), with a parent and a
 // merge_status when given.
 func reviewJSON(ref string, team int, parent bool, status string) string {

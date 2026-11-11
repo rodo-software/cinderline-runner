@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -97,8 +96,6 @@ func streamCommand(ctx context.Context, env []string, stdin string, out io.Write
 	return cmd.Run()
 }
 
-var issueRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
-
 // Run runs one agent turn: an internal network with a fresh MySQL and the
 // egress proxy allowing d.Allow and s.Allow, then the hardened agent
 // container with only DBEnv, ProxyEnv and s.Env, stopped with docker stop at
@@ -106,7 +103,7 @@ var issueRef = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 // hosts the proxy refused. All are removed afterwards, also after a failure
 // or a stop of the runner.
 func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
-	if !issueRef.MatchString(s.Issue) || len(s.Cmd) == 0 {
+	if !workspace.IssueRef.MatchString(s.Issue) || len(s.Cmd) == 0 {
 		return "", fmt.Errorf("run: issue %q, command %q", s.Issue, s.Cmd)
 	}
 	var names []string
@@ -301,12 +298,19 @@ func (d *Docker) network(issue string) string {
 // up creates the issue's internal network, which has no route out and no
 // upstream DNS, starts the egress proxy on it as proxy, allowing allow, and
 // connects the proxy to the default bridge as its way out, then starts a
-// fresh MySQL as mysql. A failure leaves nothing behind.
+// fresh MySQL as mysql. What an earlier turn left under these names is
+// removed first when it is in the way. A failure leaves nothing behind.
 func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string) error {
 	labels := workspace.Labels(d.Project, issue)
 	net := d.network(issue)
-	if _, err := d.exec(ctx, append(append([]string{"docker", "network", "create", "--internal"}, labels...), net)...); err != nil {
-		return err
+	create := append(append([]string{"docker", "network", "create", "--internal"}, labels...), net)
+	if _, err := d.exec(ctx, create...); err != nil {
+		// A turn whose removal failed left the network: without this every
+		// later turn of the issue fails until a restart. One more try.
+		_ = d.down(ctx, issue)
+		if _, err := d.exec(ctx, create...); err != nil {
+			return err
+		}
 	}
 	// No --rm: down removes them, and an automatic removal would race with that.
 	proxy := append(append([]string{"docker", "run", "--detach"}, labels...),
