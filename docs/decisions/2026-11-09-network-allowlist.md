@@ -12,7 +12,7 @@
    - The package registries: `repo.packagist.org`, `packagist.org`, `codeload.github.com`, `api.github.com`, `registry.npmjs.org`, `proxy.golang.org`, `sum.golang.org`, all on port 443.
    - No forge: git fetch and push run in the helper container, which holds the git token and is not on the run's network.
 2. **Only local config extends it**: a project's optional `allow_hosts` in `config.json`, a list of host:port entries. A list managed from Cinderline is a separate backlog issue, for when a second runner machine needs it.
-3. **`host.docker.internal` is never allowed.** The agent container loses `--add-host host.docker.internal:host-gateway`. A local model backend waits for CSR-91, which runs it as a service on the internal network.
+3. **`host.docker.internal` is never allowed.** The agent container loses `--add-host host.docker.internal:host-gateway`. The runner runs no local model backend (decision 2026-11-11-no-local-model-work).
 4. **`packagist.org:443` is a registry.** Composer calls it at the end of every `composer install` and `composer require` (Composer 2.11.1, observed behind a logging proxy).
 5. **Runs on a stored sign-in** (no key, CSR-58) also get the provider's sign-in hosts, unchecked against the CLIs: `console.anthropic.com` and `platform.claude.com` for Claude Code; `chatgpt.com` and `auth.openai.com` for Codex; `cloudcode-pa.googleapis.com` and `oauth2.googleapis.com` for Gemini CLI. A missing host shows up as a refused host in the run's log.
 
