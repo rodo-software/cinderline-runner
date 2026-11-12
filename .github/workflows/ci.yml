@@ -1,4 +1,4 @@
-# macOS/Windows checks and the GoReleaser snapshot; Linux checks run on Forgejo; see decision 2026-11-05-ci.
+# macOS checks and the GoReleaser snapshot; Linux checks run on Forgejo; see decisions 2026-11-05-ci and 2026-11-12-ci-speedups.
 name: ci
 on:
   push:
@@ -7,11 +7,16 @@ on:
   pull_request:
 permissions:
   contents: read
+# A newer push to the same branch or PR cancels the older run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     strategy:
       matrix:
-        os: [macos-latest, windows-latest]
+        # shortcut: macOS only for now (decision 2026-11-12-ci-speedups); add windows-latest back before Windows users.
+        os: [macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7

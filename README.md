@@ -16,7 +16,7 @@ Status: milestones M0 to M5, M7 (Codex, Gemini CLI, `cinderline login`, client d
 
 - An older Docker Engine is refused: it forwards DNS lookups from the agents' internal network, a way out past the network allowlist (CVE-2024-29018).
 - On a Windows build below 19045 every command except `cinderline version` stops with an error naming the build it found. Windows Server is not supported: Docker Desktop does not run on it.
-- CI runs the checks on macOS and Windows on GitHub and on Linux on Forgejo; [docs/ci/platforms.yml](docs/ci/platforms.yml) widens that to the oldest and newest images per system and architecture.
+- CI runs the checks on macOS on GitHub and on Linux on Forgejo (Windows is off for now, decision 2026-11-12-ci-speedups); [docs/ci/platforms.yml](docs/ci/platforms.yml) widens that to the oldest and newest images per system and architecture.
 
 ## Install
 

@@ -36,7 +36,7 @@ const PublishedImage = "ghcr.io/rodo-software/" + name.Name + "-runner-default"
 // of the SHA-256 of the images/default/Dockerfile it was built from, so a
 // changed Dockerfile is built locally until it is published and pinned again.
 // Pinned to tag v0.1.1 (CSR-151); repeat the pin after every Dockerfile
-// change (.github/workflows/default-image.yml, point 3).
+// change (.github/workflows/default-image.yml, its header).
 var publishedDigest, publishedSum = "sha256:22dc9fdeda6197570675db35feb6826639a35ae3f16079151c7b3cddcb95e95d", "8bc0a5e245dc"
 
 // DBEnv are the variables today's compose file sets, so Laravel's tests in

@@ -1,4 +1,4 @@
-# Linux CI for Forgejo; macOS and Windows run in .github/workflows/ci.yml; see decision 2026-11-05-ci.
+# Linux CI for Forgejo; macOS runs in .github/workflows/ci.yml; see decisions 2026-11-05-ci and 2026-11-12-ci-speedups.
 name: ci
 on:
   push:
@@ -9,6 +9,8 @@ on:
   pull_request:
 jobs:
   linux:
+    # A release tag points at a main commit this job already passed; don't test it twice.
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: docker
     steps:
       - uses: actions/checkout@v7
@@ -23,9 +25,10 @@ jobs:
       - run: staticcheck ./...
       - run: go test -race ./...
       - run: govulncheck ./...
-  # Only main and tags reach GitHub
+  # Only main and tags reach GitHub. Each event pushes only its own ref, so a
+  # tag reaches GitHub once and starts one release (decision 2026-11-12-ci-speedups).
   mirror:
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
     needs: [linux]
     runs-on: docker
     steps:
@@ -33,10 +36,23 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Push main and tags to GitHub
+      - name: Push main to GitHub
         env:
           TOKEN: ${{ secrets.MIRROR_GITHUB_TOKEN }}
         run: |
           remote="https://x-access-token:${TOKEN}@github.com/rodo-software/cinderline-runner.git"
           git push --force "$remote" refs/remotes/origin/main:refs/heads/main
-          git push "$remote" --tags
+  mirror-tag:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Push the tag to GitHub
+        env:
+          TOKEN: ${{ secrets.MIRROR_GITHUB_TOKEN }}
+        run: |
+          remote="https://x-access-token:${TOKEN}@github.com/rodo-software/cinderline-runner.git"
+          git push "$remote" "${GITHUB_REF}:${GITHUB_REF}"
