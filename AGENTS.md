@@ -18,7 +18,7 @@ The Cinderline runner: a native Go program on a developer's machine that takes T
 
 Apply **KISS first, then DRY, then SOLID where it pays off**. When they conflict, the simpler code wins.
 
-- Go's standard library first. Every dependency needs a one-line reason in `docs/decisions/`; the plan allows two (`go-keyring`, `kardianos/service`).
+- Go's standard library first. Every dependency needs a one-line reason in `docs/decisions/`; the plan allows `go-keyring` and `kardianos/service`, and decision 2026-11-12-manage-cli adds `charmbracelet/huh` for `manage`.
 - The only interfaces are `Client`, `Forge`, `Environment` and `Workspace`, one file per implementation, in-memory fakes for tests. No other abstraction until there are two real uses of it. No plugin system.
 - The name `cinderline` (command, config folder, service, keychain, branch prefix, MCP server name, version header) lives in one constant in `internal/name`. Never spell it elsewhere.
 - Issues are the only workflow state (decision 0091): the runner keeps no run or step table, only caches such as paused notes it can lose.

@@ -21,9 +21,9 @@ import (
 // errEOF is stdin ending before an answer.
 var errEOF = errors.New("input ended before setup was complete; nothing was stored")
 
-// add asks for a project's details, checking each answer as it comes (EMBER-26).
-// Tokens are read in plain text like every other answer: hiding them needs
-// golang.org/x/term, a dependency the plan does not allow.
+// add asks for a project's details on stdin, one line per answer. Tokens are
+// read in plain text like every other answer, so add works from a script;
+// manage asks the same with hidden token input (decision 2026-11-12-manage-cli).
 func (c *CLI) add(args []string) int {
 	f := c.flags("add", "")
 	if err := f.Parse(args); err != nil || f.NArg() > 0 {
@@ -32,15 +32,14 @@ func (c *CLI) add(args []string) int {
 		}
 		return 2
 	}
-	if err := c.checkDocker(context.Background(), false); err != nil {
-		return c.fail(err)
-	}
-	cfg, err := c.loadConfig()
-	if err != nil {
-		return c.fail(err)
-	}
+	ask := c.lineAsk()
+	return c.addProject(ask, ask)
+}
+
+// lineAsk returns an ask that prints prompt and reads one trimmed line from stdin.
+func (c *CLI) lineAsk() func(prompt string) (string, error) {
 	in := bufio.NewScanner(c.Stdin)
-	ask := func(prompt string) (string, error) {
+	return func(prompt string) (string, error) {
 		fmt.Fprint(c.Stdout, prompt)
 		if !in.Scan() {
 			if err := in.Err(); err != nil {
@@ -49,6 +48,19 @@ func (c *CLI) add(args []string) int {
 			return "", errEOF
 		}
 		return strings.TrimSpace(in.Text()), nil
+	}
+}
+
+// addProject asks for a project's details, checking each answer as it comes
+// (EMBER-26). askSecret asks for tokens and keys; both return errEOF when the
+// person gives up.
+func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int {
+	if err := c.checkDocker(context.Background(), false); err != nil {
+		return c.fail(err)
+	}
+	cfg, err := c.loadConfig()
+	if err != nil {
+		return c.fail(err)
 	}
 	say := func(format string, a ...any) { fmt.Fprintf(c.Stdout, format+"\n", a...) }
 
@@ -68,7 +80,7 @@ func (c *CLI) add(args []string) int {
 			instance = strings.TrimRight(v, "/")
 		}
 		for token == "" {
-			if token, err = ask("Runner token: "); err != nil {
+			if token, err = askSecret("Runner token: "); err != nil {
 				return c.fail(err)
 			}
 		}
@@ -125,7 +137,7 @@ func (c *CLI) add(args []string) int {
 	// Stored, not validated against the forge.
 	var gitToken string
 	for gitToken == "" {
-		if gitToken, err = ask("Git token: "); err != nil {
+		if gitToken, err = askSecret("Git token: "); err != nil {
 			return c.fail(err)
 		}
 	}
@@ -157,7 +169,7 @@ func (c *CLI) add(args []string) int {
 	// Optional; EOF ends them like the copy offer, as the project is already added.
 	for i := 0; i < len(modelKeys); {
 		m := modelKeys[i]
-		v, err := ask(m.label + " for " + m.client + " [empty to skip]: ")
+		v, err := askSecret(m.label + " for " + m.client + " [empty to skip]: ")
 		if errors.Is(err, errEOF) {
 			break
 		}

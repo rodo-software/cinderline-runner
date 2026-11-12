@@ -45,6 +45,8 @@ To pin a specific version, set `CINDERLINE_DOWNLOAD_URL` before running (e.g.
 
 `cinderline add` asks for the Cinderline instance's URL, the project's runner token, the repository (it offers the one the project names in Cinderline and refuses another) and a git token. It checks Docker first (installed, daemon running, at least 5 GB free), checks the runner token against the instance as it asks, stores both tokens in the OS keychain (or a 0600 file in the state folder where there is none) and the rest in `config.json`, and warns when CI can read secrets from the runner's branches (see "CI secrets" below). When other projects are configured, it offers to copy their model credentials. A running runner picks the project up at once. `cinderline remove [-url URL] KEY` removes a project, its secrets, its Docker volumes (the clones and the clients' sign-ins) and its paused notes; a running runner drops it at once.
 
+`cinderline manage` opens an interactive screen in the terminal: pick a project with the arrow keys to see which tokens and model keys it holds and where (keychain or fallback file), never their values, then replace or delete one; or add a project, with the same questions and checks as `add` but with tokens hidden as you type. A replaced runner token is checked against the instance and must belong to the project; an extra repository's token is checked with `git ls-remote`; the git token and model keys are stored without a check, as `add` does. A running runner reloads after each change. Ctrl-C goes back one screen.
+
 A project key can be added once: Docker volumes are named by the key, so a second project with the same key on another instance is refused by `add`, and one written into `config.json` by hand does not run.
 
 ### The git token
@@ -130,7 +132,7 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 - `min_free_disk`: when free space on Docker's disk (where the worktree and session volumes are) is below this, kept sessions are deleted oldest first; such as `"10GB"`, in `MB`, `GB` or `TB`, `"10GB"` by default, `"off"` to never delete them for space. The runner checks both limits at start and before each run, per project; a paused run (waiting for an answer, or between an orchestrator's rounds) and a worktree with unpushed commits are never deleted. A follow-up whose session was deleted starts fresh and says so in a comment.
 - Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key; `extra_repositories`, which `add-repo` writes (see "Extra repositories").
 
-Unknown fields are refused. `add`, `key set`, `login`, `add-repo` and `remove-repo` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
+Unknown fields are refused. `add`, `manage`, `key set`, `login`, `add-repo` and `remove-repo` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
 
 ## Network
 

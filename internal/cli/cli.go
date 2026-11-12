@@ -47,6 +47,7 @@ type command struct {
 func commands() []command {
 	return []command{
 		{"add", "", "add a project, asking for its details", (*CLI).add},
+		{"manage", "", "browse projects in an interactive screen: see, replace or delete their tokens, or add a project", (*CLI).manage},
 		{"remove", "[-url URL] KEY", "remove a project and its secrets", (*CLI).remove},
 		{"run", "[-v]", "run in the foreground until Ctrl-C; -v also logs to stderr, with Debug lines", (*CLI).run},
 		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
