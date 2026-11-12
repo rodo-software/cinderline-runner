@@ -231,8 +231,16 @@ func TestReportAndHeartbeatAtStart(t *testing.T) {
 	})
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if want := `Bearer tok-A {"runner_version":"1.2.3","clients":[],"environments":["default","docker"],"errors":[]}`; strings.TrimSpace(a.reports[0]) != want {
-		t.Errorf("report = %s, want %s", a.reports[0], want)
+	// clients is left out: detection runs alongside the first report and may land before it.
+	auth, body, _ := strings.Cut(strings.TrimSpace(a.reports[0]), " {")
+	var r map[string]json.RawMessage
+	if err := json.Unmarshal([]byte("{"+body), &r); err != nil {
+		t.Fatalf("report %s: %v", a.reports[0], err)
+	}
+	delete(r, "clients")
+	got, _ := json.Marshal(r)
+	if want := `{"environments":["default","docker"],"errors":[],"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
+		t.Errorf("report = %s, want Bearer tok-A with %s", a.reports[0], want)
 	}
 	if a.heartbeats[0] != "Bearer tok-A" {
 		t.Errorf("heartbeat sent with %q", a.heartbeats[0])
