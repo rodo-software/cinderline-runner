@@ -47,8 +47,6 @@ type daemon struct {
 	mu       sync.Mutex
 	projects []scheduler.ProjectStatus // the config's projects; one without a slot carries its error
 	slotted  map[string]bool
-
-	saving sync.Mutex // one workspace fill-in at a time reads and writes config.json
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -254,8 +252,12 @@ func (d *daemon) fillWorkspace(ctx context.Context, c *cinderline.Client, file s
 		}
 		return
 	}
-	d.saving.Lock()
-	defer d.saving.Unlock()
+	unlock, err := config.Lock(file)
+	if err != nil {
+		c.Log.Warn("workspace not filled in", "err", err)
+		return
+	}
+	defer unlock()
 	cfg, err := config.Load(file)
 	if err == nil {
 		i := slices.IndexFunc(cfg.Projects, func(q config.Project) bool {

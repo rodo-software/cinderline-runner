@@ -46,7 +46,7 @@ func (c *CLI) remove(args []string) int {
 		}
 	}
 	cfg.Projects = without(cfg.Projects, p)
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := c.saveConfig(cfg); err != nil {
 		return c.fail(err)
 	}
 	// Before Docker: the reload ends the project's runs, which hold its volumes.

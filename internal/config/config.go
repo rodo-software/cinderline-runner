@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"net"
 	"net/url"
@@ -414,6 +415,37 @@ func (c *Config) Save(path string) (err error) {
 	}
 	// The rename makes the write atomic: a crash leaves the old file or the new one, never a torn one.
 	return os.Rename(f.Name(), path)
+}
+
+// staleLock is the age after which a lock file is taken to be left by a
+// process that died: a holder only loads and saves, which takes milliseconds.
+const staleLock = 10 * time.Second
+
+// Lock takes the lock on the config file at path, across processes, and
+// returns its release. Hold it from the Load to the Save of a change, so the
+// daemon and the CLI never write over each other's change (CSR-189). It
+// waits while another holder has it.
+func Lock(path string) (unlock func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	lock := path + ".lock"
+	for {
+		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			f.Close()
+			return func() { os.Remove(lock) }, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+		// shortcut: two waiters breaking one stale lock at once can both take it; it needs a crash first, so an OS file lock only if that is seen.
+		if fi, err := os.Stat(lock); err == nil && time.Since(fi.ModTime()) > staleLock {
+			os.Remove(lock)
+			continue
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // SameRepository reports whether a and b name the same repository: host and

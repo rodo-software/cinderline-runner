@@ -151,7 +151,7 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 	// The config first, so a failed save stores no secrets.
 	others := cfg.Projects
 	cfg.Projects = append(append([]config.Project(nil), others...), p)
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := c.saveConfig(cfg); err != nil {
 		return c.fail(err)
 	}
 	for _, s := range []struct {
@@ -230,7 +230,7 @@ func (c *CLI) undoAdd(cfg *config.Config, p config.Project) {
 		}
 	}
 	cfg.Projects = without(cfg.Projects, p)
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := c.saveConfig(cfg); err != nil {
 		fmt.Fprintln(c.Stderr, "error:", err)
 	}
 }

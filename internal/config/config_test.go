@@ -490,3 +490,51 @@ func TestFillWorkspace(t *testing.T) {
 		}
 	}
 }
+
+func TestLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "config.json") // Lock makes the folder, as Save does
+	unlock, err := Lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan func())
+	go func() {
+		u, err := Lock(path)
+		if err != nil {
+			t.Error(err)
+		}
+		got <- u
+	}()
+	select {
+	case <-got:
+		t.Fatal("a second Lock got the lock while the first held it")
+	case <-time.After(50 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case u := <-got:
+		u()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second Lock did not get the lock after its release")
+	}
+	if _, err := os.Stat(path + ".lock"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("lock file after release: %v", err)
+	}
+}
+
+func TestLockBreaksStaleLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	// As left by a process that died holding it.
+	if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * staleLock)
+	if err := os.Chtimes(path+".lock", old, old); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := Lock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+}

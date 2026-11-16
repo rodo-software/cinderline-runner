@@ -132,6 +132,17 @@ func (c *CLI) loadConfig() (*config.Config, error) {
 	return cfg, err
 }
 
+// saveConfig saves cfg under the config lock, so a workspace the daemon fills
+// in at that instant cannot write over it (CSR-189).
+func (c *CLI) saveConfig(cfg *config.Config) error {
+	unlock, err := config.Lock(c.Paths.File)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return cfg.Save(c.Paths.File)
+}
+
 func (c *CLI) version(args []string) int {
 	if len(args) > 0 {
 		c.usage()

@@ -114,13 +114,13 @@ func (c *CLI) addRepo(args []string) int {
 
 	// The config first, so a failed save stores no secret.
 	cfg.Projects[i].ExtraRepositories = append(slices.Clone(p.ExtraRepositories), r)
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := c.saveConfig(cfg); err != nil {
 		return c.fail(err)
 	}
 	store, err := c.Secrets.Set(p, secrets.ExtraGitToken(r.URL), token)
 	if err != nil {
 		cfg.Projects[i] = p
-		if serr := cfg.Save(c.Paths.File); serr != nil {
+		if serr := c.saveConfig(cfg); serr != nil {
 			fmt.Fprintln(c.Stderr, "error:", serr)
 		}
 		return c.fail(err)
@@ -157,7 +157,7 @@ func (c *CLI) removeRepo(args []string) int {
 	}
 	r := p.ExtraRepositories[j]
 	cfg.Projects[i].ExtraRepositories = slices.Delete(slices.Clone(p.ExtraRepositories), j, j+1)
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := c.saveConfig(cfg); err != nil {
 		return c.fail(err)
 	}
 	if err := c.Secrets.Delete(p, secrets.ExtraGitToken(r.URL)); err != nil {
