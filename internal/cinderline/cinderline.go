@@ -61,6 +61,11 @@ const (
 	maxPollAfter = time.Hour
 )
 
+// UpgradeWait is how long every poll waits after a 426: a new minimum
+// version stays until the person updates the runner, so asking every few
+// seconds only loads the app (CSR-187).
+const UpgradeWait = time.Hour
+
 // maxRows caps GET /issues and GET /issues/{ref}/comments (decision 2026-11-08-comment-cursor).
 const maxRows = 200
 
@@ -127,6 +132,7 @@ type Client struct {
 	pollAfter  map[string]time.Duration // by operation or purpose; the interval the last successful answer sent
 	longPoll   bool                     // the last GetProject offered long_poll
 	retryAt    time.Time                // no request before this: the latest Retry-After (CSR-93)
+	upgradeAt  time.Time                // no poll before this: UpgradeWait after the latest 426 (CSR-187)
 
 	// Sync mode (sync.go).
 	syncing  bool                    // the last GetProject offered sync
@@ -172,10 +178,14 @@ func (c *Client) APIVersion() string {
 
 // PollAfter returns the interval, clamped, that the last successful answer
 // to p sent, and false when it sent none (an older app): the caller then
-// keeps its own default.
+// keeps its own default. Within UpgradeWait of a 426 it returns the time
+// left of that wait instead.
 func (c *Client) PollAfter(p Poll) (time.Duration, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if left := time.Until(c.upgradeAt); left > 0 {
+		return left, true
+	}
 	d, ok := c.pollAfter[string(p)]
 	return d, ok
 }
@@ -724,6 +734,9 @@ func (c *Client) send(req *http.Request, op string, want int, out any) (*http.Re
 	switch resp.StatusCode {
 	case http.StatusUpgradeRequired:
 		err = &UpgradeRequiredError{MinimumRunnerVersion: e.MinimumRunnerVersion}
+		c.mu.Lock()
+		c.upgradeAt = time.Now().Add(UpgradeWait)
+		c.mu.Unlock()
 	case http.StatusConflict:
 		err = &ConflictError{Status: e.Status}
 	default:

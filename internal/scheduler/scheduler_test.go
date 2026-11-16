@@ -1273,3 +1273,48 @@ func TestUnavailableCinderlineSkipsNoIssue(t *testing.T) {
 		t.Fatalf("writes = %q, want only the claim of CSR-9", got)
 	}
 }
+
+// A 426 means the runner is too old (CSR-187): the slot logs it once at
+// Error, shows how to update in the status, and both the work loop and the
+// timers ask again only once an hour instead of every few seconds.
+func TestUpgradeRequiredPollsHourly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		at := map[string][]time.Time{}
+		c := memClient(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			defer mu.Unlock()
+			at[r.URL.Path] = append(at[r.URL.Path], time.Now())
+			w.WriteHeader(http.StatusUpgradeRequired)
+			_, _ = io.WriteString(w, `{"minimum_runner_version":"9.9.9"}`)
+		})
+		buf := &logBuf{}
+		s := &Scheduler{Log: slog.New(slog.NewJSONHandler(buf, nil)), MaxBackoff: time.Second, ReviewInterval: 10 * time.Second, MergeInterval: time.Hour}
+		review := func(ctx context.Context, c *cinderline.Client) error { return c.Heartbeat(ctx) } // any request
+		ctx, cancel := context.WithCancel(context.Background())
+		start := time.Now()
+		go s.Run(ctx, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{ReviewBranches: review}}})
+		time.Sleep(3*time.Hour + 30*time.Minute)
+		st := s.Status()["CSR"]
+		cancel()
+		synctest.Wait()
+		mu.Lock()
+		defer mu.Unlock()
+
+		checkGaps(t, "work", start, at["/api/runner/v1/work"], []time.Duration{0, 3600, 3600, 3600})
+		if n := len(at["/api/runner/v1/work"]); n != 4 {
+			t.Errorf("work requests = %d, want 4: one per hour", n)
+		}
+		checkGaps(t, "review", start, at["/api/runner/v1/heartbeat"], []time.Duration{10, 3600, 3600})
+		if n := len(at["/api/runner/v1/heartbeat"]); n != 4 {
+			t.Errorf("review requests = %d, want 4: one per hour", n)
+		}
+		want := name.Name + " needs runner ≥ 9.9.9; run `" + name.Name + " update` and then `" + name.Name + " run`"
+		if got := strings.Count(buf.String(), `"level":"ERROR"`); got != 1 || !strings.Contains(buf.String(), want) {
+			t.Errorf("want one Error line %q, got:\n%s", want, buf.String())
+		}
+		if st.LastError != want || st.Connected {
+			t.Errorf("status = %+v, want last error %q", st, want)
+		}
+	})
+}

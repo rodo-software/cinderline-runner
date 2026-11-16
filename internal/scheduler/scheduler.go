@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 // ErrNotStarted marks a Run error from before the first agent turn (tools,
@@ -162,19 +163,45 @@ func (s *Scheduler) Run(ctx context.Context, slots []Slot) {
 // slot runs cycles until ctx or work is done, backing off after each failure.
 // While Cinderline is only unavailable, for less than ReportAfter, a failure
 // is a warning and not reported: a deploy is the normal case (CSR-93).
+//
+// A 426 means this runner is too old for the app: the slot logs it once at
+// Error, shows it in the status, and asks again only after
+// cinderline.UpgradeWait, until a newer runner runs (CSR-187).
 func (s *Scheduler) slot(ctx context.Context, work context.Context, slot Slot) {
 	backoff := min(time.Second, s.MaxBackoff)
 	var down time.Time // when the current run of failures began
+	var upgradeLogged string
 	for {
 		polled, err := s.cycle(ctx, work, slot)
 		if ctx.Err() != nil || work.Err() != nil {
 			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 			return
 		}
+		if polled {
+			upgradeLogged = ""
+		}
 		if polled || down.IsZero() {
 			down = time.Now()
 		}
 		c := slot.Client
+		if up := (*cinderline.UpgradeRequiredError)(nil); errors.As(err, &up) {
+			msg := fmt.Sprintf("%s needs runner ≥ %s; run `%s update` and then `%s run`", name.Name, up.MinimumRunnerVersion, name.Name, name.Name)
+			if msg != upgradeLogged {
+				s.Log.Error(msg, "project", slot.Project)
+				upgradeLogged = msg
+			}
+			s.setStatus(slot.Project, func(st *ProjectStatus) {
+				st.Connected, st.Issue, st.LastError, st.LastErrorAt = false, "", msg, time.Now()
+			})
+			wait, _ := c.PollAfter(cinderline.PollWork) // the time left of the 426's wait
+			select {
+			case <-work.Done():
+				return
+			case <-time.After(max(wait, backoff)): // backoff: a 426 from the last sync can outlive the wait
+			}
+			c.SyncNow()
+			continue
+		}
 		var re *cinderline.ReportError
 		brief := cinderline.Unavailable(err) && time.Since(down) < s.ReportAfter
 		switch {

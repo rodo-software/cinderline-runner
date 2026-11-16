@@ -190,10 +190,14 @@ func (c *Client) syncedReview() (issues []Issue, ok bool, err error) {
 }
 
 // beatWait is how long RunHeartbeats waits before its next request: the
-// interval the last successful answer sent, else the default.
+// interval the last successful answer sent, else the default; within
+// UpgradeWait of a 426, the time left of that wait.
 func (c *Client) beatWait() time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if left := time.Until(c.upgradeAt); left > 0 {
+		return left
+	}
 	if !c.syncing {
 		if d, ok := c.pollAfter[string(PollHeartbeat)]; ok {
 			return d

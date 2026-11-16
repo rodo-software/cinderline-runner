@@ -161,6 +161,8 @@ A file is refused, with the reason in a progress line on the issue, when a servi
 
 `cinderline update` downloads and verifies the latest release, refreshes the tools volume and default image, replaces the binary, and lets the running runner finish its runs before it stops; `cinderline stop --drain` does only the last part. If the service is installed, `cinderline update` starts it again with the new binary.
 
+When Cinderline needs a newer runner, it answers `426` with the minimum version. The runner then takes no new work for that project, logs one error and shows it in `cinderline status` ("cinderline needs runner ≥ X; run `cinderline update` and then `cinderline run`"), and asks again only once an hour.
+
 Updating to a runner with workspaces (CSR-97): a project added before keeps its Docker volumes, secrets and state under their old names. At its first start the runner writes the project's workspace into `config.json`, with `"names_by_key": true` to keep those names; nothing is renamed or lost. Only a project added again with `add` gets the new names.
 
 Agent containers run the default image, `ghcr.io/rodo-software/cinderline-runner-default`, pulled by a pinned digest. Offline, or with `"build_image": true` in `config.json`, the runner builds it locally from `images/default/Dockerfile` instead.

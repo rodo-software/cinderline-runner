@@ -793,3 +793,39 @@ func TestNext(t *testing.T) {
 		t.Errorf("Version = %q, want %q", c.Version(), version)
 	}
 }
+
+// After a 426 the heartbeat, and every PollAfter, waits UpgradeWait instead
+// of its own interval: a new minimum version stays until the runner is
+// updated (CSR-187).
+func TestUpgradeRequiredWaitsAnHour(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var at []time.Time
+		c := memClient(func(w http.ResponseWriter, r *http.Request) {
+			at = append(at, time.Now())
+			w.WriteHeader(http.StatusUpgradeRequired)
+			_, _ = io.WriteString(w, `{"minimum_runner_version":"9.9.9"}`)
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		start := time.Now()
+		go c.RunHeartbeats(ctx, Report{RunnerVersion: version, Clients: []ReportClient{}, Environments: []string{"default"}})
+		time.Sleep(time.Minute + 2*time.Hour + 30*time.Second) // the first heartbeat, then two waits
+		if d, ok := c.PollAfter(PollWork); !ok || d <= 0 || d > UpgradeWait {
+			t.Errorf("PollAfter(work) = %v, %v; want the rest of UpgradeWait", d, ok)
+		}
+		cancel()
+		synctest.Wait()
+
+		// Each wait is a heartbeat and its report, both refused; the report's 426 starts the wait.
+		if len(at) != 6 {
+			t.Fatalf("requests = %d, want 6: a heartbeat and a report at start and after each hour", len(at))
+		}
+		for i := 2; i < len(at); i += 2 {
+			if gap := at[i].Sub(at[i-1]); gap < UpgradeWait || gap > UpgradeWait+3*time.Second {
+				t.Errorf("wait before heartbeat %d = %v, want %v plus jitter", i/2+1, gap, UpgradeWait)
+			}
+		}
+		if at[0].Sub(start) > HeartbeatInterval+3*time.Second {
+			t.Errorf("first heartbeat after %v, want the normal interval", at[0].Sub(start))
+		}
+	})
+}
