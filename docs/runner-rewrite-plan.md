@@ -172,12 +172,22 @@ A port of today's behaviour in `legacy/runner.mjs` and `legacy/lib.mjs`. Every b
 - **Decided** (decision 2026-11-09-network-allowlist): per run, the provider of that run's client, the Cinderline host and the package registries; no forge and no `host.docker.internal`; only local config (`allow_hosts`) extends it.
 - **Done when:** an agent can reach what its run needs and nothing else, tested in CI.
 
+### M9. The app decides each step
+
+Decision 2026-11-15-server-decides-steps (Willem on CSR-175): the "what next" policy and every prompt text move from the runner to the app. At every step boundary the runner calls `POST /runs/{ref}/next` with what it just did and gets the next step from a closed set (`run`, `resolve`, `check`, `publish`, `finish`, `pause`, `fail`, `none`), the whole prompt included. It keeps the mechanics: containers, git, the forge, the client adapters, tokens, sessions, notes, the outbox and the failsafes. Behaviour stays as M3 and later issues built it, except for the outage case in the decision's point 8. No prompt wording changes, and no new policy, until the move is done.
+
+- **CSR-177, the contract:** the decision record, this milestone and `nextStep` in `docs/runner-api/openapi.yaml` (1.1.0). Docs only.
+- **CSR-178, solo and generic runs follow `next`:** the catch-up merge, turns, the check and fix runs, publish, finish, pause and fail, with usage in `last` and the outage case of point 8. The runner fills the attachments folder from the step and keeps `state` in memory. For these runs, `Attempts`, `checkBudget`, `pendingCost`, the usage call at the run's end, and the solo and generic prompt functions go. Tests run the hooks against a scripted fake `next`. Released only after EMBER-215 is live.
+- **CSR-179, team runs and merges follow `next`:** rounds, sub-issues, the Merge Resolver in a run, and Review conflicts asking `next`. `Rounds`, `runSubIssues`, `subIssuesToRun`, every remaining prompt and comment text of the decision's point 1, and the golden files in `internal/run/testdata` are removed. The descriptions of `reportUsage` and `check_command` in the API file, the M3 parity list and the decisions it changes are updated. Released only after EMBER-216 is live.
+- **Done when:** a solo, a generic and a team run, each with a merge conflict before the push, go end to end against the hosted app, and `internal/run` holds no prompt text and no choice of the next step.
+
 ## 4. The app's side (stays in the app repository)
 
 - M0: Go in `runner/Dockerfile`.
 - M1: runner API, scoped agent tokens with kinds, runner report columns (EMBER-41), heartbeat (EMBER-43), versions (EMBER-44), the mirrored OpenAPI file and its route test.
 - M6: the project environment field.
 - After M4: remove `runner/`, update the README, AGENTS.md and the plans that describe the runner in Docker.
+- M9: EMBER-214 renders every prompt, tested byte for byte against the runner's golden files. EMBER-215 serves `nextStep` for solo and generic runs, with the budget verdict, and mirrors the API file. EMBER-216 serves team rounds, sub-issues and merge conflicts. EMBER-217 refuses runners older than the release with CSR-179.
 - **Not in this plan:** the app UI that uses the runner report (EMBER-46 to EMBER-51). Those issues stay in EMBER and become possible after M1 and M7.
 
 ## 5. Out of scope
