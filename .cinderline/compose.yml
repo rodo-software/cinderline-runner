@@ -1,0 +1,5 @@
+# This project's docker environment (decision 2026-11-16-project-toolchains
+# point 2): only the agent, no database, as the runner's tests need none.
+services:
+  agent:
+    build: .
