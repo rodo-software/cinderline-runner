@@ -152,13 +152,14 @@ func TestImageBuiltWhenTold(t *testing.T) {
 	localOnly(t, d, calls)
 }
 
-// CSR-49: the workflow publishes the image the runner pulls, for both platforms.
+// CSR-49: the workflow publishes the image the runner pulls; arm64 only
+// (decision 2026-11-12-ci-speedups).
 func TestWorkflowDraft(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "default-image.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{PublishedImage, "linux/amd64", "linux/arm64", "images/default", "tags:", "attest"} {
+	for _, s := range []string{PublishedImage, "linux/arm64", "images/default", "tags:", "attest"} {
 		if !strings.Contains(string(b), s) {
 			t.Errorf("default-image.yml lacks %q", s)
 		}

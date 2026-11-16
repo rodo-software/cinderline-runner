@@ -204,6 +204,9 @@ func (s *Scheduler) slot(ctx context.Context, work context.Context, slot Slot) {
 			return
 		case <-time.After(backoff):
 		}
+		// In sync mode the retry asks at once, so the backoff, not the sync
+		// interval, paces it (CSR-183).
+		c.SyncNow()
 		backoff = min(backoff*2, s.MaxBackoff)
 	}
 }
@@ -294,7 +297,9 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 		if strikes.issue != claimed.Ref {
 			strikes.issue, strikes.n = claimed.Ref, 0
 		}
-		if s.finish(ctx, slot, *claimed, strikes.n+1, strikes.wait) {
+		notStarted := s.finish(ctx, slot, *claimed, strikes.n+1, strikes.wait)
+		c.SyncNow() // the answer from before the run is out of date
+		if notStarted {
 			strikes.n++
 			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 			select {
