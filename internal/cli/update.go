@@ -50,9 +50,6 @@ func (c *CLI) update(args []string) int {
 		}
 	}
 	x := c.exec
-	if x == nil {
-		x = workspace.RunCommand
-	}
 	if err := install(ctx, x, filepath.Dir(exe)); err != nil {
 		return c.fail(err)
 	}

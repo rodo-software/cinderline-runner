@@ -109,9 +109,8 @@ func (c *CLI) add(args []string) int {
 		if v == "" {
 			v = proj.RepositoryURL
 		}
-		u, err := url.Parse(v)
-		if err != nil || !u.IsAbs() || u.Host == "" {
-			say("%q is not an absolute URL with a host.", v)
+		if err := config.CheckRepositoryURL(v); err != nil {
+			say("%v.", err)
 			continue
 		}
 		if proj.RepositoryURL != "" && !config.SameRepository(v, proj.RepositoryURL) {

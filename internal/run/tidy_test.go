@@ -26,8 +26,10 @@ func writeNote(t *testing.T, p *Project, ref string, n Note, when time.Time) {
 }
 
 // drop deletes now, expire applies the age limit and then the disk limit,
-// oldest first, keep leaves it; a clone that could not be pushed is never
-// deleted, and a ref the runner did not ask about is never touched.
+// oldest first, and deletes a clone without a note at once, keep leaves it;
+// a clone's work is committed and pushed before it is deleted, one that
+// could not be pushed is never deleted, and a ref the runner did not ask
+// about is never touched.
 func TestTidy(t *testing.T) {
 	f := newFixture(t)
 	p := f.p
@@ -38,19 +40,25 @@ func TestTidy(t *testing.T) {
 	writeNote(t, p, "CSR-10", Note{Dir: "/runs/CSR-10", Session: "s10", Client: "claude", Origin: "kept"}, time.Now())
 	writeNote(t, p, "CSR-11", Note{Dir: "/runs/CSR-11", Session: "s11", Client: "claude", Origin: "paused"}, time.Now())
 	writeNote(t, p, "CSR-13", Note{Dir: "/runs/CSR-13", Session: "s13", Client: "claude", Origin: "kept"}, time.Now().Add(-48*time.Hour))
-	f.ws.Strandeds = []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-12", Branch: "cinderline/CSR-12"}}}}
-	f.ws.Pushes = []error{errors.New("offline")}
-	f.ws.Removes = fill(3, error(nil))
+	stranded12 := workspace.Clone{Dir: "/runs/CSR-12", Branch: "cinderline/CSR-12"}
+	f.ws.Clones = []string{"/runs/CSR-12", "/runs/CSR-14", "/runs/CSR-15"} // no notes
+	f.ws.Strandeds = []workspace.StrandedReply{
+		{Clones: []workspace.Clone{stranded12}}, {Clones: []workspace.Clone{stranded12}}, {Clones: []workspace.Clone{stranded12}},
+		{Clones: []workspace.Clone{stranded12, {Dir: "/runs/CSR-15", Branch: "cinderline/CSR-15"}}},
+	}
+	f.ws.Pushes = []error{errors.New("offline"), errors.New("offline"), nil}
+	f.ws.Removes = fill(5, error(nil))
 	f.ws.Frees = []workspace.FreeReply{{Bytes: 50}, {Bytes: 200}}
 
 	asked, stranded, ok := p.held(context.Background())
-	if !ok || !slices.Equal(asked, []string{"CSR-10", "CSR-11", "CSR-13", "CSR-9", "CSR-12"}) {
+	if !ok || !slices.Equal(asked, []string{"CSR-12", "CSR-14", "CSR-15", "CSR-13", "CSR-9", "CSR-10", "CSR-11"}) {
 		t.Fatalf("held = %v, %v", asked, ok)
 	}
 	asked = slices.DeleteFunc(asked, func(r string) bool { return r == "CSR-13" })
 	p.tidy(context.Background(), asked, []cinderline.HeldItem{
 		{Ref: "CSR-9", Session: "expire"}, {Ref: "CSR-10", Session: "expire"}, {Ref: "CSR-11", Session: "drop"},
 		{Ref: "CSR-12", Session: "drop"}, {Ref: "CSR-13", Session: "drop"}, {Ref: "../x", Session: "drop"},
+		{Ref: "CSR-14", Session: "expire"}, {Ref: "CSR-15", Session: "drop"},
 	}, stranded)
 
 	var removed []string
@@ -59,11 +67,20 @@ func TestTidy(t *testing.T) {
 			removed = append(removed, c.Args[0].(string))
 		}
 	}
-	if !slices.Equal(removed, []string{"/runs/CSR-9", "/runs/CSR-11", "/runs/CSR-10"}) {
+	if !slices.Equal(removed, []string{"/runs/CSR-9", "/runs/CSR-11", "/runs/CSR-14", "/runs/CSR-15", "/runs/CSR-10"}) {
 		t.Errorf("removed %v", removed)
 	}
 	if !slices.Equal(forgotten, []string{"CSR-9", "CSR-11", "CSR-10"}) {
 		t.Errorf("sessions deleted %v", forgotten)
+	}
+	var pushed []string
+	for _, c := range f.ws.Calls() {
+		if c.Method == "Push" {
+			pushed = append(pushed, c.Args[0].(string))
+		}
+	}
+	if !slices.Equal(pushed, []string{"/runs/CSR-12", "/runs/CSR-12", "/runs/CSR-15"}) {
+		t.Errorf("pushed %v; want the stranded clone twice and the work left in CSR-15", pushed)
 	}
 	if n, _ := p.readNote("CSR-9"); n.Pruned != prunedAge {
 		t.Errorf("CSR-9 note = %+v; want why it was pruned", n)
@@ -156,5 +173,19 @@ func TestVerifyMerge(t *testing.T) {
 		if got, _ := verifyMerge(context.Background(), ws, "/runs/CSR-1", "main", "abc", []string{"a"}); got != tc.want {
 			t.Errorf("%+v: verifyMerge = %v", tc, got)
 		}
+	}
+}
+
+// The upkeep's fresh clone never replaces a clone whose work could not be pushed.
+func TestUpkeepKeepsUnpushedWork(t *testing.T) {
+	f := newFixture(t)
+	f.ws.Clones = []string{"/runs/CSR-7"}
+	f.ws.Strandeds = []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-7", Branch: "cinderline/CSR-7"}}}}
+	f.ws.Pushes = []error{errors.New("denied")}
+	if _, _, err := f.p.updateReviewBranch(context.Background(), cinderline.ReviewItem{Ref: "CSR-7", Title: "T"}, "cinderline/CSR-7", "main"); err == nil {
+		t.Error("the branch was updated")
+	}
+	if slices.Contains(methods(f.ws), "Prepare") {
+		t.Errorf("workspace calls %v; want no fresh clone", methods(f.ws))
 	}
 }

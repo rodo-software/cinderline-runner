@@ -242,7 +242,7 @@ func runner(fail map[string]error, stream func(ctx context.Context, out io.Write
 	var logs bytes.Buffer
 	d := &Docker{
 		Project: "CSR",
-		Log:     slog.New(slog.NewTextHandler(&logs, nil)),
+		Log:     slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Exec: func(ctx context.Context, env []string, argv ...string) (string, error) {
 			record(env, argv)
 			if ctx.Err() != nil {
@@ -631,7 +631,7 @@ func TestRunRedactsSplitValue(t *testing.T) {
 		io.WriteString(out, key[12:]+"\ndone\n")
 		return nil
 	})
-	d.Log = slog.New(redact.Handler(slog.NewTextHandler(logs, nil)))
+	d.Log = slog.New(redact.Handler(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	if _, err := d.Run(context.Background(), turn); err != nil {
 		t.Fatal(err)
 	}
@@ -675,5 +675,24 @@ func TestRunStopsWhenIdle(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("docker stop ran %d times, want 1", n)
+	}
+}
+
+// Agent output is logged at Debug, so the log at Info keeps none of it.
+func TestAgentOutputIsLoggedAtDebug(t *testing.T) {
+	var info, debug bytes.Buffer
+	for _, c := range []struct {
+		buf   *bytes.Buffer
+		level slog.Level
+	}{{&info, slog.LevelInfo}, {&debug, slog.LevelDebug}} {
+		l := &lines{log: slog.New(slog.NewTextHandler(c.buf, &slog.HandlerOptions{Level: c.level}))}
+		_, _ = l.Write([]byte("one\ntwo"))
+		l.flush()
+		if l.all.String() != "one\ntwo" {
+			t.Errorf("kept %q", l.all.String())
+		}
+	}
+	if info.Len() != 0 || strings.Count(debug.String(), "agent output") != 2 {
+		t.Errorf("info log %q, debug log %q", info.String(), debug.String())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
@@ -145,4 +146,153 @@ func runWorkspace(branch, base string, extras []config.ExtraRepository, links []
 		w.LinkedProjects = append(w.LinkedProjects, cinderline.WorkspaceLink{Key: l.Key, Paths: append([]string{}, l.Paths...)})
 	}
 	return w
+}
+
+// prepareRun prepares the run's environment and clone. What it could not
+// prepare but the run can do without goes into the workspace's notes; an
+// error means the run did not start.
+func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb cinderline.Job) (*job, *conflict, *held, error) {
+	ref, team := jb.Issue.Ref, jb.Team
+	// The ref becomes a branch, a folder and a file name.
+	if !workspace.IssueRef.MatchString(ref) {
+		return nil, nil, nil, fmt.Errorf("%q is not an issue reference", ref)
+	}
+	if len(team.Agents) == 0 {
+		return nil, nil, nil, errors.New("the team has no agents")
+	}
+	lead := team.Agents[0]
+	if p.Clients[lead.Client] == nil {
+		return nil, nil, nil, fmt.Errorf("agent %s runs on %s, which this runner does not run", lead.Name, lead.Client)
+	}
+	fg, err := p.Forge(proj.Forge)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	base, err := baseBranch(ctx, proj, fg)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if p.prepare != nil {
+		if err := p.prepare(ctx, proj, base); err != nil {
+			return nil, nil, nil, fmt.Errorf("the run's environment could not be prepared: %w", err)
+		}
+	}
+	j := &job{
+		ref: ref, title: jb.Issue.Title, body: jb.Issue.Body, branch: name.Name + "/" + ref, base: base,
+		team: team, check: proj.CheckCommand, idle: time.Duration(max(proj.IdleMinutes, 0)) * time.Minute, fg: fg,
+	}
+	extras, notes := p.extraRepositories(ctx, ref)
+	// Fetched on every run, so a resume and a follow-up read fresh code too.
+	links, more := p.linkedProjects(ctx, ref, proj.LinkedProjects)
+	notes = append(notes, more...)
+	// A run's attachments come from its steps; another run's files must not linger.
+	if err := p.resetAttachments(); err != nil {
+		return nil, nil, nil, err
+	}
+	h := &held{reports: map[string]string{}, agents: map[string]string{}}
+	h.lead = session{issue: ref, agent: lead.Name}
+	n, resumed, more := p.resume(ctx, j, lead.Client)
+	notes = append(notes, more...)
+	if resumed {
+		j.dir, h.lead.id, h.lead.origin = n.Dir, n.Session, n.Origin
+	} else if err := p.keepWork(ctx, ref, leadAuthor(team), ref+": "+j.title); err != nil {
+		return nil, nil, nil, err
+	} else if j.dir, err = p.Workspace.Prepare(ctx, j.branch, base); err != nil {
+		return nil, nil, nil, err
+	}
+	j.ws = runWorkspace(j.branch, base, extras, links, notes)
+	// Also on a fresh clone, where the merge changes nothing, as Prepare
+	// does not say whether it continued the remote branch.
+	return j, p.catchUp(ctx, j), h, nil
+}
+
+// resume returns the note of the session the run continues, if it can: a
+// session of this client, in a clone that is still there, of the run kind
+// the team has now. A kept session's clone is first fast-forwarded to the
+// remote branch. What it had to drop gets a note for the workspace. A solo
+// run's note is removed, so a crash during it starts fresh; a team's stays.
+func (p *Project) resume(ctx context.Context, j *job, cl string) (Note, bool, []string) {
+	ref := j.ref
+	if !j.isTeam() {
+		defer p.dropNote(ref)
+	}
+	n, ok := p.readNote(ref)
+	switch {
+	case !ok:
+		return Note{}, false, nil
+	case n.Pruned != "":
+		p.dropNote(ref)
+		return Note{}, false, []string{"The agent's earlier session on " + ref + " was deleted because " + n.Pruned + ", so this run starts a fresh session"}
+	case n.Session == "":
+		return Note{}, false, nil
+	case n.Client != cl:
+		return Note{}, false, nil
+	}
+	if ok, err := p.Workspace.Exists(ctx, n.Dir); !ok {
+		if err != nil {
+			p.Log.Warn("paused clone not checked", "project", p.Config.Key, "issue", ref, "err", err)
+		}
+		return Note{}, false, nil
+	}
+	if n.Origin != "kept" {
+		return n, true, nil
+	}
+	if err := p.Workspace.FastForward(ctx, n.Dir, j.branch); err != nil {
+		p.Log.Warn("kept session dropped: its clone is not up to date", "project", p.Config.Key, "issue", ref, "err", err)
+		p.dropNote(ref)
+		p.forget(ctx, ref, n.Session)
+		return Note{}, false, []string{"The agent's earlier session on " + ref + " could not be continued: its clone could not be brought up to date with the remote branch " + j.branch + "; this run starts a fresh session"}
+	}
+	return n, true, nil
+}
+
+// keepWork commits what the issue's clone at RunsPath/<ref> holds and
+// pushes its branch when it has commits no remote branch has, before the
+// clone is replaced or deleted: uncommitted or unpushed work is never lost.
+// A clone that is not there is no error; an error keeps the clone.
+func (p *Project) keepWork(ctx context.Context, ref, author, message string) error {
+	dir, branch := workspace.RunsPath+"/"+ref, name.Name+"/"+ref
+	if ok, err := p.Workspace.Exists(ctx, dir); !ok || err != nil {
+		return err
+	}
+	if _, err := p.Workspace.Commit(ctx, dir, author, message); err != nil {
+		return fmt.Errorf("the issue's clone could not be committed, so it is kept: %w", err)
+	}
+	clones, err := p.Workspace.Stranded(ctx)
+	if err != nil {
+		return err // unknown, so the clone may not be replaced
+	}
+	for _, c := range clones {
+		switch {
+		case c.Dir != dir:
+		case c.Branch != branch:
+			return fmt.Errorf("the issue's clone has unpushed commits on %s, not %s, so it is kept", c.Branch, branch)
+		default:
+			if err := p.Workspace.Push(ctx, dir, branch); err != nil {
+				return fmt.Errorf("the issue's clone has unpushed commits, kept: %w", err)
+			}
+			p.Log.Info("unpushed work pushed", "project", p.Config.Key, "issue", ref, "branch", branch)
+		}
+	}
+	return nil
+}
+
+// catchUp merges the base into continued work before the first step. What
+// a paused turn left is committed first. It returns a conflict for the
+// run's first request; an error only logs: publish tries again.
+func (p *Project) catchUp(ctx context.Context, j *job) *conflict {
+	log := p.Log.With("project", p.Config.Key, "issue", j.ref)
+	author := leadAuthor(j.team)
+	if _, err := p.Workspace.Commit(ctx, j.dir, author, j.ref+": "+j.title); err != nil {
+		log.Warn("base not merged in", "err", err)
+		return nil
+	}
+	cf, err := updateBranch(ctx, p.Workspace, j.ref, j.dir, j.base, author)
+	switch {
+	case err != nil:
+		log.Warn("base not merged in", "err", err)
+	case cf != nil:
+		log.Info("base not merged in", "base", j.base, "conflicts", cf.files)
+	}
+	return cf
 }

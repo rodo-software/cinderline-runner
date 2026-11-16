@@ -81,7 +81,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 
 	// Everything this test creates carries the project's label, also
 	// Forgejo, so the Environment's own Cleanup removes it.
-	env := &scripted{Docker: &environment.Docker{Project: project, Log: log}}
+	env := &scripted{Docker: &environment.Docker{Project: project, Log: log, Exec: workspace.RunCommand}}
 	label := "label=" + workspace.ProjectLabel(project)
 	cleanup := func() {
 		ctx := context.WithoutCancel(ctx)
@@ -107,17 +107,17 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	fg.HTTP = &http.Client{Timeout: 30 * time.Second, Transport: toHTTP{}}
 
 	p := &Project{Config: config.Project{URL: "http://cinderline.invalid", Key: project, Repository: repo}, State: t.TempDir(), Env: env, Log: log}
-	p.Workspace = &workspace.Docker{Project: project, Repository: repo + ".git", Token: token}
+	p.Workspace = &workspace.Docker{Project: project, Repository: repo + ".git", Token: token, Exec: workspace.RunCommand}
 	p.Forge = func(string) (forge.Forge, error) { return fg, nil }
 	image, err := env.Image(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mount, err := (&tools.Tools{State: p.State}).Mount(ctx, image)
+	mount, err := (&tools.Tools{State: p.State, Exec: workspace.RunCommand}).Mount(ctx, image)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.Clients = map[string]client.Client{"claude": &client.CLI{Name: "claude", Project: project, Env: env, Credential: itCredential, MCPURL: "http://host.docker.internal/mcp", Tools: mount}}
+	p.Clients = map[string]client.Client{"claude": &client.CLI{Name: "claude", Project: project, Env: env, Exec: workspace.RunCommand, Credential: itCredential, MCPURL: "http://host.docker.internal/mcp", Tools: mount}}
 	branch := name.Name + "/" + ref
 
 	// The prompt is the app's; the scripted agent only checks its first line.

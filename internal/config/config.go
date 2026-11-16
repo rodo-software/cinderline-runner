@@ -147,7 +147,7 @@ type ExtraRepository struct {
 // of its URL's path without .git.
 func (r ExtraRepository) Name() string {
 	s := strings.TrimSuffix(strings.TrimSuffix(r.URL, "/"), ".git")
-	return s[strings.LastIndexAny(s, "/:")+1:]
+	return s[strings.LastIndex(s, "/")+1:]
 }
 
 // repoName is what Name must look like to be a folder.
@@ -175,31 +175,22 @@ func (r ExtraRepository) CheckRefAndName() error {
 	return nil
 }
 
-// CheckRepositoryURL allows https://host/path, ssh://git@host/path and
-// git@host:path, without credentials, whitespace, query or fragment.
+// CheckRepositoryURL allows https://host/path only, without a user name or
+// password, whitespace, query or fragment: git gets the token as an https
+// password, so no other form can work, and credentials in a URL would
+// travel in docker's arguments and in error texts. Used for the project's
+// repository and for extra repositories.
 func CheckRepositoryURL(s string) error {
-	bad := fmt.Errorf("%q must be https://host/path, ssh://git@host/path or git@host:path, without credentials", s)
-	if strings.IndexFunc(s, unicode.IsSpace) >= 0 || strings.ContainsAny(s, "?#") {
-		return bad
-	}
-	if rest, ok := strings.CutPrefix(s, "git@"); ok && !strings.Contains(s, "://") {
-		host, path, ok := strings.Cut(rest, ":")
-		if !ok || !hostChars.MatchString(host) || strings.Trim(path, "/") == "" || strings.HasPrefix(path, "-") {
-			return bad
-		}
+	u, err := url.Parse(s)
+	if err == nil && u.Scheme == "https" && u.User == nil && u.Host != "" && strings.Trim(u.Path, "/") != "" &&
+		strings.IndexFunc(s, unicode.IsSpace) < 0 && !strings.ContainsAny(s, "?#") {
 		return nil
 	}
-	u, err := url.Parse(s)
-	if err != nil || u.Host == "" || strings.Trim(u.Path, "/") == "" {
-		return bad
+	if err == nil && u.User != nil {
+		u.User = nil // never a password in an error text
+		s = u.String()
 	}
-	switch {
-	case u.Scheme == "https" && u.User == nil:
-	case u.Scheme == "ssh" && u.User != nil && u.User.String() == "git":
-	default:
-		return bad
-	}
-	return nil
+	return fmt.Errorf("%q must be an https URL such as https://host/owner/repository, without a user name or password: git signs in with the token over https only", s)
 }
 
 // validRef is a subset of git check-ref-format: plain names such as main,
@@ -298,8 +289,8 @@ func (c *Config) Validate() error {
 			problem = "url must be an absolute http or https URL"
 		} else if p.Key == "" || strings.IndexFunc(p.Key, unicode.IsSpace) >= 0 {
 			problem = "key must be non-empty without whitespace"
-		} else if u, err := url.Parse(p.Repository); err != nil || !u.IsAbs() || u.Host == "" {
-			problem = "repository must be an absolute URL with a host"
+		} else if err := CheckRepositoryURL(p.Repository); err != nil {
+			problem = "repository " + err.Error()
 		} else if !workspaceSlug.MatchString(p.Workspace) {
 			problem = "workspace must be letters, digits, - and _"
 		} else if seen[id{p.URL, p.Workspace, p.Key}] {
@@ -386,19 +377,15 @@ func WriteFile(path string, data []byte) (err error) {
 	return os.Rename(f.Name(), path)
 }
 
-// SameRepository reports whether a and b name the same repository: host and
-// path compared case-insensitively without user info, port, a trailing / or
-// .git, so ssh://git@host/o/r.git and git@host:o/r are https://host/o/r. An
-// empty or unparsable URL is never the same as anything.
+// SameRepository reports whether a and b are https URLs of the same
+// repository: host and path compared case-insensitively, without a port,
+// a trailing / or .git. Any other form is never the same as anything.
 func SameRepository(a, b string) bool {
 	key := func(s string) string {
-		if i := strings.Index(s, ":"); i > 0 && !strings.Contains(s, "://") {
-			s = "ssh://" + s[:i] + "/" + s[i+1:] // scp form: git@host:o/r
-		}
-		u, err := url.Parse(s)
-		if err != nil || u.Hostname() == "" {
+		if CheckRepositoryURL(s) != nil {
 			return ""
 		}
+		u, _ := url.Parse(s)
 		path := strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
 		return strings.ToLower(u.Hostname() + path)
 	}

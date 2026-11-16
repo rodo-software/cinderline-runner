@@ -14,7 +14,14 @@ import (
 type Queued struct {
 	Ref     string      `json:"ref"`
 	Request NextRequest `json:"request"`
+	// ServerErrors counts the replays the app answered with a 5xx.
+	ServerErrors int `json:"server_errors,omitempty"`
 }
+
+// maxServerErrors is how many 5xx answers drop a queued request: one the
+// app fails on every time must not block the outbox for good. No answer at
+// all never drops one, so a long outage loses no report.
+const maxServerErrors = 10
 
 // Queue keeps r for ref in the outbox, also across a restart. The file is a
 // cache of a report already decided, not workflow state (decision 0091).
@@ -42,31 +49,40 @@ func (c *Client) Queued() []string {
 
 // Replay sends the outbox's requests in order. The first that the app does
 // not answer, or answers with a 426, stops the replay: it and the later ones
-// wait for the next. One the app refuses for good is dropped and logged.
+// wait for the next. One the app refuses for good, or has answered with a
+// 5xx maxServerErrors times, is dropped and logged.
 func (c *Client) Replay(ctx context.Context) {
 	c.outMu.Lock()
 	defer c.outMu.Unlock() // one replay at a time; Queue waits for it
 	c.load()
-	if len(c.queued) == 0 {
-		return
-	}
-	n := 0
-	for _, q := range c.queued {
+	changed := false
+	defer func() {
+		if changed {
+			c.save()
+		}
+	}()
+	for len(c.queued) > 0 {
+		q := &c.queued[0]
 		_, err := c.Next(ctx, q.Ref, q.Request)
+		var api *APIError
 		var upgrade *UpgradeRequiredError
-		if err != nil && (Unavailable(err) || errors.As(err, &upgrade) || ctx.Err() != nil) {
-			break
-		}
-		if err != nil {
-			c.Log.Warn("queued report refused, dropped", "issue", q.Ref, "err", err)
-		} else {
+		switch {
+		case err == nil:
 			c.Log.Info("queued report delivered", "issue", q.Ref)
+		case errors.As(err, &api) && api.StatusCode >= 500 && ctx.Err() == nil:
+			q.ServerErrors++
+			changed = true
+			if q.ServerErrors < maxServerErrors {
+				return
+			}
+			c.Log.Error("queued report dropped: the app failed on it every time", "issue", q.Ref, "answers", q.ServerErrors, "err", err)
+		case Unavailable(err) || errors.As(err, &upgrade) || ctx.Err() != nil:
+			return
+		default:
+			c.Log.Warn("queued report refused, dropped", "issue", q.Ref, "err", err)
 		}
-		n++
-	}
-	if n > 0 {
-		c.queued = c.queued[n:]
-		c.save()
+		c.queued = c.queued[1:]
+		changed = true
 	}
 }
 

@@ -62,7 +62,7 @@ func TestAddListRemoveRepo(t *testing.T) {
 	if len(seen) != 2 || !strings.HasSuffix(seen[1], "https://git.example.com/o/lib refs/heads/v1.0 refs/tags/v1.0") || strings.Contains(strings.SplitN(seen[1], " | ", 2)[1], "good-token") {
 		t.Errorf("ls-remote calls %q", seen)
 	}
-	for _, s := range []string{"without credentials", "the project's own repository", "not a plain branch or tag name", "This token cannot read", "runs read it at /extra/lib"} {
+	for _, s := range []string{"without a user name or password", "the project's own repository", "not a plain branch or tag name", "This token cannot read", "runs read it at /extra/lib"} {
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("stdout lacks %q:\n%s", s, out.String())
 		}

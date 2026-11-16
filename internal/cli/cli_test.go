@@ -246,14 +246,17 @@ func TestAddUnreachableURLGoesBackToURL(t *testing.T) {
 func TestAddRepository(t *testing.T) {
 	u := instance(t, "WEB", repoURL)
 	c, out, errb := newCLI(t, lines(u, goodToken,
-		"https://git.example.com/owner/other", "not a url", "ssh://git@GIT.example.com:2222/owner/repo.git/", "git-tok"))
+		"https://git.example.com/owner/other", "not a url", "ssh://git@GIT.example.com:2222/owner/repo.git/", "https://GIT.example.com/owner/repo.git/", "git-tok"))
 	if code := c.Run([]string{"add"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	if n := strings.Count(out.String(), "not the project's repository"); n != 1 {
 		t.Errorf("rejected %d times as another repository, want 1:\n%s", n, out.String())
 	}
-	if got := projects(t, c); len(got) != 1 || got[0].Repository != "ssh://git@GIT.example.com:2222/owner/repo.git/" {
+	if n := strings.Count(out.String(), "must be an https URL"); n != 2 {
+		t.Errorf("rejected %d times as not https, want 2:\n%s", n, out.String())
+	}
+	if got := projects(t, c); len(got) != 1 || got[0].Repository != "https://GIT.example.com/owner/repo.git/" {
 		t.Errorf("projects %+v", got)
 	}
 }

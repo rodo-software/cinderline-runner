@@ -25,10 +25,9 @@ type GitLab struct {
 }
 
 // NewGitLab returns the Forge of repository, given as https://host/g/r,
-// ssh://git@host[:port]/g/r or git@host:g/r, with or without .git, in any
-// depth of subgroups. Its API is https://<host>/api/v4 on any host: the
-// project's forge, not the host, says it is GitLab. An https port is kept
-// for the API, an ssh one dropped.
+// with or without .git, in any depth of subgroups. Its API is
+// https://<host>/api/v4 on any host, with the repository's port: the
+// project's forge, not the host, says it is GitLab.
 func NewGitLab(repository, token string) (*GitLab, error) {
 	host, path, err := parseRepository(repository)
 	if err != nil {

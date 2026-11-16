@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // allowlistScript prints "<check>: reached" or "<check>: refused" per line.
@@ -69,6 +70,7 @@ func TestIntegrationAllowlist(t *testing.T) {
 	)
 	env := &environment.Docker{
 		Project: project,
+		Exec:    workspace.RunCommand,
 		Log:     slog.New(slog.NewTextHandler(&logs, nil)),
 		Allow:   []string{"example.com:443"},
 		OnRefused: func(host string) {

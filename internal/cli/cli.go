@@ -25,7 +25,7 @@ type CLI struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 
-	exec          workspace.Exec                 // nil means workspace.RunCommand
+	exec          workspace.Exec
 	http          *http.Client                   // the tools downloads; nil means http.DefaultClient
 	removeService func(exe string) error         // nil means uninstallService
 	startService  func(exe string) (bool, error) // nil means startService; update restarts the service with it
@@ -64,7 +64,7 @@ func commands() []command {
 
 // Main runs the command in args with this machine's paths and secrets and returns the exit code.
 func Main(version string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	c := &CLI{Version: version, Stdin: stdin, Stdout: stdout, Stderr: stderr}
+	c := &CLI{Version: version, Stdin: stdin, Stdout: stdout, Stderr: stderr, exec: workspace.RunCommand}
 	c.WindowsBuild = windowsBuild()
 	c.Paths, c.pathsErr = config.DefaultPaths()
 	if c.pathsErr == nil {

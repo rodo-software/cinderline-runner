@@ -27,10 +27,9 @@ type GitHub struct {
 }
 
 // NewGitHub returns the Forge of repository, given as https://host/o/r,
-// ssh://git@host[:port]/o/r or git@host:o/r, with or without .git. On
-// github.com the API is api.github.com; on any other host it is GitHub
-// Enterprise Server's https://<host>/api/v3, with GraphQL beside it at
-// /api/graphql. An https port is kept for the API, an ssh one dropped.
+// with or without .git. On github.com the API is api.github.com; on any
+// other host it is GitHub Enterprise Server's https://<host>/api/v3, with
+// GraphQL beside it at /api/graphql, with the repository's port.
 func NewGitHub(repository, token string) (*GitHub, error) {
 	host, path, err := parseRepository(repository)
 	if err != nil {

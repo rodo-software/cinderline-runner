@@ -55,7 +55,7 @@ var hardening = []string{"--cap-drop", "ALL", "--security-opt", "no-new-privileg
 // container and network labelled with the project and issue (review item 9).
 type Docker struct {
 	Project string         // project key, in names and labels
-	Exec    workspace.Exec // nil means workspace.RunCommand
+	Exec    workspace.Exec // runs docker
 	Stream  Stream         // the agent container; nil means streamCommand
 	Log     *slog.Logger   // the agent's output, line by line; nil means slog.Default()
 	// Allow is the project's hosts every run may reach, as host:port
@@ -234,7 +234,8 @@ func (d *Docker) log() *slog.Logger {
 	return d.Log
 }
 
-// lines keeps all output and logs it a line at a time. The stream writes
+// lines keeps all output, which the clients parse whole, and logs it a line
+// at a time at Debug: a turn prints far more than the log should keep. The stream writes
 // from one goroutine at a time.
 type lines struct {
 	log     *slog.Logger
@@ -254,14 +255,14 @@ func (l *lines) Write(p []byte) (int, error) {
 		if i < 0 {
 			return len(p), nil
 		}
-		l.log.Info("agent output", "line", string(l.pending[:i]))
+		l.log.Debug("agent output", "line", string(l.pending[:i]))
 		l.pending = l.pending[i+1:]
 	}
 }
 
 func (l *lines) flush() {
 	if len(l.pending) > 0 {
-		l.log.Info("agent output", "line", string(l.pending))
+		l.log.Debug("agent output", "line", string(l.pending))
 		l.pending = nil
 	}
 }
@@ -395,11 +396,7 @@ func (d *Docker) remove(ctx context.Context, list []string, rm ...string) error 
 }
 
 func (d *Docker) exec(ctx context.Context, argv ...string) (string, error) {
-	x := d.Exec
-	if x == nil {
-		x = workspace.RunCommand
-	}
-	return x(ctx, nil, argv...)
+	return d.Exec(ctx, nil, argv...)
 }
 
 // tail is the last lines of output, at most maxChars characters, for a

@@ -12,7 +12,7 @@ import (
 // recordedBitbucket is recorded, for a Bitbucket Forge.
 func recordedBitbucket(t *testing.T, replies ...reply) (*Bitbucket, *[]request) {
 	t.Helper()
-	b, err := NewBitbucket("git@bitbucket.org:ws/repo.git", testToken)
+	b, err := NewBitbucket("https://bitbucket.org/ws/repo.git", testToken)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,14 +27,12 @@ const (
 	bbPR    = `{"id":8,"state":"OPEN","source":{"branch":{"name":"cinderline/EMB-3"},"commit":{"hash":"abc123"}},"links":{"html":{"href":"https://bitbucket.org/ws/repo/pull-requests/8"}}}`
 )
 
-// parseRepository treats bitbucket.org as Bitbucket, in every
+// parseRepository treats bitbucket.org as Bitbucket, in every https
 // URL form: the API is always api.bitbucket.org, and only bitbucket.org is
 // Bitbucket Cloud (decision 2026-11-04-bitbucket-cloud).
 func TestBitbucketRepositoryForms(t *testing.T) {
 	for _, repository := range []string{
 		"https://bitbucket.org/ws/repo.git",
-		"ssh://git@bitbucket.org/ws/repo.git",
-		"git@bitbucket.org:ws/repo.git",
 		"https://BitBucket.org/ws/repo",
 		"https://bitbucket.org:443/ws/repo/",
 	} {
@@ -53,6 +51,7 @@ func TestBitbucketRepositoryForms(t *testing.T) {
 
 	for _, bad := range []string{
 		"https://bitbucket.org.evil.example/o/r", // not Bitbucket
+		"git@bitbucket.org:ws/repo.git",          // git signs in over https only
 		"https://bitbucket.example.com/ws/repo",  // Data Center is not supported
 		"https://bitbucket.org:8443/ws/repo",
 		"https://bitbucket.org/ws/sub/repo",

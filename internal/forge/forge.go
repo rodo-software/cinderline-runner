@@ -197,21 +197,16 @@ func textStart(s string) string {
 	return s
 }
 
-// parseRepository splits a repository URL, given as https://host/path,
-// ssh://git@host[:port]/path or git@host:path, with or without .git, into
-// its lower-case host and its path without slashes around it. An https
-// port is kept in host; an ssh one is dropped, as the forge's API is on https.
+// parseRepository splits a repository URL, https://host/path with or
+// without .git, into its lower-case host, with a port other than 443, and
+// its path without slashes around it.
 func parseRepository(repository string) (host, path string, err error) {
-	s := repository
-	if h, p, ok := strings.Cut(s, ":"); ok && strings.HasPrefix(s, "git@") && !strings.Contains(s, "://") {
-		s = "ssh://" + h + "/" + p // scp form: git@host:o/r
-	}
-	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh") || u.Hostname() == "" {
-		return "", "", fmt.Errorf("unsupported repository URL %q", repository)
+	u, err := url.Parse(repository)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
+		return "", "", fmt.Errorf("repository URL %q is not https://host/owner/repository without a user name", repository)
 	}
 	host = strings.ToLower(u.Hostname())
-	if p := u.Port(); u.Scheme == "https" && p != "" && p != "443" {
+	if p := u.Port(); p != "" && p != "443" {
 		host += ":" + p
 	}
 	return host, strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git"), nil

@@ -45,9 +45,6 @@ func keepsDNSInside(v string) bool {
 // checkDocker reports a missing docker, a silent daemon, an engine too old or low disk; with wait it waits for the daemon.
 func (c *CLI) checkDocker(ctx context.Context, wait bool) error {
 	x := c.exec
-	if x == nil {
-		x = workspace.RunCommand
-	}
 
 	var engine string
 	version := func() error {

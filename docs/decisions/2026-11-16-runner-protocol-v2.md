@@ -37,6 +37,7 @@ Request:
 - `idle`: the runner can start a run now.
 - `held` (optional): the issues the runner keeps a session or clone of. Sent when it is about to tidy up: at start and while idle.
 - `review` (optional): what the runner found when it last kept the Review branches current. Sending the key, also with an empty list, asks for the list. `pull_request` is `open`, `merged`, `closed`, `failed` or `none`; `conflicts` are the files of a base merge that conflicted.
+- An issue reference with the project's key from before a rename (decision 2026-11-12-rename-project-keys) names the same issue, in `running`, `held` and `review` as in the paths of `next` and of attachments. A run that began before a rename keeps its key: `next` takes its old-key references in `last` and `sessions`, and its steps name the issue and attachments with the key of the request's path.
 
 Answer `200`:
 
@@ -69,7 +70,7 @@ What the app does, in this order:
 1. Stores the report and the heartbeat time on the token.
 2. **Unheld issues.** Every active top-level In progress issue of the project with a team that is not in `running` goes to Blocked with the app's note (it names the branch `<name>/<REF>` and says to move the issue to To do to run it again).
 3. **`stop`:** the `running` issues whose turn must end: archived, unknown, Cancelled or Backlog, or Blocked; only a Blocked issue whose latest comment is an agent's is left alone for one poll interval, because an agent that asked a person a question is ending its turn itself.
-4. **`job`** (only with `idle`, and never while the project is archived or its runners are paused): the first of the top 20 To do issues, in board order, that waits for nothing, has an active team, and whose team's agent clients are all `ready` in the report. It is an offer: nothing is claimed. An issue passed over because a client is not ready gets one progress line saying which, written only when it differs from the issue's latest progress line. `null`: no work.
+4. **`job`** (only with `idle`, and never while the project is archived or its runners are paused): the first of the top 20 To do issues, in board order, that waits for nothing, has an active team, and whose team's agent clients are all `ready` in the report. It is an offer: nothing is claimed. The first issue passed over because a client is not ready gets one progress line saying which, written only when it differs from the issue's latest progress line; later ones in the same poll get none. `null`: no work.
 5. **`held`** (when asked): per issue what to do with its session and clone. `keep`: part of a run (To do, In progress, Blocked). `expire`: the runner may delete it by its own age and disk limits. `drop`: delete it now (Done, Cancelled, archived, unknown).
 6. **`review`** (when asked). First the facts: for a trusted team's Review issue, `merged` sets `merge_status` to `success`; `closed`, `failed` or a conflict sets it to `issue`; `open` and `none` change nothing. Then the list: the active top-level Review issues with a team whose `merge_status` is not `success`, in board order, at most 200. `merge` says the runner may ask the forge to merge the pull request once it is current (a trusted team).
 
@@ -96,8 +97,8 @@ Request:
 }
 ```
 
-- `id`: a new random string per request, the same on a retry. The app keeps its answer for ten minutes, encrypted, and gives it again for the same `id` without doing anything twice.
-- `state`: the last answer's, unchanged; null on the first call.
+- `id`: a new random string per request, the same on a retry. The app keeps the answer to the run's latest request for ten minutes, encrypted, and gives it again for the same `id` without doing anything twice; a request with another `id` replaces it. The writes of one request happen all together or not at all.
+- `state`: the last answer's, unchanged; null on the first call. A state that is not of this issue's run (garbage, changed, another issue's, or of an older app) is refused with `422` on `state`, before anything is written. The app keeps every state it makes within 65,536 bytes, whatever the runner's texts hold.
 - `last`: the step the runner just did; null on the first call, unless the merge of the base into continued work conflicted, which is then the first `last`.
 - `sessions`: the client sessions the runner can resume now. `origin` is the word the last `done` gave (`paused` or `kept`), or `turn` for a session of this run.
 - `workspace.notes`: lines for the person watching, about what the runner could not prepare. The app writes them as progress lines.
@@ -118,12 +119,45 @@ Request:
 | --- | --- | --- |
 | `run` | `finished`, `failed`, `turn_limit`, `time_limit`, `stopped` (the poll's `stop`), `idle` (the idle limit), `not_started` | `report`, `tail`, `error`, `usage` |
 | `resolve` | as `run`, and `not_verified` (the runner undid a merge it could not verify) | as `run` |
-| `check` | `passed`, `failed`, `not_started` | `tail`, `error`, `report` (the checked turn's) |
+| `check` | `passed`, `failed`, `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's) |
 | `merge` | `conflict` | `conflicts`, `commits` |
 | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request` (URL), `conflicts`, `merge` (`merged`, `closed`, `pending`, `failed`; null when not asked), `commit`, `error` |
 | `stop` | `pushed`, `not_pushed` | `commit`, `error` |
 
 A `stop` the app did not ask for is the runner's own failure (an error or panic in its code): it pushes what it can and reports `stop` with `error`.
+
+A `check` that was `stopped` ends like a `run` turn that was `stopped`: the app answers `stop`, then writes the "Review this manually" note and answers `done` with session `paused`; there is no fix turn.
+
+When the poll stops an issue while the runner publishes it, the runner still pushes and opens the pull request but does not ask the forge to merge it: it reports `published` with `merge: null`, also when the step said `merge: true` (decision 2026-11-17-second-audit-decisions). For a trusted team the app's finish report says the pull request is open and was not merged automatically because the issue was stopped during publishing, so a person merges it by hand; `merge_status` stays as it is, and the move to Review is refused harmlessly when the issue is no longer In progress.
+
+`usage` is recorded on its issue, which must be the run's issue or one of its sub-issues (otherwise `422`). An agent that is no longer on the team, because it was renamed or removed during the run, is recorded under the name the runner sent; it never refuses the step.
+
+**Caps.** The app refuses a request over these (`422`); the runner clips to them. Lengths are in characters, `state` is ASCII.
+
+| Request | Field | Cap |
+| --- | --- | --- |
+| `poll` | `report.runner_version` | 100 |
+| | `report.clients` | 50 items; `name`, `version` 100 each |
+| | `report.environments` | 10 items |
+| | `report.errors` | 50 items; `message` 2,000, `issue` 50 |
+| | `running` | 20 items of 50 |
+| | `held` | 200 items of 50 |
+| | `review` | 200 items; `ref` 50; `conflicts` 1,000 items of 1,000 |
+| `next` | `id` | 8 to 64 |
+| | `state` | 65,536 |
+| | `last.issue` | 30; `last.agent` 100 |
+| | `last.error` | 16,000 |
+| | `last.report` | 65,000 |
+| | `last.tail` | 4,000 |
+| | `last.conflicts` | 1,000 items of 1,000 |
+| | `last.commits` | 65,000 |
+| | `last.pull_request` | 2,000; `last.commit` 100 |
+| | `last.usage` | `issue` 30, `agent` 100, `model` 100, `kind` 50; token counts and `cost_usd` at least 0 |
+| | `sessions` | 2 items; `issue` 30, `agent` 100 |
+| | `workspace.branch`, `workspace.base` | 255 each |
+| | `workspace.extra_repositories` | 50 items; `path` 255, `url` 2,000 |
+| | `workspace.linked_projects` | 50 items; `key` 30; `paths` 50 items of 255 |
+| | `workspace.notes` | 20 items of 1,000 |
 
 Answer `200`: `{"state": "…", "step": {…}}`. The first call claims the issue (To do to In progress) and writes the "Started" progress line; when the issue is not in To do the answer is `409` with `message` and `status`, and the runner drops the job. The steps, a closed set:
 
@@ -140,7 +174,7 @@ Every step may carry `reason`, which the runner only logs. A step never carries 
 
 The app writes everything a person reads: progress lines, sub-issue reports, the finish report with the pull request, the check verdicts, the failure, budget, idle and stop notes, `merge_status`, and every status move. It writes them when it answers the report of the step that ends the work, so the push always comes first: `publish` and `stop` are answered with `done`.
 
-**When `next` does not answer.** The runner tries again after 2 and 8 seconds, the first call too. Then it commits and pushes, keeps the session as `paused`, ends the run and puts the request in its outbox. It sends outbox requests again before each poll, in order, and ignores their answers. Once the outbox is empty the issue is no longer `running`, so the poll moves it to Blocked with the note unless the delivered report ended the run.
+**When `next` does not answer.** The runner tries again after 2 and 8 seconds, the first call too. A first call (`state` null) that still gets no answer is never put in the outbox: the run did not start, and the issue stays in To do. For any later call the runner then commits and pushes, keeps the session as `paused`, ends the run and puts the request in its outbox. It sends outbox requests again before each poll, in order, and ignores their answers. Once the outbox is empty the issue is no longer `running`, so the poll moves it to Blocked with the note unless the delivered report ended the run.
 
 ### 3. `GET /issues/{ref}/attachments/{id}`
 

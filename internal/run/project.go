@@ -69,7 +69,8 @@ type Project struct {
 	detect        func(ctx context.Context) []cinderline.ReportClient
 	image         string // the agent image the tools mount was filled for; only runs touch it, one at a time
 
-	detectMu sync.Mutex // one detection at a time
+	detectMu sync.Mutex    // one detection at a time
+	detected chan struct{} // closed by the first detection, so the loop polls at once; nil in tests
 
 	mu      sync.Mutex
 	clients []cinderline.ReportClient // the last detection; nil before the first
@@ -85,8 +86,11 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	if err != nil {
 		return nil, err
 	}
-	ws := &workspace.Docker{Project: cfg.ID(), Repository: cfg.Repository, Token: gitToken}
+	// One Exec for all the project's docker and git commands, set here.
+	exec := workspace.OnceVolumes(env.Exec)
+	ws := &workspace.Docker{Project: cfg.ID(), Repository: cfg.Repository, Token: gitToken, Exec: exec}
 	p := &Project{
+		detected:  make(chan struct{}),
 		Config:    cfg,
 		Secrets:   sec,
 		State:     state,
@@ -104,7 +108,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		if err != nil && !(errors.Is(err, secrets.ErrNotFound) && (name == "claude" || name == "codex" || name == "gemini")) {
 			continue
 		}
-		cl := &client.CLI{Name: name, Project: cfg.ID(), Env: env, Credential: cred, BaseURL: cfg.OpenAIBaseURL, Vertex: cfg.GeminiVertex, MCPURL: mcpURL}
+		cl := &client.CLI{Name: name, Project: cfg.ID(), Env: env, Exec: exec, Credential: cred, BaseURL: cfg.OpenAIBaseURL, Vertex: cfg.GeminiVertex, MCPURL: mcpURL}
 		p.Clients[name], clis = cl, append(clis, cl)
 	}
 	p.Forge = func(kind string) (forge.Forge, error) {
@@ -132,7 +136,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		if image == p.image {
 			return nil
 		}
-		mount, err := (&tools.Tools{State: state}).Mount(ctx, image)
+		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
 		if err != nil {
 			return err
 		}
@@ -150,10 +154,6 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		}
 		p.image = image
 		return nil
-	}
-	exec := env.Exec
-	if exec == nil {
-		exec = workspace.RunCommand
 	}
 	p.fetchExtras = func(ctx context.Context, path string, repos []workspace.Extra) map[string]error {
 		return workspace.FetchExtras(ctx, exec, cfg.ID(), path, repos)
@@ -187,7 +187,17 @@ func (p *Project) Detect(ctx context.Context) {
 	got := p.detect(ctx)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.clients = got
+	if p.clients == nil && p.detected != nil {
+		close(p.detected)
+	}
+	p.clients = append([]cinderline.ReportClient{}, got...) // never nil: detection has a result
+}
+
+// hasClients reports whether client detection has had a result.
+func (p *Project) hasClients() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.clients != nil
 }
 
 // AddRefused counts one connection the egress proxy refused, for the report.
@@ -212,8 +222,8 @@ func (p *Project) setStatus(change func(*localapi.ProjectStatus)) {
 	change(&p.status)
 }
 
-// stripURL removes user info from a URL string. scp-form git@host:o/r stays
-// as it is. A string that is not a valid URL is returned unchanged.
+// stripURL removes user info from a URL string, as one the app sends may
+// hold it. A string that is not a valid URL is returned unchanged.
 func stripURL(s string) string {
 	if strings.Contains(s, "://") {
 		if u, err := url.Parse(s); err == nil && u.User != nil {

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,7 +25,7 @@ type CLI struct {
 	Name       string                  // claude, codex, opencode or gemini
 	Project    string                  // project key, for its volumes
 	Env        environment.Environment // where the turn runs
-	Exec       workspace.Exec          // prepares the state volume; nil means workspace.RunCommand
+	Exec       workspace.Exec          // prepares the state volume
 	Credential string                  // the project's key for the CLI's provider (or a `claude setup-token` token); empty: the stored sign-in
 	BaseURL    string                  // Codex: an OpenAI-compatible base URL; empty: OpenAI's API
 	Vertex     bool                    // Gemini: Credential is a Vertex AI express-mode key; false: the Gemini API
@@ -58,9 +59,10 @@ func (c *CLI) Hosts() []string {
 	return nil
 }
 
-// Run runs one turn. The turn limit is an error with HitTurnLimit set, so
-// Attempts continues the session (CSR-21). A turn that printed no session
-// keeps the one it was given.
+// Run runs one turn. The turn limit is an error with HitTurnLimit set. A
+// turn that printed no session keeps the one it resumed, never the ID the
+// runner picked for a fresh one: a turn that failed before the CLI printed
+// anything made no session to resume.
 func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	k, ok := kinds[c.Name]
 	if !ok {
@@ -89,9 +91,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		Allow:   c.Hosts(),
 	})
 	res := k.parse(out)
-	if res.SessionID == "" {
-		res.SessionID = session
-	}
+	res.SessionID = cmp.Or(res.SessionID, t.SessionID)
 	res.Tail = environment.Tail(out)
 	if err == nil && res.HitTurnLimit {
 		err = fmt.Errorf("%s: stopped at the turn limit", c.Name)
@@ -143,11 +143,8 @@ func StateVolume(project, client string) string {
 // PrepareState makes the client's state volume for the project and hands its
 // root to the agent user: a new volume belongs to root, and the CLI writes
 // its config dir and sessions in it. Every turn, as it costs a second and
-// repairs itself. A nil x means workspace.RunCommand.
+// repairs itself.
 func PrepareState(ctx context.Context, x workspace.Exec, project, client string) error {
-	if x == nil {
-		x = workspace.RunCommand
-	}
 	vol := StateVolume(project, client)
 	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, workspace.Labels(project, "")...), vol)...); err != nil {
 		return fmt.Errorf("state volume: %w", err)
@@ -167,15 +164,12 @@ var sessionName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 // Code's folder for the issue's clone /runs/<ref>, which also holds its
 // workers' sessions. Every client's volume is searched, as an issue's agents
 // run on several clients, but only those that exist: mounting a missing
-// volume would create it. A nil x means workspace.RunCommand.
+// volume would create it.
 //
 // shortcut: by name, so Gemini CLI's chat files (named by an ID prefix) and
 // OpenCode's message parts or database rows stay; delete per client when
 // those grow large.
 func DeleteSession(ctx context.Context, x workspace.Exec, project, ref, session string) error {
-	if x == nil {
-		x = workspace.RunCommand
-	}
 	if !sessionName.MatchString(ref) || session != "" && (len(session) < 8 || !sessionName.MatchString(session)) {
 		return fmt.Errorf("delete session: %q / %q is not an issue ref and session ID", ref, session)
 	}

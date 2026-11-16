@@ -88,6 +88,7 @@ func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan s
 	}
 	timer := time.NewTimer(0)
 	defer timer.Stop()
+	detected := p.detected
 	for {
 		if l.draining && l.running == "" && !l.upkeep {
 			return
@@ -109,6 +110,11 @@ func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan s
 			timer.Reset(0) // the app may have the next job
 		case facts := <-l.upkeepDone:
 			l.upkeep, l.facts, l.lastUpkeep = false, facts, time.Now()
+			timer.Reset(0) // the poll that asked for the pass could not take a job
+		case <-detected:
+			detected = nil
+			timer.Reset(0) // the first poll that can take a job
+
 		case <-timer.C:
 			timer.Reset(l.poll())
 		}
@@ -124,10 +130,15 @@ func (l *loop) poll() (wait time.Duration) {
 		}
 	}()
 	l.c.Replay(l.ctx)
-	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs(), Idle: l.idle()}
+	// A run, an upkeep pass and tidying work on the same clones and bare
+	// repository, so one at a time: a poll that starts a pass says it is not
+	// idle, and tidying is done here, before the pass starts.
+	idle := l.idle()
+	review := l.running == "" && !l.upkeep && !l.draining && l.mismatch == "" && time.Since(l.lastUpkeep) >= l.review
+	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs(), Idle: idle && !review}
 	var asked []string
 	var stranded []workspace.Clone
-	tidy := req.Idle && (l.lastTidy.IsZero() || time.Since(l.lastTidy) >= tidyEvery)
+	tidy := idle && (l.lastTidy.IsZero() || time.Since(l.lastTidy) >= tidyEvery)
 	if tidy {
 		var ok bool
 		if asked, stranded, ok = p.held(l.ctx); !ok {
@@ -135,7 +146,6 @@ func (l *loop) poll() (wait time.Duration) {
 		}
 		req.Held = asked
 	}
-	review := !l.upkeep && !l.draining && l.mismatch == "" && time.Since(l.lastUpkeep) >= l.review
 	if review {
 		req.Review = l.facts
 		if req.Review == nil {
@@ -245,9 +255,10 @@ func (l *loop) runningRefs() []string {
 	return refs
 }
 
-// idle says the runner can start a run now.
+// idle says the runner can start a run now: none and no upkeep pass is in
+// flight, and client detection has a result, so the report names the clients.
 func (l *loop) idle() bool {
-	return l.running == "" && !l.draining && l.mismatch == "" && !time.Now().Before(l.startAt)
+	return l.running == "" && !l.upkeep && !l.draining && l.mismatch == "" && l.p.hasClients() && !time.Now().Before(l.startAt)
 }
 
 // start runs the job in its own goroutine. The ref is running at once, so
@@ -293,6 +304,8 @@ func (p *Project) pin(proj cinderline.Project) string {
 	switch {
 	case proj.RepositoryURL == "":
 		return "the project in Cinderline names no repository for " + p.Config.Key + "; this runner is configured for " + stripURL(p.Config.Repository)
+	case config.CheckRepositoryURL(proj.RepositoryURL) != nil:
+		return "the project in Cinderline names the repository " + stripURL(proj.RepositoryURL) + ", which is not an https URL; the runner signs in to git with its token over https only and is configured for " + stripURL(p.Config.Repository)
 	case !config.SameRepository(proj.RepositoryURL, p.Config.Repository):
 		return "the project in Cinderline names the repository " + stripURL(proj.RepositoryURL) + ", but this runner is configured for " + stripURL(p.Config.Repository)
 	}

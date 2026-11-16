@@ -185,6 +185,7 @@ func newFixture(t *testing.T) *fixture {
 		Config: cfg, Secrets: secrets.New(state), State: state, Env: f.env, Log: discard(),
 		Clients:   map[string]client.Client{"claude": f.cl},
 		Workspace: f.ws,
+		clients:   []cinderline.ReportClient{}, // detected
 		Forge:     func(string) (forge.Forge, error) { return f.fg, nil },
 	}
 	return f

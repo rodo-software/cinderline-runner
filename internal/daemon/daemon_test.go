@@ -39,6 +39,19 @@ func (a *app) count() int {
 	return len(a.polls)
 }
 
+// countOf is the polls of project key so far.
+func (a *app) countOf(key string) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, p := range a.polls {
+		if strings.HasPrefix(p, "Bearer tok-"+key+" ") {
+			n++
+		}
+	}
+	return n
+}
+
 func newApp(t *testing.T) *app {
 	a := &app{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -330,8 +343,8 @@ func TestReload(t *testing.T) {
 	setToken(t, p, pa)
 	setToken(t, p, pb)
 	c, _ := start(t, p)
-	// Twice: the job it cannot start, and at once after that run.
-	waitFor(t, "A to poll", func() bool { return a.count() == 2 })
+	waitFor(t, "A to poll", func() bool { return a.countOf("A") >= 1 })
+	before := a.countOf("A")
 
 	writeConfig(t, p, pa, pb)
 	if err := c.Reload(ctxT(t)); err != nil {
@@ -340,8 +353,8 @@ func TestReload(t *testing.T) {
 	if _, ok := status(t, c)["B"]; !ok {
 		t.Fatal("status does not list B after reload")
 	}
-	// A's new loop polls again, B's for the first time.
-	waitFor(t, "both loops to poll", func() bool { return a.count() == 6 })
+	// A's new loop polls again at once, B's for the first time.
+	waitFor(t, "both loops to poll", func() bool { return a.countOf("A") > before && a.countOf("B") >= 1 })
 	raw, _ := os.ReadFile(p.Log)
 	if n, m := strings.Count(string(raw), `"msg":"projects started"`), strings.Count(string(raw), `"msg":"projects stopped"`); n != 2 || m != 1 {
 		t.Errorf("projects started %d and stopped %d times, want 2 and 1:\n%s", n, m, raw)

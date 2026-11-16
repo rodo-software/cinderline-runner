@@ -111,7 +111,7 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 		}
 	}
 	if open && slices.Contains(behind, branch) {
-		updated, conflicts, err := p.updateReviewBranch(ctx, it.Ref, branch, base)
+		updated, conflicts, err := p.updateReviewBranch(ctx, it, branch, base)
 		switch {
 		case err != nil:
 			log.Warn("branch not updated", "err", err)
@@ -134,9 +134,12 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 
 // updateReviewBranch merges base into the branch in a fresh clone and pushes
 // it, unless it is merged or current already; a conflicted merge is aborted
-// and its files returned.
-func (p *Project) updateReviewBranch(ctx context.Context, ref, branch, base string) (updated bool, conflicts []string, err error) {
-	ws := p.Workspace
+// and its files returned. The work of a clone it replaces is kept first.
+func (p *Project) updateReviewBranch(ctx context.Context, it cinderline.ReviewItem, branch, base string) (updated bool, conflicts []string, err error) {
+	ws, ref := p.Workspace, it.Ref
+	if err := p.keepWork(ctx, ref, "", ref+": "+it.Title); err != nil {
+		return false, nil, err
+	}
 	dir, err := ws.Prepare(ctx, branch, base)
 	if err != nil {
 		return false, nil, err

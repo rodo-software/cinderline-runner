@@ -13,7 +13,6 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
-	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // uninstall removes the service, the runner's containers, networks, volumes
@@ -114,9 +113,6 @@ func (c *CLI) removeLabelled(label string) error {
 // when it is set; a list that names nothing runs no rm argument.
 func (c *CLI) dockerRemove(list, rm []string, keep func(string) bool) error {
 	exec := c.exec
-	if exec == nil {
-		exec = workspace.RunCommand
-	}
 	out, err := exec(context.Background(), nil, append([]string{"docker"}, list...)...)
 	if err != nil {
 		return err

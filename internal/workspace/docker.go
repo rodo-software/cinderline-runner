@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
@@ -52,6 +53,37 @@ func RunCommand(ctx context.Context, env []string, argv ...string) (string, erro
 	return stdout.String(), nil
 }
 
+// OnceVolumes is x, except that it runs each "docker volume create" once:
+// a volume it made is there for the rest of the process, unless a "docker
+// volume rm" through it removed it. Every use of a volume creates it first,
+// so this saves a docker command per use.
+func OnceVolumes(x Exec) Exec {
+	var mu sync.Mutex
+	made := map[string]bool{}
+	return func(ctx context.Context, env []string, argv ...string) (string, error) {
+		volume := len(argv) > 3 && argv[0] == "docker" && argv[1] == "volume"
+		create, name := volume && argv[2] == "create", argv[len(argv)-1]
+		mu.Lock()
+		done := create && made[name]
+		mu.Unlock()
+		if done {
+			return name + "\n", nil
+		}
+		out, err := x(ctx, env, argv...)
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case create && err == nil:
+			made[name] = true
+		case volume && argv[2] == "rm":
+			for _, n := range argv[3:] {
+				delete(made, n)
+			}
+		}
+		return out, err
+	}
+}
+
 func tail(s string, n int) string {
 	if len(s) > n {
 		return s[len(s)-n:]
@@ -67,7 +99,7 @@ type Docker struct {
 	Project    string // project key, in volume names and labels
 	Repository string // the configured repository URL, the only remote
 	Token      string // the git token; reaches only the helper's environment
-	Exec       Exec   // nil means RunCommand
+	Exec       Exec
 }
 
 // Fetch makes the project's repo volume and bare clone if missing and
@@ -134,11 +166,7 @@ func (d *Docker) run(ctx context.Context, env []string, argv ...string) error {
 }
 
 func (d *Docker) output(ctx context.Context, env []string, argv ...string) (string, error) {
-	x := d.Exec
-	if x == nil {
-		x = RunCommand
-	}
-	return x(ctx, env, argv...)
+	return d.Exec(ctx, env, argv...)
 }
 
 // volume is the name of the project's volume of the given kind.
@@ -209,7 +237,7 @@ func checkDir(dir string) error {
 // cinderline/<REF>), continuing the remote branch if a run pushed one, else
 // starting from base. A clone left from before is removed, as today's runner
 // does with old worktrees; a paused run keeps its clone by not preparing, and
-// callers push a clone with unpushed commits first (CSR-180).
+// callers commit and push what the old clone holds first (CSR-180).
 func (d *Docker) Prepare(ctx context.Context, branch, base string) (string, error) {
 	ref, ok := strings.CutPrefix(branch, name.Name+"/")
 	if !ok || !IssueRef.MatchString(ref) {
@@ -282,7 +310,7 @@ func (d *Docker) MergeBase(ctx context.Context, dir, base, author string) ([]str
 		return nil, err
 	}
 	_, err := d.gitAs(ctx, dir, author, "merge", "--quiet", "--no-edit", "origin/"+base)
-	merged, mergeErr := exitedZero(err)
+	merged, mergeErr := ExitedZero(err)
 	if merged || mergeErr != nil {
 		return nil, mergeErr
 	}
@@ -359,11 +387,13 @@ func (d *Docker) Log(ctx context.Context, dir, base string) (string, error) {
 // other failure an error.
 func (d *Docker) succeeds(ctx context.Context, dir string, args ...string) (bool, error) {
 	_, err := d.git(ctx, dir, args...)
-	return exitedZero(err)
+	return ExitedZero(err)
 }
 
-// exitedZero is git's err as succeeds reports it.
-func exitedZero(err error) (bool, error) {
+// ExitedZero reports whether a command exited 0, from its error: exit 1, as
+// of git or test saying no, is false without an error; any other failure
+// is the error.
+func ExitedZero(err error) (bool, error) {
 	var exit interface{ ExitCode() int }
 	if errors.As(err, &exit) && exit.ExitCode() == 1 {
 		return false, nil
@@ -483,17 +513,28 @@ func (d *Docker) runsShell(ctx context.Context, issue, script string, args ...st
 	return d.output(ctx, nil, append(argv, args...)...)
 }
 
+// List lists the folders under the runs volume whose name is an issue ref.
+func (d *Docker) List(ctx context.Context) ([]string, error) {
+	out, err := d.runsShell(ctx, "", `for d in /runs/*/; do [ -d "$d" ] && echo "${d%/}"; done; true`)
+	if err != nil {
+		return nil, err
+	}
+	var dirs []string
+	for _, dir := range strings.Fields(out) {
+		if checkDir(dir) == nil {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs, nil
+}
+
 // Exists reports whether dir is a clone, without running git in it.
 func (d *Docker) Exists(ctx context.Context, dir string) (bool, error) {
 	if err := checkDir(dir); err != nil {
 		return false, err
 	}
 	_, err := d.runsShell(ctx, path.Base(dir), `test -d "$1/.git"`, dir)
-	var exit interface{ ExitCode() int }
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
-		return false, nil
-	}
-	return err == nil, err
+	return ExitedZero(err)
 }
 
 // FastForward brings a clean clone up to the remote's branch, which a person

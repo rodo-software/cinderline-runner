@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
@@ -112,14 +113,39 @@ func New(baseURL, token, version string) *Client {
 func (c *Client) Version() string { return c.version }
 
 // Poll sends the runner's report and what it holds, and returns what to do.
-// Report error messages are redacted.
+// Report error messages are redacted, and everything is cut to the app's
+// limits: the first entries of a list are sent.
 func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
-	errs := make([]ReportError, len(r.Report.Errors)) // a copy: the caller's slice stays
-	for i, e := range r.Report.Errors {
-		e.Message = redact.String(e.Message)
-		errs[i] = e
+	errs := make([]ReportError, 0, len(r.Report.Errors)) // a copy: the caller's slice stays
+	for _, e := range first(r.Report.Errors, maxErrors) {
+		e.Message, e.Issue = clip(redact.String(e.Message), maxErrorMessage), clip(e.Issue, maxRef)
+		errs = append(errs, e)
 	}
 	r.Report.Errors = errs
+	r.Report.RunnerVersion = clip(r.Report.RunnerVersion, maxName)
+	clients := make([]ReportClient, 0, len(r.Report.Clients))
+	for _, cl := range first(r.Report.Clients, maxClients) {
+		cl.Name = clip(cl.Name, maxName)
+		if cl.Version != nil {
+			v := clip(*cl.Version, maxName)
+			cl.Version = &v
+		}
+		clients = append(clients, cl)
+	}
+	r.Report.Clients = clients
+	r.Report.Environments = first(r.Report.Environments, maxEnvironments)
+	r.Running = refs(r.Running, maxRunning)
+	r.Held = refs(r.Held, maxListed)
+	if r.Review != nil {
+		review := []ReviewFact{}
+		for _, f := range r.Review {
+			if len(review) < maxListed && utf8.RuneCountInString(f.Ref) <= maxRef {
+				f.Conflicts = clipAll(f.Conflicts, maxConflicts, maxText)
+				review = append(review, f)
+			}
+		}
+		r.Review = review
+	}
 	var out PollAnswer
 	err := c.call(ctx, "poll", "POST", "/poll", r, &out)
 	return out, err
@@ -142,23 +168,55 @@ func (c *Client) Next(ctx context.Context, ref string, r NextRequest) (NextAnswe
 	return out, err
 }
 
-// redacted is r with the texts that can hold an agent's output or an error redacted.
+// redacted is r with the texts that can hold an agent's output or an error
+// redacted, and every text and list cut to the app's limits: a tail keeps
+// its end, anything else its start. The caller's r is not changed.
 func redacted(r NextRequest) NextRequest {
+	text := func(s *string, n int) *string {
+		if s == nil {
+			return nil
+		}
+		v := clip(redact.String(*s), n)
+		return &v
+	}
 	if r.Last != nil {
 		l := *r.Last
-		for _, s := range []**string{&l.Error, &l.Report, &l.Tail, &l.Commits} {
-			if *s != nil {
-				v := redact.String(**s)
-				*s = &v
-			}
+		l.Error, l.Report, l.Commits = text(l.Error, maxStepError), text(l.Report, maxLongText), text(l.Commits, maxLongText)
+		l.PullRequest, l.Commit = text(l.PullRequest, maxURL), text(l.Commit, maxCommit)
+		if l.Tail != nil {
+			v := clipTail(redact.String(*l.Tail), maxTail)
+			l.Tail = &v
+		}
+		l.Conflicts = clipAll(l.Conflicts, maxConflicts, maxText)
+		l.Issue, l.Agent = clip(l.Issue, maxIssue), text(l.Agent, maxName)
+		if u := l.Usage; u != nil {
+			v := *u
+			v.Issue, v.Agent, v.Model = clip(v.Issue, maxIssue), clip(v.Agent, maxName), text(v.Model, maxName)
+			l.Usage = &v
 		}
 		r.Last = &l
 	}
-	notes := make([]string, len(r.Workspace.Notes))
-	for i, n := range r.Workspace.Notes {
-		notes[i] = redact.String(n)
+	sessions := make([]Session, 0, len(r.Sessions))
+	for _, s := range first(r.Sessions, maxSessions) {
+		s.Issue, s.Agent = clip(s.Issue, maxIssue), clip(s.Agent, maxName)
+		sessions = append(sessions, s)
 	}
-	r.Workspace.Notes = notes
+	r.Sessions = sessions
+	w := r.Workspace
+	w.Notes = make([]string, 0, len(w.Notes))
+	for _, n := range first(r.Workspace.Notes, maxNotes) {
+		w.Notes = append(w.Notes, clip(redact.String(n), maxText))
+	}
+	w.Branch, w.Base = clip(w.Branch, maxPath), clip(w.Base, maxPath)
+	w.ExtraRepositories = make([]WorkspaceRepository, 0, len(r.Workspace.ExtraRepositories))
+	for _, e := range first(r.Workspace.ExtraRepositories, maxWorkspaceList) {
+		w.ExtraRepositories = append(w.ExtraRepositories, WorkspaceRepository{Path: clip(e.Path, maxPath), URL: clip(e.URL, maxURL)})
+	}
+	w.LinkedProjects = make([]WorkspaceLink, 0, len(r.Workspace.LinkedProjects))
+	for _, l := range first(r.Workspace.LinkedProjects, maxWorkspaceList) {
+		w.LinkedProjects = append(w.LinkedProjects, WorkspaceLink{Key: clip(l.Key, maxKey), Paths: clipAll(l.Paths, maxWorkspaceList, maxPath)})
+	}
+	r.Workspace = w
 	return r
 }
 

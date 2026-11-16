@@ -628,6 +628,16 @@ func TestDockerExists(t *testing.T) {
 	}
 }
 
+// List names every folder under the runs volume that is an issue's.
+func TestDockerList(t *testing.T) {
+	d, calls := scripted([]string{"", "/runs/CSR-1\n/runs/CSR-2\n/runs/lost+found\n"}, nil)
+	dirs, err := d.List(context.Background())
+	if err != nil || !slices.Equal(dirs, []string{"/runs/CSR-1", "/runs/CSR-2"}) {
+		t.Fatalf("List = %v, %v", dirs, err)
+	}
+	checkCalls(t, *calls, runsShellCalls("", `for d in /runs/*/; do [ -d "$d" ] && echo "${d%/}"; done; true`))
+}
+
 func TestDockerRemove(t *testing.T) {
 	d, calls := scripted(nil, nil)
 	if err := d.Remove(context.Background(), dir); err != nil {
@@ -678,5 +688,30 @@ func TestDockerFastForward(t *testing.T) {
 			}
 			checkCalls(t, *calls, tt.calls)
 		})
+	}
+}
+
+// A volume is created once per process, and again after it was removed.
+func TestOnceVolumes(t *testing.T) {
+	var ran []string
+	x := OnceVolumes(func(_ context.Context, _ []string, argv ...string) (string, error) {
+		ran = append(ran, strings.Join(argv, " "))
+		return "", nil
+	})
+	for _, argv := range [][]string{
+		{"docker", "volume", "create", "--label", "l", "v1"},
+		{"docker", "volume", "create", "--label", "l", "v1"},
+		{"docker", "volume", "create", "v2"},
+		{"docker", "volume", "rm", "--force", "v1"},
+		{"docker", "volume", "create", "--label", "l", "v1"},
+		{"docker", "run", "x"},
+	} {
+		if _, err := x(context.Background(), nil, argv...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := []string{"docker volume create --label l v1", "docker volume create v2", "docker volume rm --force v1", "docker volume create --label l v1", "docker run x"}
+	if !slices.Equal(ran, want) {
+		t.Errorf("ran %q", ran)
 	}
 }

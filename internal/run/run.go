@@ -17,9 +17,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
-	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
-	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // sleep waits d or until ctx is done; a variable so tests need not wait.
@@ -27,18 +25,6 @@ var sleep = forge.Sleep
 
 // nextWaits are the waits between the tries of a next call the app did not answer.
 var nextWaits = []time.Duration{2 * time.Second, 8 * time.Second}
-
-// The publish step's retries of the base merge, push and pull request.
-const (
-	publishAttempts = 5
-	publishBackoff  = 30 * time.Second
-)
-
-// The publish step's wait for a merge it asked for.
-const (
-	mergeEvery = 15 * time.Second
-	mergeLimit = 15 * time.Minute
-)
 
 // errStopped is the cause of a turn the poll's stop ended.
 var errStopped = errors.New("stopped by Cinderline")
@@ -135,143 +121,6 @@ func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline
 	return p.steps(ctx, c, j, cf, h)
 }
 
-// prepareRun prepares the run's environment and clone. What it could not
-// prepare but the run can do without goes into the workspace's notes; an
-// error means the run did not start.
-func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb cinderline.Job) (*job, *conflict, *held, error) {
-	ref, team := jb.Issue.Ref, jb.Team
-	// The ref becomes a branch, a folder and a file name.
-	if !workspace.IssueRef.MatchString(ref) {
-		return nil, nil, nil, fmt.Errorf("%q is not an issue reference", ref)
-	}
-	if len(team.Agents) == 0 {
-		return nil, nil, nil, errors.New("the team has no agents")
-	}
-	lead := team.Agents[0]
-	if p.Clients[lead.Client] == nil {
-		return nil, nil, nil, fmt.Errorf("agent %s runs on %s, which this runner does not run", lead.Name, lead.Client)
-	}
-	fg, err := p.Forge(proj.Forge)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	base, err := baseBranch(ctx, proj, fg)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if p.prepare != nil {
-		if err := p.prepare(ctx, proj, base); err != nil {
-			return nil, nil, nil, fmt.Errorf("the run's environment could not be prepared: %w", err)
-		}
-	}
-	j := &job{
-		ref: ref, title: jb.Issue.Title, body: jb.Issue.Body, branch: name.Name + "/" + ref, base: base,
-		team: team, check: proj.CheckCommand, idle: time.Duration(max(proj.IdleMinutes, 0)) * time.Minute, fg: fg,
-	}
-	extras, notes := p.extraRepositories(ctx, ref)
-	// Fetched on every run, so a resume and a follow-up read fresh code too.
-	links, more := p.linkedProjects(ctx, ref, proj.LinkedProjects)
-	notes = append(notes, more...)
-	// A run's attachments come from its steps; another run's files must not linger.
-	if err := p.resetAttachments(); err != nil {
-		return nil, nil, nil, err
-	}
-	h := &held{reports: map[string]string{}, agents: map[string]string{}}
-	h.lead = session{issue: ref, agent: lead.Name}
-	n, resumed, more := p.resume(ctx, j, lead.Client)
-	notes = append(notes, more...)
-	if resumed {
-		j.dir, h.lead.id, h.lead.origin = n.Dir, n.Session, n.Origin
-	} else if err := p.pushBeforePrepare(ctx, j); err != nil {
-		return nil, nil, nil, err
-	} else if j.dir, err = p.Workspace.Prepare(ctx, j.branch, base); err != nil {
-		return nil, nil, nil, err
-	}
-	j.ws = runWorkspace(j.branch, base, extras, links, notes)
-	// Also on a fresh clone, where the merge changes nothing, as Prepare
-	// does not say whether it continued the remote branch.
-	return j, p.catchUp(ctx, j), h, nil
-}
-
-// resume returns the note of the session the run continues, if it can: a
-// session of this client, in a clone that is still there, of the run kind
-// the team has now. A kept session's clone is first fast-forwarded to the
-// remote branch. What it had to drop gets a note for the workspace. A solo
-// run's note is removed, so a crash during it starts fresh; a team's stays.
-func (p *Project) resume(ctx context.Context, j *job, cl string) (Note, bool, []string) {
-	ref := j.ref
-	if !j.isTeam() {
-		defer p.dropNote(ref)
-	}
-	n, ok := p.readNote(ref)
-	switch {
-	case !ok:
-		return Note{}, false, nil
-	case n.Pruned != "":
-		p.dropNote(ref)
-		return Note{}, false, []string{"The agent's earlier session on " + ref + " was deleted because " + n.Pruned + ", so this run starts a fresh session"}
-	case n.Session == "":
-		return Note{}, false, nil
-	case n.Client != cl:
-		return Note{}, false, nil
-	}
-	if ok, err := p.Workspace.Exists(ctx, n.Dir); !ok {
-		if err != nil {
-			p.Log.Warn("paused clone not checked", "project", p.Config.Key, "issue", ref, "err", err)
-		}
-		return Note{}, false, nil
-	}
-	if n.Origin != "kept" {
-		return n, true, nil
-	}
-	if err := p.Workspace.FastForward(ctx, n.Dir, j.branch); err != nil {
-		p.Log.Warn("kept session dropped: its clone is not up to date", "project", p.Config.Key, "issue", ref, "err", err)
-		p.dropNote(ref)
-		p.forget(ctx, ref, n.Session)
-		return Note{}, false, []string{"The agent's earlier session on " + ref + " could not be continued: its clone could not be brought up to date with the remote branch " + j.branch + "; this run starts a fresh session"}
-	}
-	return n, true, nil
-}
-
-// pushBeforePrepare pushes the issue's clone if it holds commits no remote
-// branch has, as Prepare replaces it; an error keeps the clone.
-func (p *Project) pushBeforePrepare(ctx context.Context, j *job) error {
-	clones, err := p.Workspace.Stranded(ctx)
-	if err != nil {
-		return err // unknown, so the clone may not be replaced
-	}
-	for _, clone := range clones {
-		if clone.Branch != j.branch {
-			continue
-		}
-		if err := p.Workspace.Push(ctx, clone.Dir, j.branch); err != nil {
-			return fmt.Errorf("the clone has unpushed commits, kept: %w", err)
-		}
-		p.Log.Info("stranded branch pushed", "project", p.Config.Key, "issue", j.ref, "branch", j.branch)
-	}
-	return nil
-}
-
-// catchUp merges the base into continued work before the first step. What
-// a paused turn left is committed first. It returns a conflict for the
-// run's first request; an error only logs: publish tries again.
-func (p *Project) catchUp(ctx context.Context, j *job) *conflict {
-	log := p.Log.With("project", p.Config.Key, "issue", j.ref)
-	author := leadAuthor(j.team)
-	if _, err := p.Workspace.Commit(ctx, j.dir, author, j.ref+": "+j.title); err != nil {
-		log.Warn("base not merged in", "err", err)
-		return nil
-	}
-	cf, err := updateBranch(ctx, p.Workspace, j.ref, j.dir, j.base, author)
-	switch {
-	case err != nil:
-		log.Warn("base not merged in", "err", err)
-	case cf != nil:
-		log.Info("base not merged in", "base", j.base, "conflicts", cf.files)
-	}
-	return cf
-}
-
 // steps asks next at every step boundary and does the step it gets, until
 // done. It holds no policy: it sends facts and echoes state.
 func (p *Project) steps(ctx context.Context, c *cinderline.Client, j *job, cf *conflict, h *held) (started bool, err error) {
@@ -291,18 +140,19 @@ func (p *Project) steps(ctx context.Context, c *cinderline.Client, j *job, cf *c
 		case ctx.Err() != nil:
 			return !first, nil // a plain stop: the app blocks the issue after the restart
 		case err == nil:
-		case cinderline.Unavailable(err):
-			log.Warn("next step not reached, run paused and its report queued", "err", err)
-			p.pause(ctx, j, h)
-			c.Queue(j.ref, req)
-			return true, nil
 		case first && errors.As(err, &taken):
 			log.Info("job taken back, dropped", "err", err)
 			p.keepResumed(j, h)
 			return false, nil
 		case first:
+			// Never queued: nothing was claimed, so the run did not start.
 			p.keepResumed(j, h)
 			return false, err
+		case cinderline.Unavailable(err):
+			log.Warn("next step not reached, run paused and its report queued", "err", err)
+			p.pause(ctx, j, h)
+			c.Queue(j.ref, req)
+			return true, nil
 		default:
 			log.Error("next refused the report, run paused", "err", err)
 			p.pause(ctx, j, h)
@@ -537,11 +387,9 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 	}
 
 	p.Log.Info("turn started", "project", p.Config.Key, "issue", issue, "agent", agent.Name, "session", turn.SessionID)
-	tctx, cancel := context.WithCancelCause(ctx)
-	p.setTurn(j.ref, cancel)
+	tctx, end := p.stoppable(ctx, j.ref)
 	res, err := p.Clients[agent.Client].Run(tctx, turn)
-	p.setTurn("", nil)
-	cancel(nil)
+	stopped := end()
 	if ctx.Err() != nil {
 		return last, res, ctx.Err()
 	}
@@ -556,7 +404,7 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Outcome = "finished"
 		p.Log.Info("turn finished", "project", p.Config.Key, "issue", issue, "session", res.SessionID)
 		return last, res, nil
-	case errors.Is(context.Cause(tctx), errStopped):
+	case stopped:
 		last.Outcome = "stopped"
 	case errors.Is(err, environment.ErrIdle):
 		last.Outcome = "idle"
@@ -570,24 +418,40 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 	p.Log.Warn("turn ended", "project", p.Config.Key, "issue", issue, "outcome", last.Outcome, "err", err)
 	last.Error = ptr(err.Error())
 	if res.Tail != "" {
-		last.Tail = ptr(lastRunes(res.Tail, 4000))
+		last.Tail = ptr(res.Tail)
 	}
 	return last, res, nil
 }
 
-// setTurn records the cancel of the turn in flight of run ref; nil: none.
+// stoppable is ctx for a step of run ref that the poll's stop may end: a
+// turn, a check, a publish. The step calls end when it is done; end reports
+// whether a stop came. A stop between steps is ignored.
+func (p *Project) stoppable(ctx context.Context, ref string) (sctx context.Context, end func() bool) {
+	sctx, cancel := context.WithCancelCause(ctx)
+	p.setTurn(ref, cancel)
+	return sctx, func() bool {
+		p.setTurn("", nil)
+		cancel(nil)
+		return stopped(sctx)
+	}
+}
+
+// stopped reports whether the poll's stop ended ctx from stoppable.
+func stopped(ctx context.Context) bool { return errors.Is(context.Cause(ctx), errStopped) }
+
+// setTurn records the cancel of the step in flight of run ref; nil: none.
 func (p *Project) setTurn(ref string, cancel context.CancelCauseFunc) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.stopRef, p.stopRun = ref, cancel
 }
 
-// stopTurn ends the turn in flight of run ref, if any, as stopped.
+// stopTurn ends the step in flight of run ref, if any, as stopped.
 func (p *Project) stopTurn(ref string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.stopRun != nil && p.stopRef == ref {
-		p.Log.Info("turn stopped by Cinderline", "project", p.Config.Key, "issue", ref)
+		p.Log.Info("step stopped by Cinderline", "project", p.Config.Key, "issue", ref)
 		p.stopRun(errStopped)
 	}
 }
@@ -610,7 +474,8 @@ func usage(issue, agent, model string, u *client.Usage) *cinderline.Usage {
 }
 
 // checkStep commits and pushes the clone, then runs the project's check
-// command in it. The check passed, failed, or did not start. Its facts are
+// command in it. The check passed, failed, was stopped by the poll's stop,
+// or did not start. Its facts are
 // the last turn's on the step's issue: the agent whose work it checks and
 // its report.
 func (p *Project) checkStep(ctx context.Context, c *cinderline.Client, j *job, h *held, step cinderline.Step) (*cinderline.LastStep, error) {
@@ -637,141 +502,23 @@ func (p *Project) checkStep(ctx context.Context, c *cinderline.Client, j *job, h
 	if err := p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
 		p.Log.Warn("push failed", "project", p.Config.Key, "issue", issue, "err", err)
 	}
-	failed, tail, err := p.runCheck(ctx, j.dir, j.check, j.team.MaxMinutes)
+	cctx, end := p.stoppable(ctx, j.ref)
+	failed, tail, err := p.runCheck(cctx, j.dir, j.check, j.team.MaxMinutes)
 	switch {
 	case ctx.Err() != nil:
+		end()
 		return last, ctx.Err()
+	case end():
+		last.Outcome = "stopped"
 	case err != nil:
 		return fail(err)
 	case failed:
-		last.Outcome, last.Tail = "failed", ptr(lastRunes(tail, 4000))
+		last.Outcome, last.Tail = "failed", ptr(tail)
 	default:
 		last.Outcome = "passed"
 	}
 	p.Log.Info("check", "project", p.Config.Key, "issue", issue, "outcome", last.Outcome)
 	return last, nil
-}
-
-// publishStep commits, merges the base in, pushes, opens or finds the pull
-// request and, when asked, asks the forge to merge it and waits. With
-// resolve_conflicts a conflicting base merge is reported as a merge step
-// first. The base merge, push and pull request are tried publishAttempts
-// times.
-func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step, pending **conflict) (*cinderline.LastStep, error) {
-	log := p.Log.With("project", p.Config.Key, "issue", j.ref)
-	author := leadAuthor(j.team)
-	title := pullRequestTitle(j.ref, j.title)
-	if _, err := p.Workspace.Commit(ctx, j.dir, author, title); err != nil {
-		return nil, err
-	}
-	if step.ResolveConflicts {
-		cf, err := updateBranch(ctx, p.Workspace, j.ref, j.dir, j.base, author)
-		if err != nil {
-			log.Warn("base not merged in, publish tries again", "err", err)
-		}
-		if cf != nil {
-			*pending = cf
-			return &cf.last, nil
-		}
-	}
-	last := &cinderline.LastStep{Step: "publish", Issue: j.ref}
-	var pr forge.PullRequest
-	var conflicts []string
-	var unchanged bool
-	for attempt, wait := 1, publishBackoff; ; attempt, wait = attempt+1, wait*2 {
-		var err error
-		if conflicts, unchanged, pr, err = p.attempt(ctx, j, title); err == nil {
-			break
-		}
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if attempt == publishAttempts {
-			last.Outcome, last.Error = "failed", ptr(err.Error())
-			last.Commit = p.head(ctx, j)
-			return last, nil
-		}
-		log.Warn("publish failed, trying again", "attempt", attempt, "retry_in", wait, "err", err)
-		if err := sleep(ctx, wait); err != nil {
-			return nil, err
-		}
-	}
-	last.Commit = p.head(ctx, j)
-	if unchanged {
-		last.Outcome = "unchanged"
-		return last, nil
-	}
-	last.Outcome, last.PullRequest, last.Conflicts = "published", &pr.URL, conflicts
-	if !step.Merge {
-		return last, nil
-	}
-	if len(conflicts) > 0 {
-		last.Merge = ptr("failed") // a conflicted pull request cannot merge
-		return last, nil
-	}
-	if err := j.fg.RequestMerge(ctx, pr); err != nil {
-		last.Merge, last.Error = ptr("failed"), ptr("asking the forge to merge "+pr.URL+" failed: "+err.Error())
-		return last, nil
-	}
-	log.Info("waiting for the merge", "pull_request", pr.URL)
-	state, err := p.awaitMerge(ctx, j.fg, j.branch)
-	if err != nil {
-		return nil, err
-	}
-	last.Merge = ptr(string(state))
-	return last, nil
-}
-
-// attempt is one try of the publish: the base merge, the check whether the
-// branch has anything the base lacks, the push and the pull request.
-func (p *Project) attempt(ctx context.Context, j *job, title string) (conflicts []string, unchanged bool, pr forge.PullRequest, err error) {
-	// Branch protection may block outdated pull requests.
-	if conflicts, err = p.Workspace.MergeBase(ctx, j.dir, j.base, leadAuthor(j.team)); err != nil {
-		return nil, false, pr, err
-	}
-	if unchanged, err = p.Workspace.IsAncestor(ctx, j.dir, "HEAD", j.base); err != nil || unchanged {
-		return conflicts, unchanged, pr, err
-	}
-	// Built here from the ref, never passed in, so the push can never target the base.
-	if err = p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
-		return nil, false, pr, err
-	}
-	pr, err = j.fg.OpenPullRequest(ctx, forge.PullRequestInput{Branch: j.branch, Base: j.base, Title: title, Body: pullRequestBody(j.ref, j.body)})
-	return conflicts, false, pr, err
-}
-
-// awaitMerge polls the branch's pull request every mergeEvery until it is
-// merged or closed, or mergeLimit has passed: then it is pending, or failed
-// when its checks failed. A failed poll is logged and tried again.
-func (p *Project) awaitMerge(ctx context.Context, fg forge.Forge, branch string) (forge.MergeState, error) {
-	for waited := time.Duration(0); ; waited += mergeEvery {
-		state, err := fg.MergeState(ctx, branch)
-		switch {
-		case ctx.Err() != nil:
-			return "", ctx.Err()
-		case err != nil:
-			p.Log.Warn("merge not checked, trying again", "project", p.Config.Key, "branch", branch, "err", err)
-		case state == forge.MergeMerged || state == forge.MergeClosed:
-			return state, nil
-		}
-		if waited >= mergeLimit {
-			if state == forge.MergeFailed {
-				return state, nil
-			}
-			return forge.MergePending, nil
-		}
-		if err := sleep(ctx, mergeEvery); err != nil {
-			return "", err
-		}
-	}
-}
-
-// head is the clone's commit; nil when unknown.
-func (p *Project) head(ctx context.Context, j *job) *string {
-	if h, err := p.Workspace.Head(ctx, j.dir); err == nil {
-		return &h
-	}
-	return nil
 }
 
 // stepAttachments empties the attachments folder and downloads the step's
@@ -802,14 +549,6 @@ func (p *Project) stepAttachments(ctx context.Context, c *cinderline.Client, ref
 	return nil
 }
 
-// pullRequestTitle is the title of the issue's pull request.
-func pullRequestTitle(ref, title string) string { return redact.String(ref + ": " + title) }
-
-// pullRequestBody is the body of the issue's pull request; body is the issue's text, untrusted.
-func pullRequestBody(ref, body string) string {
-	return redact.String(strings.TrimSpace("Resolves " + ref + " in Cinderline.\n\n" + body))
-}
-
 // gitAuthor is agent's git identity: the name the app gives its token,
 // "<team> / <agent>" cut to 100 characters.
 func gitAuthor(team cinderline.Team, agent string) string {
@@ -823,10 +562,4 @@ func leadAuthor(team cinderline.Team) string {
 		return ""
 	}
 	return gitAuthor(team, team.Agents[0].Name)
-}
-
-// lastRunes is the end of s, at most n characters.
-func lastRunes(s string, n int) string {
-	r := []rune(s)
-	return string(r[max(0, len(r)-n):])
 }

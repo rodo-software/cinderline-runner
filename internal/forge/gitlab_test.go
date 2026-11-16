@@ -30,11 +30,8 @@ const mrs = "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo/merge_request
 func TestGitLabRepositoryForms(t *testing.T) {
 	for _, tt := range []struct{ repository, api string }{
 		{"https://gitlab.com/group/sub/repo.git", "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo"},
-		{"git@gitlab.com:group/sub/repo.git", "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo"},
-		{"ssh://git@gitlab.com/group/sub/repo", "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo"},
 		{"https://GitLab.com:443/group/sub/repo/", "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo"},
 		{"https://gitlab.example.com:8443/g/r", "https://gitlab.example.com:8443/api/v4/projects/g%2Fr"},
-		{"ssh://git@gitlab.example.com:2222/g/r.git", "https://gitlab.example.com/api/v4/projects/g%2Fr"},
 		{"https://git.example.com/o/r", "https://git.example.com/api/v4/projects/o%2Fr"},
 	} {
 		g, reqs := recordedGitLab(t, tt.repository, reply{200, `{"default_branch":"main"}`})
@@ -44,7 +41,7 @@ func TestGitLabRepositoryForms(t *testing.T) {
 		wantURLs(t, *reqs, "GET "+tt.api)
 	}
 
-	for _, bad := range []string{"ext::sh -c evil", "https://gitlab.com/repo", "http://gitlab.com/o/r", "https://gitlab.com/o/../r", ""} {
+	for _, bad := range []string{"ext::sh -c evil", "ssh://git@host.example/o/r", "git@host.example:o/r", "https://user:pw@host.example/o/r", "https://gitlab.com/repo", "http://gitlab.com/o/r", "https://gitlab.com/o/../r", ""} {
 		if _, err := NewGitLab(bad, testToken); err == nil {
 			t.Errorf("NewGitLab(%q) succeeded", bad)
 		}

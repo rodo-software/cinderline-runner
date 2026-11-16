@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -93,7 +94,7 @@ type Fake struct {
 	FastForwards []error
 	Removes      []error
 	Frees        []FreeReply
-	Clones       []string // dirs Exists reports, besides those on disk
+	Clones       []string // dirs List returns and Exists reports, besides those on disk
 
 	mu    sync.Mutex
 	calls []Call
@@ -110,154 +111,92 @@ func (f *Fake) record(method string, args ...any) {
 	f.calls = append(f.calls, Call{method, args})
 }
 
-func (f *Fake) Prepare(_ context.Context, branch, base string) (string, error) {
+// pop records the call and takes the next reply from q; an empty queue
+// gives the zero reply and ErrNotScripted.
+func pop[T any](f *Fake, q *[]T, method string, args ...any) (T, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("Prepare", branch, base)
-	if len(f.Prepares) == 0 {
-		return "", fmt.Errorf("%w for Prepare", ErrNotScripted)
+	f.record(method, args...)
+	var r T
+	if len(*q) == 0 {
+		return r, fmt.Errorf("%w for %s", ErrNotScripted, method)
 	}
-	r := f.Prepares[0]
-	f.Prepares = f.Prepares[1:]
-	return r.Dir, r.Err
+	r, *q = (*q)[0], (*q)[1:]
+	return r, nil
+}
+
+func (f *Fake) Prepare(_ context.Context, branch, base string) (string, error) {
+	r, err := pop(f, &f.Prepares, "Prepare", branch, base)
+	return r.Dir, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) Commit(_ context.Context, dir, author, message string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Commit", dir, author, message)
-	if len(f.Commits) == 0 {
-		return false, fmt.Errorf("%w for Commit", ErrNotScripted)
-	}
-	r := f.Commits[0]
-	f.Commits = f.Commits[1:]
-	return r.Committed, r.Err
+	r, err := pop(f, &f.Commits, "Commit", dir, author, message)
+	return r.Committed, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) MergeBase(_ context.Context, dir, base, author string) ([]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("MergeBase", dir, base, author)
-	if len(f.MergeBases) == 0 {
-		return nil, fmt.Errorf("%w for MergeBase", ErrNotScripted)
-	}
-	r := f.MergeBases[0]
-	f.MergeBases = f.MergeBases[1:]
-	return r.Conflicts, r.Err
+	r, err := pop(f, &f.MergeBases, "MergeBase", dir, base, author)
+	return r.Conflicts, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) IsAncestor(_ context.Context, dir, ancestor, descendant string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("IsAncestor", dir, ancestor, descendant)
-	if len(f.Ancestors) == 0 {
-		return false, fmt.Errorf("%w for IsAncestor", ErrNotScripted)
-	}
-	r := f.Ancestors[0]
-	f.Ancestors = f.Ancestors[1:]
-	return r.Yes, r.Err
+	r, err := pop(f, &f.Ancestors, "IsAncestor", dir, ancestor, descendant)
+	return r.Yes, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) Push(_ context.Context, dir, branch string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Push", dir, branch)
-	if len(f.Pushes) == 0 {
-		return fmt.Errorf("%w for Push", ErrNotScripted)
-	}
-	err := f.Pushes[0]
-	f.Pushes = f.Pushes[1:]
-	return err
+	r, err := pop(f, &f.Pushes, "Push", dir, branch)
+	return cmp.Or(err, r)
 }
 
 func (f *Fake) Head(_ context.Context, dir string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Head", dir)
-	if len(f.Heads) == 0 {
-		return "", fmt.Errorf("%w for Head", ErrNotScripted)
-	}
-	r := f.Heads[0]
-	f.Heads = f.Heads[1:]
-	return r.Commit, r.Err
+	r, err := pop(f, &f.Heads, "Head", dir)
+	return r.Commit, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) Clean(_ context.Context, dir string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Clean", dir)
-	if len(f.Cleans) == 0 {
-		return false, fmt.Errorf("%w for Clean", ErrNotScripted)
-	}
-	r := f.Cleans[0]
-	f.Cleans = f.Cleans[1:]
-	return r.Yes, r.Err
+	r, err := pop(f, &f.Cleans, "Clean", dir)
+	return r.Yes, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) ConflictMarkers(_ context.Context, dir string, files []string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("ConflictMarkers", dir, files)
-	if len(f.Markers) == 0 {
-		return false, fmt.Errorf("%w for ConflictMarkers", ErrNotScripted)
-	}
-	r := f.Markers[0]
-	f.Markers = f.Markers[1:]
-	return r.Yes, r.Err
+	r, err := pop(f, &f.Markers, "ConflictMarkers", dir, files)
+	return r.Yes, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) Reset(_ context.Context, dir, commit string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Reset", dir, commit)
-	if len(f.Resets) == 0 {
-		return fmt.Errorf("%w for Reset", ErrNotScripted)
-	}
-	err := f.Resets[0]
-	f.Resets = f.Resets[1:]
-	return err
+	r, err := pop(f, &f.Resets, "Reset", dir, commit)
+	return cmp.Or(err, r)
 }
 
 func (f *Fake) Log(_ context.Context, dir, base string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Log", dir, base)
-	if len(f.Logs) == 0 {
-		return "", fmt.Errorf("%w for Log", ErrNotScripted)
-	}
-	r := f.Logs[0]
-	f.Logs = f.Logs[1:]
-	return r.Log, r.Err
+	r, err := pop(f, &f.Logs, "Log", dir, base)
+	return r.Log, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) Stranded(_ context.Context) ([]Clone, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Stranded")
-	if len(f.Strandeds) == 0 {
-		return nil, fmt.Errorf("%w for Stranded", ErrNotScripted)
-	}
-	r := f.Strandeds[0]
-	f.Strandeds = f.Strandeds[1:]
-	return r.Clones, r.Err
+	r, err := pop(f, &f.Strandeds, "Stranded")
+	return r.Clones, cmp.Or(err, r.Err)
 }
 
 func (f *Fake) Behind(_ context.Context, base string) ([]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Behind", base)
-	if len(f.Behinds) == 0 {
-		return nil, fmt.Errorf("%w for Behind", ErrNotScripted)
-	}
-	r := f.Behinds[0]
-	f.Behinds = f.Behinds[1:]
-	return r.Branches, r.Err
+	r, err := pop(f, &f.Behinds, "Behind", base)
+	return r.Branches, cmp.Or(err, r.Err)
 }
 
 // FreeReply is one scripted reply to Free.
 type FreeReply struct {
 	Bytes int64
 	Err   error
+}
+
+// List returns Clones.
+func (f *Fake) List(context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("List")
+	return slices.Clone(f.Clones), nil
 }
 
 // Exists reports whether dir exists on the host: tests make their clones
@@ -271,37 +210,16 @@ func (f *Fake) Exists(_ context.Context, dir string) (bool, error) {
 }
 
 func (f *Fake) FastForward(_ context.Context, dir, branch string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("FastForward", dir, branch)
-	if len(f.FastForwards) == 0 {
-		return fmt.Errorf("%w for FastForward", ErrNotScripted)
-	}
-	r := f.FastForwards[0]
-	f.FastForwards = f.FastForwards[1:]
-	return r
+	r, err := pop(f, &f.FastForwards, "FastForward", dir, branch)
+	return cmp.Or(err, r)
 }
 
 func (f *Fake) Remove(_ context.Context, dir string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Remove", dir)
-	if len(f.Removes) == 0 {
-		return fmt.Errorf("%w for Remove", ErrNotScripted)
-	}
-	r := f.Removes[0]
-	f.Removes = f.Removes[1:]
-	return r
+	r, err := pop(f, &f.Removes, "Remove", dir)
+	return cmp.Or(err, r)
 }
 
 func (f *Fake) Free(_ context.Context) (int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.record("Free")
-	if len(f.Frees) == 0 {
-		return 0, fmt.Errorf("%w for Free", ErrNotScripted)
-	}
-	r := f.Frees[0]
-	f.Frees = f.Frees[1:]
-	return r.Bytes, r.Err
+	r, err := pop(f, &f.Frees, "Free")
+	return r.Bytes, cmp.Or(err, r.Err)
 }

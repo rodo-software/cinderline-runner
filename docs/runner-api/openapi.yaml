@@ -33,12 +33,19 @@ info:
 
     **Unavailable.** Any request may get `429` or `503` with `Retry-After`. A
     `next` request that gets no answer is tried again after 2 and 8 seconds
-    with the same `id`; then the runner pushes the work, keeps the session as
+    with the same `id`. A first request (`state` null) that still gets no
+    answer is dropped: the run did not start and the issue stays in To do.
+    After any later one the runner pushes the work, keeps the session as
     `paused`, ends the run and sends the request again before each poll until
     it is delivered, ignoring its answer.
 
     **Issue references** such as `CSR-9`, or `CSR-9.2` for a sub-issue,
-    identify issues.
+    identify issues. A reference with the project's key from before a rename
+    names the same issue.
+
+    **Caps.** Every `maxItems` and `maxLength` below is enforced: a request
+    over one gets `422`, so the runner clips to them. Lengths count
+    characters.
 servers:
   - url: '{instance}/api/runner/v2'
     variables:
@@ -94,8 +101,12 @@ paths:
         `ref` is a top-level issue. The runner sends this before the first
         step and after every step, and does the step it gets, until it gets
         `done`. The first request (`state` null) claims the issue: To do to
-        In progress. The app keeps its answer for ten minutes and gives it
-        again for the same `id` without doing anything twice.
+        In progress. The app keeps the answer to the run's latest request for
+        ten minutes and gives it again for the same `id` without doing
+        anything twice; a request with another `id` replaces it. A request's
+        writes happen all together or not at all. A `state` that is not of
+        this issue's run is refused with `422` on `state`, before anything is
+        written.
       parameters:
         - $ref: '#/components/parameters/RunnerVersion'
         - $ref: '#/components/parameters/Ref'
@@ -272,6 +283,7 @@ components:
           description: The top-level issues the runner works on now, and those whose last `next` request still waits in its outbox. A reference the app does not know comes back in `stop`.
           items:
             type: string
+            maxLength: 50
         idle:
           type: boolean
           description: The runner can start a run now.
@@ -281,6 +293,7 @@ components:
           description: The issues the runner keeps a session or clone of. Sent when it is about to tidy up, at start and while idle; the answer then has `held`.
           items:
             type: string
+            maxLength: 50
         review:
           type: array
           maxItems: 200
@@ -295,27 +308,33 @@ components:
       properties:
         runner_version:
           type: string
+          maxLength: 100
         clients:
           type: array
+          maxItems: 50
           items:
             type: object
             required: [name, version, state]
             properties:
               name:
                 type: string
+                maxLength: 100
                 description: The agent CLI, as a team's agent names its `client`, e.g. `claude`, `codex`, `opencode`.
               version:
                 type: [string, 'null']
+                maxLength: 100
               state:
                 type: string
                 enum: [ready, missing_binary, missing_credential, invalid_credential]
         environments:
           type: array
+          maxItems: 10
           items:
             type: string
             enum: [default, docker, existing]
         errors:
           type: array
+          maxItems: 50
           description: The errors the runner holds now.
           items:
             type: object
@@ -327,8 +346,10 @@ components:
                 description: '`repository_mismatch`: the project''s `repository_url` is not the runner''s repository, so it does no work. `not_started`: a run could not start, with its `issue`.'
               issue:
                 type: string
+                maxLength: 50
               message:
                 type: string
+                maxLength: 2000
         refused_connections:
           type: integer
           minimum: 0
@@ -340,15 +361,18 @@ components:
       properties:
         ref:
           type: string
+          maxLength: 50
         pull_request:
           type: string
           enum: [open, merged, closed, failed, none]
           description: Where the issue's pull request stands; `failed` is a merge the forge refused, `none` no pull request.
         conflicts:
           type: array
+          maxItems: 1000
           description: The files of a merge of the base that conflicted.
           items:
             type: string
+            maxLength: 1000
 
     PollResponse:
       type: object
@@ -372,7 +396,8 @@ components:
             do issues, in board order, that waits for nothing, has an active
             team, and whose team's agent clients are all `ready` in the
             report. Nothing is claimed: the run's first `next` request does
-            that. Null: no work.
+            that. The first issue passed over because a client is not ready
+            gets a progress line saying which. Null: no work.
         stop:
           type: array
           description: The `running` issues whose turn must end now, with the outcome `stopped`. The issue is unknown, archived, Cancelled or in Backlog, or Blocked; only a Blocked issue whose latest comment is an agent's is left alone for one poll interval, because an agent that asked a person a question is ending its turn itself.
@@ -515,7 +540,7 @@ components:
         state:
           type: [string, 'null']
           maxLength: 65536
-          description: The `state` of the answer before, unchanged; null on the run's first request.
+          description: The `state` of the answer before, unchanged; null on the run's first request. The app keeps every state it makes within this length. One that is not of this issue's run is refused with `422`.
         last:
           oneOf:
             - $ref: '#/components/schemas/LastStep'
@@ -531,8 +556,10 @@ components:
             properties:
               issue:
                 type: string
+                maxLength: 30
               agent:
                 type: string
+                maxLength: 100
               origin:
                 type: string
                 enum: [paused, kept, turn]
@@ -543,36 +570,46 @@ components:
           properties:
             branch:
               type: string
+              maxLength: 255
             base:
               type: string
+              maxLength: 255
             extra_repositories:
               type: array
+              maxItems: 50
               items:
                 type: object
                 required: [path, url]
                 properties:
                   path:
                     type: string
+                    maxLength: 255
                   url:
                     type: string
+                    maxLength: 2000
             linked_projects:
               type: array
+              maxItems: 50
               items:
                 type: object
                 required: [key, paths]
                 properties:
                   key:
                     type: string
+                    maxLength: 30
                   paths:
                     type: array
+                    maxItems: 50
                     items:
                       type: string
+                      maxLength: 255
             notes:
               type: array
               maxItems: 20
               description: Lines for the person watching, about what the runner could not prepare. The app writes those of the first request as progress lines.
               items:
                 type: string
+                maxLength: 1000
 
     LastStep:
       type: object
@@ -584,7 +621,7 @@ components:
         | --- | --- | --- |
         | `run` | `finished`, `failed`, `turn_limit`, `time_limit`, `stopped` (the poll's `stop`), `idle` (the idle limit), `not_started` | `report`, `tail`, `error`, `usage` |
         | `resolve` | as `run`, and `not_verified` (the runner undid a merge it could not verify) | as `run` |
-        | `check` | `passed`, `failed`, `not_started` | `tail`, `error`, `report` (the checked turn's) |
+        | `check` | `passed`, `failed`, `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's) |
         | `merge` | `conflict` | `conflicts`, `commits` |
         | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request`, `conflicts`, `merge`, `commit`, `error` |
         | `stop` | `pushed`, `not_pushed` | `commit`, `error` |
@@ -592,15 +629,26 @@ components:
         A `stop` the app did not ask for is the runner's own failure (an error
         or panic in its code, or a step kind it does not know): it pushes what
         it can and reports `stop` with `error`.
+
+        A `check` that was `stopped` ends as a `stopped` turn: `stop`, then
+        `done` with session `paused`, and no fix turn.
+
+        A `publish` during which the poll stopped the issue still pushes and
+        opens the pull request but does not ask the forge to merge it: it
+        reports `published` with `merge` null, also when the step said
+        `merge: true`. The app then reports the pull request as open and not
+        merged because of the stop, and leaves the merge status as it is.
       properties:
         step:
           type: string
           enum: [run, resolve, check, merge, publish, stop]
         issue:
           type: string
+          maxLength: 30
           description: The step's issue. Only `run` and `check` can be on a sub-issue.
         agent:
           type: [string, 'null']
+          maxLength: 100
         outcome:
           type: string
           enum: [finished, failed, turn_limit, time_limit, stopped, idle, not_started, not_verified, passed, conflict, published, unchanged, pushed, not_pushed]
@@ -621,42 +669,62 @@ components:
             - type: 'null'
         conflicts:
           type: [array, 'null']
+          maxItems: 1000
           items:
             type: string
+            maxLength: 1000
         commits:
           type: [string, 'null']
+          maxLength: 65000
           description: The branch's commits that the base lacks, one per line, for the agent that resolves the conflict.
         pull_request:
           type: [string, 'null']
+          maxLength: 2000
           description: The pull request's URL.
         merge:
           type: [string, 'null']
           enum: [merged, closed, pending, failed, null]
-          description: How the merge the step asked for ended; null when not asked.
+          description: How the merge the step asked for ended; null when not asked, or when the poll stopped the issue during the publish.
         commit:
           type: [string, 'null']
+          maxLength: 100
           description: The last commit of the work.
 
     Usage:
       type: object
+      description: Recorded on `issue`, the run's issue or one of its sub-issues (otherwise `422`). An `agent` no longer on the team (renamed or removed during the run) is recorded under this name; it never refuses the step.
       required: [issue, agent, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens]
       properties:
         issue:
           type: string
+          maxLength: 30
         agent:
           type: string
+          maxLength: 100
         model:
           type: [string, 'null']
+          maxLength: 100
         input_tokens:
           type: integer
+          minimum: 0
         output_tokens:
           type: integer
+          minimum: 0
         cache_read_tokens:
           type: integer
+          minimum: 0
         cache_write_tokens:
           type: integer
+          minimum: 0
         cost_usd:
           type: [number, 'null']
+          minimum: 0
+        kind:
+          type: [string, 'null']
+          maxLength: 50
+        verdict:
+          type: [string, 'null']
+          enum: [passed, failed, null]
 
     NextResponse:
       type: object

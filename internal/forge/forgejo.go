@@ -24,9 +24,8 @@ type Forgejo struct {
 }
 
 // NewForgejo returns the Forge of repository, given as https://host/o/r,
-// ssh://git@host[:port]/o/r or git@host:o/r, with or without .git. Its API
-// is https://<host>/api/v1 on any host. An https port is kept for the API,
-// an ssh one dropped.
+// with or without .git. Its API is https://<host>/api/v1 on any host, with
+// the repository's port.
 func NewForgejo(repository, token string) (*Forgejo, error) {
 	host, path, err := parseRepository(repository)
 	if err != nil {
@@ -83,7 +82,7 @@ func (f *Forgejo) OpenPullRequest(ctx context.Context, in PullRequestInput) (Pul
 }
 
 func (f *Forgejo) FindPullRequest(ctx context.Context, branch string) (PullRequest, bool, error) {
-	pr, err := f.find(ctx, "?state=open&limit="+strconv.Itoa(forgejoPageSize), branch)
+	pr, err := f.find(ctx, "?state=open&sort=recentupdate&limit="+strconv.Itoa(forgejoPageSize), branch)
 	return PullRequest{Number: pr.Number, URL: pr.HTMLURL}, pr.Head.Label != "", err
 }
 
@@ -131,14 +130,26 @@ func (f *Forgejo) MergeState(ctx context.Context, branch string) (MergeState, er
 	return MergePending, nil
 }
 
-// forgejoPageSize is the page size used when listing pull requests.
-const forgejoPageSize = 50
+// forgejoPageSize is the page size used when listing pull requests, and
+// forgejoPages the most pages find reads.
+const (
+	forgejoPageSize = 50
+	forgejoPages    = 3
+)
 
 // find is the first pull request of branch in the list query names,
 // matched by head.label, which survives branch deletion (decision
 // 2026-11-07-publish-resilience), or the zero pull request (empty Head.Label).
+// Forgejo's and Gitea's GET pulls/{base}/{head} returns any one of the pull
+// requests of a branch, not the newest, and only Forgejo filters the list
+// by head, so the list it is.
+//
+// shortcut: the forgejoPages pages of the most recently updated pull
+// requests only, as this runs per Review issue every review_after; a pull
+// request of the branch updated before 150 others is not found. Use the
+// list's head filter once Gitea has one.
 func (f *Forgejo) find(ctx context.Context, query, branch string) (forgejoPull, error) {
-	for page := 1; ; page++ {
+	for page := 1; page <= forgejoPages; page++ {
 		var u string
 		if page == 1 {
 			u = f.repo + "/pulls" + query
@@ -155,9 +166,10 @@ func (f *Forgejo) find(ctx context.Context, query, branch string) (forgejoPull, 
 			}
 		}
 		if len(prs) < forgejoPageSize {
-			return forgejoPull{}, nil
+			break
 		}
 	}
+	return forgejoPull{}, nil
 }
 
 // do sends one API request with in as its JSON body, when not nil, and

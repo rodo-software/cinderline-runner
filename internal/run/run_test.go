@@ -443,3 +443,122 @@ func TestReportsBlocked(t *testing.T) {
 		}
 	}
 }
+
+// A first request the app does not answer is tried three times and never
+// queued: the run did not start, a resumed kept session stays kept, and
+// nothing is pushed.
+func TestAFirstNextTheAppDoesNotAnswerIsNotQueued(t *testing.T) {
+	f := newFixture(t)
+	f.ws.FastForwards = []error{nil}
+	f.p.saveNote("CSR-1", Note{Dir: t.TempDir(), Session: "s0", Client: "claude", Origin: "kept"})
+	app := &fakeApp{onNext: func(int, string, cinderline.NextRequest) reply { return reply{503, `{"message":"deploying"}`} }}
+	c := app.client(t)
+	c.Outbox = filepath.Join(t.TempDir(), "outbox.json")
+	started, err := f.p.run(context.Background(), c, proj, soloJob())
+	if started || err == nil {
+		t.Errorf("run = %v, %v; want not started with the error", started, err)
+	}
+	if n := len(app.requests()); n != 3 {
+		t.Errorf("%d requests, want 3 tries", n)
+	}
+	if q := c.Queued(); len(q) != 0 {
+		t.Errorf("queued %v", q)
+	}
+	if slices.Contains(methods(f.ws), "Push") {
+		t.Errorf("workspace calls %v; want no push", methods(f.ws))
+	}
+	if n, ok := f.p.readNote("CSR-1"); !ok || n.Session != "s0" || n.Origin != "kept" {
+		t.Errorf("note = %+v, %v; want the kept session back", n, ok)
+	}
+}
+
+// blockingEnv runs every container until its context ends.
+type blockingEnv struct {
+	environment.Fake
+	started chan struct{}
+}
+
+func (b *blockingEnv) Run(ctx context.Context, _ environment.Spec) (string, error) {
+	close(b.started)
+	<-ctx.Done()
+	return "", errors.New("killed")
+}
+
+// The poll's stop cancels the check in flight; the step reports stopped.
+func TestAStopEndsTheCheckAsStopped(t *testing.T) {
+	f := newFixture(t)
+	env := &blockingEnv{started: make(chan struct{})}
+	f.p.Env = env
+	app := &fakeApp{onNext: stepsOf(`{"kind":"check","issue":{"ref":"CSR-1","title":"Fix it"}}`)}
+	c := app.client(t)
+	var wg sync.WaitGroup
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob()) })
+	<-env.started
+	f.p.stopTurn("CSR-1")
+	wg.Wait()
+	if lasts := app.lasts(); len(lasts) != 1 || lasts[0].Step != "check" || lasts[0].Outcome != "stopped" {
+		t.Errorf("lasts = %+v", lasts)
+	}
+}
+
+// stoppingForge stops the run while it opens the pull request.
+type stoppingForge struct {
+	*forge.Fake
+	stop func()
+}
+
+func (s stoppingForge) OpenPullRequest(ctx context.Context, in forge.PullRequestInput) (forge.PullRequest, error) {
+	s.stop()
+	return s.Fake.OpenPullRequest(ctx, in)
+}
+
+// A stop during the publish lets the push and the pull request finish, but
+// the merge is not asked for and merge stays null.
+func TestAStopDuringThePublishSkipsTheMerge(t *testing.T) {
+	f := newFixture(t)
+	f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+	f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+	f.fg.Merges = []error{nil}
+	f.fg.MergeStates = []forge.MergeStateReply{{State: forge.MergeMerged}}
+	f.p.Forge = func(string) (forge.Forge, error) {
+		return stoppingForge{f.fg, func() { f.p.stopTurn("CSR-1") }}, nil
+	}
+	app := &fakeApp{onNext: stepsOf(`{"kind":"publish","merge":true}`)}
+	if _, err := f.run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	want := cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Commit: ptr("abc123")}
+	if lasts := app.lasts(); len(lasts) != 1 || !sameLast(lasts[0], want) {
+		t.Errorf("lasts = %+v", lasts)
+	}
+	for _, c := range f.fg.Calls() {
+		if c.Method == "RequestMerge" {
+			t.Error("the merge was asked for after the stop")
+		}
+	}
+}
+
+// Before a fresh clone replaces the issue's clone, what it holds is
+// committed and pushed; when the push fails the clone stays and the run
+// does not start.
+func TestAFreshCloneKeepsTheWorkOfTheOldOne(t *testing.T) {
+	for _, pushErr := range []error{nil, errors.New("denied")} {
+		f := newFixture(t)
+		f.ws.Clones = []string{"/runs/CSR-1"}
+		f.ws.Strandeds = []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-1", Branch: "cinderline/CSR-1"}}}}
+		f.ws.Pushes = append([]error{pushErr}, f.ws.Pushes...)
+		app := &fakeApp{onNext: stepsOf(`{"kind":"done","session":"paused"}`)}
+		started, err := f.run(t, app)
+		calls := f.ws.Calls()
+		if len(calls) < 4 || calls[1].Method != "Commit" || calls[1].Args[0] != "/runs/CSR-1" || calls[1].Args[2] != "CSR-1: Fix it" || calls[3].Method != "Push" {
+			t.Fatalf("push error %v: workspace calls %v; want Exists, Commit, Stranded, Push first", pushErr, methods(f.ws))
+		}
+		prepared := slices.Contains(methods(f.ws), "Prepare")
+		if pushErr == nil && (!started || err != nil || !prepared) {
+			t.Errorf("run = %v, %v, prepared %v; want a fresh clone after the push", started, err, prepared)
+		}
+		if pushErr != nil && (started || err == nil || !strings.Contains(err.Error(), "kept") || prepared) {
+			t.Errorf("run = %v, %v, prepared %v; want the clone kept and no run", started, err, prepared)
+		}
+	}
+}

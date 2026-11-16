@@ -23,6 +23,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // Options configure Run.
@@ -187,7 +188,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		c.Outbox = run.OutboxFile(o.Paths.State, p)
 		var proj *run.Project
 		env := &environment.Docker{
-			Project: id, Log: log,
+			Project: id, Log: log, Exec: workspace.RunCommand,
 			Allow:     environment.ProjectHosts(p.URL, p.AllowHosts),
 			OnRefused: func(string) { proj.AddRefused() },
 		}

@@ -62,7 +62,7 @@ type Mount struct {
 // Tools fills and mounts the tools volume.
 type Tools struct {
 	State string         // the host state folder: the lock and the downloads
-	Exec  workspace.Exec // nil means workspace.RunCommand
+	Exec  workspace.Exec // runs docker
 	HTTP  *http.Client   // nil means http.DefaultClient
 	// OnFill is called before an incomplete volume is filled, a slow
 	// first-time step; nil: none.
@@ -75,9 +75,6 @@ type Tools struct {
 // if it isn't complete yet, and says how to mount it.
 func (t *Tools) Mount(ctx context.Context, image string) (Mount, error) {
 	x := t.Exec
-	if x == nil {
-		x = workspace.RunCommand
-	}
 	// The engine's arch, not the runner's: an amd64 runner can drive an
 	// arm64 engine.
 	arch, err := x(ctx, nil, "docker", "version", "--format", "{{.Server.Arch}}")

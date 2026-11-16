@@ -114,11 +114,8 @@ func loginExists(ctx context.Context, exec workspace.Exec, project, name string)
 		"-v", client.StateVolume(project, name) + ":/state",
 		"--entrypoint", "test", workspace.GitImage, "-f", p}
 	_, err := exec(ctx, nil, argv...)
-	var exit interface{ ExitCode() int }
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
-		return false
-	}
-	return err == nil
+	ok, _ := workspace.ExitedZero(err)
+	return ok
 }
 
 // checkKey checks whether the key works via a free HTTP GET.

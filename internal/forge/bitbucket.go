@@ -25,8 +25,7 @@ type Bitbucket struct {
 }
 
 // NewBitbucket returns the Forge of repository, given as
-// https://bitbucket.org/w/r, ssh://git@bitbucket.org/w/r or
-// git@bitbucket.org:w/r, with or without .git; w is the workspace. Any
+// https://bitbucket.org/w/r, with or without .git; w is the workspace. Any
 // other host is refused: Bitbucket Cloud is bitbucket.org only.
 func NewBitbucket(repository, token string) (*Bitbucket, error) {
 	host, path, err := parseRepository(repository)

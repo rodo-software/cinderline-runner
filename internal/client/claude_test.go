@@ -211,8 +211,7 @@ func TestClaudeRunFresh(t *testing.T) {
 }
 
 // Run: a resumed turn keeps its session; the turn limit and a failure of the
-// container are errors with the parsed result, so Attempts continues or
-// retries (CSR-21).
+// container are errors with the parsed result (CSR-21).
 func TestClaudeRunErrors(t *testing.T) {
 	limit := `{"type":"result","subtype":"error_max_turns","is_error":true,"session_id":"s1"}`
 	boom := errors.New("exit status 1")
@@ -242,6 +241,16 @@ func TestClaudeRunErrors(t *testing.T) {
 				t.Errorf("Cmd = %q, want a resume of s1", cmd)
 			}
 		})
+	}
+}
+
+// A fresh turn whose container failed before Claude Code printed anything
+// made no session: the ID the runner picked is not reported.
+func TestClaudeRunThatNeverStartedHasNoSession(t *testing.T) {
+	env := &environment.Fake{Runs: []environment.RunReply{{Err: errors.New("no such image")}}}
+	c := &CLI{Name: "claude", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	if res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", MaxTurns: 5}); err == nil || res.SessionID != "" {
+		t.Errorf("Run = %+v, %v; want an error and no session", res, err)
 	}
 }
 

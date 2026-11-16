@@ -32,7 +32,7 @@ func recordedForgejo(t *testing.T, repository string, replies ...reply) (*Forgej
 
 const pulls = "https://git.rodo.nl/api/v1/repos/willem/cinderline/pulls"
 
-// parseRepository takes the three URL forms and ports, and
+// parseRepository takes https URLs and ports, and
 // clones over https and "parseRepository keeps an https port for the
 // clone, the push and the API" (its API side; the clone URL is
 // internal/workspace's, the repository check internal/config's).
@@ -40,8 +40,6 @@ func TestForgejoRepositoryForms(t *testing.T) {
 	for _, tt := range []struct{ repository, api string }{
 		{"https://git.rodo.nl/willem/cinderline.git", "https://git.rodo.nl/api/v1/repos/willem/cinderline"},
 		{"https://git.rodo.nl:443/willem/cinderline", "https://git.rodo.nl/api/v1/repos/willem/cinderline"},
-		{"ssh://git@git.rodo.nl:222/willem/cinderline.git", "https://git.rodo.nl/api/v1/repos/willem/cinderline"},
-		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/api/v1/repos/willem/cinderline"},
 		{"https://Git.Rodo.nl/willem/cinderline/", "https://git.rodo.nl/api/v1/repos/willem/cinderline"},
 		{"https://git.rodo.nl:3000/willem/cinderline.git", "https://git.rodo.nl:3000/api/v1/repos/willem/cinderline"},
 		{"https://gitea.com/o/r", "https://gitea.com/api/v1/repos/o/r"},
@@ -53,7 +51,7 @@ func TestForgejoRepositoryForms(t *testing.T) {
 		wantURLs(t, *reqs, "GET "+tt.api)
 	}
 
-	for _, bad := range []string{"ext::sh -c evil", "https://git.rodo.nl/repo", "https://git.rodo.nl/o/sub/r", "http://git.rodo.nl/o/r", "https://git.rodo.nl/o/..", ""} {
+	for _, bad := range []string{"ext::sh -c evil", "ssh://git@host.example/o/r", "git@host.example:o/r", "https://user:pw@host.example/o/r", "https://git.rodo.nl/repo", "https://git.rodo.nl/o/sub/r", "http://git.rodo.nl/o/r", "https://git.rodo.nl/o/..", ""} {
 		if _, err := NewForgejo(bad, testToken); err == nil {
 			t.Errorf("NewForgejo(%q) succeeded", bad)
 		}
@@ -115,7 +113,7 @@ func TestForgejoOpenPullRequestFindsEarlier(t *testing.T) {
 	if err != nil || pr != (PullRequest{Number: 2, URL: "u"}) {
 		t.Errorf("OpenPullRequest = %+v, %v", pr, err)
 	}
-	wantURLs(t, *reqs, "POST "+pulls, "GET "+pulls+"?state=open&limit=50")
+	wantURLs(t, *reqs, "POST "+pulls, "GET "+pulls+"?state=open&sort=recentupdate&limit=50")
 }
 
 // OpenPullRequest reports a refusal with the forge's answer,
@@ -152,7 +150,7 @@ func TestForgejoFindPullRequest(t *testing.T) {
 	if pr, found, err := f.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{}) || found || err != nil {
 		t.Errorf("FindPullRequest without one = %+v, %v, %v", pr, found, err)
 	}
-	wantURLs(t, (*reqs)[:1], "GET "+pulls+"?state=open&limit=50")
+	wantURLs(t, (*reqs)[:1], "GET "+pulls+"?state=open&sort=recentupdate&limit=50")
 }
 
 // RequestMerge asks Forgejo to squash-merge when the checks
@@ -291,9 +289,8 @@ func TestForgejoMergeStateAfterBranchDeletion(t *testing.T) {
 }
 
 // CSR-81 point 1: the list is walked page by page, most recently updated
-// first, until the branch's pull request is found or the list ends, so the
-// lookup does not depend on how many other pull requests were touched
-// since. A page shorter than 50 is the last one.
+// first, until the branch's pull request is found, the list ends or three
+// pages were read. A page shorter than 50 is the last one.
 func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
 	others := make([]string, 50)
 	for i := range others {
@@ -312,6 +309,7 @@ func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
 		{"on page 2", []reply{full, {200, `[{"number":7,"head":{"label":"cinderline/EMBER-1","ref":"refs/pull/7/head","sha":"x"},"merged":true,"state":"closed"}]`}}, MergeMerged, []string{page1, page2}},
 		{"on page 3", []reply{full, full, {200, `[{"number":7,"head":{"label":"cinderline/EMBER-1","ref":"cinderline/EMBER-1","sha":"x"},"merged":false,"state":"closed"}]`}}, MergeClosed, []string{page1, page2, page3}},
 		{"none, list ends with an empty page", []reply{full, {200, `[]`}}, "", []string{page1, page2}},
+		{"none in the pages it reads", []reply{full, full, full}, "", []string{page1, page2, page3}},
 		{"none, list ends with a short page", []reply{{200, `[{"number":1,"head":{"label":"other","ref":"other","sha":"o"},"state":"open"}]`}}, "", []string{page1}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -338,5 +336,5 @@ func TestForgejoFindPullRequestByLabel(t *testing.T) {
 	if pr, found, err := f.FindPullRequest(context.Background(), "cinderline/EMB-3"); pr != (PullRequest{2, "u"}) || !found || err != nil {
 		t.Errorf("FindPullRequest = %+v, %v, %v", pr, found, err)
 	}
-	wantURLs(t, *reqs, "GET "+pulls+"?state=open&limit=50", "GET "+pulls+"?state=open&limit=50&page=2")
+	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50", "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=2")
 }

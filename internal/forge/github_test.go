@@ -96,7 +96,7 @@ func wantURLs(t *testing.T, reqs []request, want ...string) {
 
 var input = PullRequestInput{Branch: "cinderline/EMB-3", Base: "main", Title: "T", Body: "B"}
 
-// parseRepository treats github.com as GitHub, in every URL
+// parseRepository treats github.com as GitHub, in every https URL
 // form and "parseRepository keeps an https port for the clone, the push and
 // the API" (its GitHub Enterprise side). Telling GitHub from other forges by
 // host is the forge choice's, not this file's.
@@ -104,11 +104,7 @@ func TestGitHubRepositoryForms(t *testing.T) {
 	for _, tt := range []struct{ repository, api string }{
 		{"https://github.com/willem/cinderline.git", "https://api.github.com/repos/willem/cinderline"},
 		{"https://GitHub.com/willem/cinderline", "https://api.github.com/repos/willem/cinderline"},
-		{"ssh://git@github.com/willem/cinderline.git", "https://api.github.com/repos/willem/cinderline"},
-		{"git@github.com:willem/cinderline.git", "https://api.github.com/repos/willem/cinderline"},
 		{"https://github.com:443/willem/cinderline/", "https://api.github.com/repos/willem/cinderline"},
-		{"git@ghe.example.com:team/app.git", "https://ghe.example.com/api/v3/repos/team/app"},
-		{"ssh://git@ghe.example.com:222/team/app.git", "https://ghe.example.com/api/v3/repos/team/app"},
 		{"https://ghe.example.com:8443/team/app.git", "https://ghe.example.com:8443/api/v3/repos/team/app"},
 	} {
 		g, reqs := recorded(t, tt.repository, reply{200, `{"default_branch":"main"}`})
@@ -118,7 +114,7 @@ func TestGitHubRepositoryForms(t *testing.T) {
 		wantURLs(t, *reqs, "GET "+tt.api)
 	}
 
-	for _, bad := range []string{"ext::sh -c evil", "https://github.com/group/sub/repo", "https://github.com/repo", "http://github.com/o/r", ""} {
+	for _, bad := range []string{"ext::sh -c evil", "ssh://git@host.example/o/r", "git@host.example:o/r", "https://user:pw@host.example/o/r", "https://github.com/group/sub/repo", "https://github.com/repo", "http://github.com/o/r", ""} {
 		if _, err := NewGitHub(bad, testToken); err == nil {
 			t.Errorf("NewGitHub(%q) succeeded", bad)
 		}
@@ -248,7 +244,7 @@ func TestGitHubRequestMerge(t *testing.T) {
 // GitHub Enterprise opens the pull request under /api/v3 and
 // auto-merges over /api/graphql.
 func TestGitHubEnterprise(t *testing.T) {
-	g, reqs := recorded(t, "git@ghe.example.com:team/app.git",
+	g, reqs := recorded(t, "https://ghe.example.com/team/app.git",
 		reply{201, `{"number":7,"html_url":"u","node_id":"PR_1"}`},
 		reply{200, `{"number":7,"node_id":"PR_1"}`},
 		reply{200, `{"data":{"enablePullRequestAutoMerge":null}}`})

@@ -46,6 +46,9 @@ type Workspace interface {
 	// that base has moved past: not merged into base and without base's
 	// head. The review timer makes a clone only for those.
 	Behind(ctx context.Context, base string) ([]string, error)
+	// List returns the dir of every issue's clone, with or without a note
+	// or unpushed commits.
+	List(ctx context.Context) ([]string, error)
 	// Exists reports whether dir is still a clone.
 	Exists(ctx context.Context, dir string) (bool, error)
 	// FastForward brings a clean clone up to the remote's branch; it fails

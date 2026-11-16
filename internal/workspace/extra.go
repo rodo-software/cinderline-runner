@@ -60,12 +60,8 @@ const fetchExtraScript = `d=$PWD/$1
 // FetchExtras brings the project's volume of path (ExtraPath or LinkedPath)
 // up to repos, each in its own throwaway helper container that gets only
 // that repository's token. It returns the error of each repository that
-// failed, by name; a failure to prepare the volume fails them all. A nil x
-// means RunCommand.
+// failed, by name; a failure to prepare the volume fails them all.
 func FetchExtras(ctx context.Context, x Exec, project, path string, repos []Extra) map[string]error {
-	if x == nil {
-		x = RunCommand
-	}
 	fail := func(err error) map[string]error {
 		m := map[string]error{}
 		for _, r := range repos {
@@ -97,14 +93,11 @@ func FetchExtras(ctx context.Context, x Exec, project, path string, repos []Extr
 }
 
 // LsRemote checks that token can read ref (empty: the default branch) of the
-// repository at url, as a branch or a tag. A nil x means RunCommand.
+// repository at url, as a branch or a tag.
 func LsRemote(ctx context.Context, x Exec, project, url, ref, token string) error {
 	refs := []string{"HEAD"}
 	if ref != "" {
 		refs = []string{"refs/heads/" + ref, "refs/tags/" + ref}
-	}
-	if x == nil {
-		x = RunCommand
 	}
 	return withToken(ctx, x, Labels(project, ""), nil, token,
 		`exec git ls-remote --quiet --exit-code "$@"`, append([]string{url}, refs...)...)

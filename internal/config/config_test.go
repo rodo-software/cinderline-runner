@@ -28,7 +28,7 @@ func writeFile(t *testing.T, body string) string {
 func twoProjects() *Config {
 	return &Config{Projects: []Project{
 		{URL: "https://a.example.com", Key: "WEB", Workspace: "default", Repository: "https://git.example.com/acme/web.git"},
-		{URL: "https://b.example.com", Key: "WEB", Workspace: "acme", Repository: "ssh://git@git.example.com/acme/api.git"},
+		{URL: "https://b.example.com", Key: "WEB", Workspace: "acme", Repository: "https://git.example.com/acme/api.git"},
 	}}
 }
 
@@ -125,6 +125,8 @@ func TestValidate(t *testing.T) {
 		{"key with space", []Project{ok, with(func(p *Project) { p.Key = "W EB" })}, "project 2 (W EB): key"},
 		{"empty repository", []Project{with(func(p *Project) { p.Repository = "" })}, "project 1 (WEB): repository"},
 		{"relative repository", []Project{with(func(p *Project) { p.Repository = "acme/web.git" })}, "project 1 (WEB): repository"},
+		{"ssh repository", []Project{with(func(p *Project) { p.Repository = "git@g.example.com:acme/web.git" })}, "project 1 (WEB): repository"},
+		{"repository with a password", []Project{with(func(p *Project) { p.Repository = "https://u:tok@g.example.com/acme/web.git" })}, "project 1 (WEB): repository \"https://g.example.com/acme/web.git\" must"},
 		{"duplicate", []Project{ok, ok}, "project 2 (WEB): "},
 		{"no workspace", []Project{with(func(p *Project) { p.Workspace = "" })}, "project 1 (WEB): workspace"},
 		// CSR-63, Willem's decision (option C): extra allowlist entries come from local config only, as exact host:port.
@@ -270,14 +272,15 @@ func TestSameRepository(t *testing.T) {
 		same bool
 	}{
 		{"https://h.example.com/o/r", "https://h.example.com/o/r.git", true},
-		{"https://h.example.com/o/r", "ssh://git@H.example.com/O/R.git/", true},
-		{"https://u:p@h.example.com/o/r/", "http://h.example.com/o/r", true},
+		{"https://h.example.com/o/r", "https://H.example.com/O/R.git/", true},
+		{"https://h.example.com:443/o/r", "https://h.example.com/o/r/", true},
 		{"https://h.example.com/o/r", "https://h.example.com/o/r2", false},
 		{"https://h.example.com/o/r", "https://g.example.com/o/r", false},
-		// An scp-form URL is the same repository as its https form.
-		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/Willem/cinderline", true},
-		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/willem/cinderline.git", true},
-		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/willem/other", false},
+		// Git signs in over https only, so no other form is the configured repository.
+		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/willem/cinderline", false},
+		{"ssh://git@git.rodo.nl/willem/cinderline.git", "https://git.rodo.nl/willem/cinderline", false},
+		{"http://git.rodo.nl/willem/cinderline", "https://git.rodo.nl/willem/cinderline", false},
+		{"https://u:p@git.rodo.nl/willem/cinderline", "https://git.rodo.nl/willem/cinderline", false},
 		// A project without a repository, or one that does not parse, is never the configured one.
 		{"", "https://h.example.com/o/r", false},
 		{"https://h.example.com/o/r", "::", false},
@@ -338,8 +341,10 @@ func TestExtraRepositoryValidate(t *testing.T) {
 		ok       bool
 	}{
 		{"https://git.example.com/o/lib.git", "", true},
-		{"ssh://git@git.example.com:2222/o/lib", "release/1.2", true},
-		{"git@git.example.com:o/lib", "v1.0.0", true},
+		{"https://git.example.com:8443/o/lib", "release/1.2", true},
+		{"https://git.example.com/o/lib/", "v1.0.0", true},
+		{"ssh://git@git.example.com:2222/o/lib", "", false},
+		{"git@git.example.com:o/lib", "", false},
 		{"https://user:pw@git.example.com/o/lib", "", false},
 		{"https://tok@git.example.com/o/lib", "", false},
 		{"ssh://root@git.example.com/o/lib", "", false},
@@ -361,7 +366,7 @@ func TestExtraRepositoryValidate(t *testing.T) {
 			t.Errorf("%q %q: err = %v, want ok %v", tt.url, tt.ref, err, tt.ok)
 		}
 	}
-	if n := (ExtraRepository{URL: "git@h:o/lib.git"}).Name(); n != "lib" {
+	if n := (ExtraRepository{URL: "https://h/o/lib.git"}).Name(); n != "lib" {
 		t.Errorf("Name = %q", n)
 	}
 }

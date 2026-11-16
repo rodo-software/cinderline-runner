@@ -217,8 +217,7 @@ func TestGeminiRunFresh(t *testing.T) {
 	}
 }
 
-// Run: the turn limit is an error with HitTurnLimit and the session set, so
-// Attempts continues the session.
+// Run: the turn limit is an error with HitTurnLimit and the session set.
 func TestGeminiRunTurnLimit(t *testing.T) {
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: geminiTurnLimitOutput, Err: errors.New("exit status 53")}}}
 	c := &CLI{Name: "gemini", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}

@@ -11,10 +11,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rodo-software/cinderline-runner/internal/redact"
 )
@@ -206,5 +209,88 @@ func TestOutbox(t *testing.T) {
 	}
 	if strings.Join(ids, "") != "abccd" {
 		t.Errorf("sent %v", ids)
+	}
+}
+
+// A request the app answers with a 5xx every time is dropped after
+// maxServerErrors replays, its count kept across a restart; the ones after
+// it are then sent.
+func TestAQueuedRequestTheAppFailsOnIsDroppedInTheEnd(t *testing.T) {
+	s := &server{status: append(slices.Repeat([]int{500}, maxServerErrors), 200), body: `{}`}
+	c := s.client(t)
+	c.Outbox = filepath.Join(t.TempDir(), "outbox.json")
+	c.Queue("CSR-a", NextRequest{ID: "a"})
+	c.Queue("CSR-b", NextRequest{ID: "b"})
+	for range maxServerErrors - 1 {
+		c.Replay(context.Background())
+	}
+	again := New("", "", "")
+	again.HTTP, again.Log, again.base, again.Outbox = c.HTTP, c.Log, c.base, c.Outbox
+	if again.load(); len(again.queued) != 2 || again.queued[0].ServerErrors != maxServerErrors-1 {
+		t.Fatalf("outbox after %d failed replays = %+v", maxServerErrors-1, again.queued)
+	}
+	again.Replay(context.Background())
+	if q := again.Queued(); len(q) != 0 || len(s.bodies) != maxServerErrors+1 {
+		t.Errorf("queued %v after %d requests; want a dropped and b delivered", q, len(s.bodies))
+	}
+}
+
+// No answer at all never drops a request.
+func TestAQueuedRequestWaitsOutAnOutage(t *testing.T) {
+	c := New("http://127.0.0.1:1", "t", "1")
+	c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	c.Queue("CSR-a", NextRequest{ID: "a"})
+	for range maxServerErrors + 2 {
+		c.Replay(context.Background())
+	}
+	if len(c.queued) != 1 || c.queued[0].ServerErrors != 0 {
+		t.Errorf("outbox = %+v", c.queued)
+	}
+}
+
+// Texts and lists are cut to the app's limits, in characters.
+func TestRequestsFitTheAppsLimits(t *testing.T) {
+	s := &server{status: []int{200}, body: `{"state":"x","step":{"kind":"done"}}`}
+	c := s.client(t)
+	refs := make([]string, 250)
+	for i := range refs {
+		refs[i] = "CSR-" + strconv.Itoa(i)
+	}
+	long := strings.Repeat("é", 3000)
+	conflicts := slices.Repeat([]string{long}, 1200)
+	if _, err := c.Poll(context.Background(), PollRequest{
+		Report:  Report{Errors: []ReportError{{Kind: KindNotStarted, Message: long}}},
+		Running: append([]string{strings.Repeat("R", 60)}, refs...), Held: refs,
+		Review: []ReviewFact{{Ref: "CSR-1", PullRequest: "open", Conflicts: conflicts}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var poll PollRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &poll)
+	if len(poll.Running) != maxRunning || poll.Running[0] != "CSR-0" || len(poll.Held) != maxListed || poll.Held[0] != "CSR-0" ||
+		utf8.RuneCountInString(poll.Report.Errors[0].Message) != maxErrorMessage ||
+		len(poll.Review[0].Conflicts) != maxConflicts || utf8.RuneCountInString(poll.Review[0].Conflicts[0]) != maxText {
+		t.Errorf("poll sent running %d, held %d, message %d, conflicts %d", len(poll.Running), len(poll.Held), utf8.RuneCountInString(poll.Report.Errors[0].Message), len(poll.Review[0].Conflicts))
+	}
+
+	tail, report := strings.Repeat("x", 5000)+"END", strings.Repeat("r", 70000)
+	errText := strings.Repeat("e", 20000)
+	if _, err := c.Next(context.Background(), "CSR-1", NextRequest{
+		ID:        "id",
+		Last:      &LastStep{Step: "run", Issue: strings.Repeat("I", 40), Tail: &tail, Report: &report, Error: &errText, Commits: &report, Conflicts: conflicts},
+		Workspace: RunWorkspace{Notes: slices.Repeat([]string{long}, 25)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var next NextRequest
+	_ = json.Unmarshal([]byte(s.bodies[1]), &next)
+	l := next.Last
+	if len(*l.Tail) != maxTail || !strings.HasSuffix(*l.Tail, "END") || len(*l.Report) != maxLongText || len(*l.Commits) != maxLongText ||
+		len(*l.Error) != maxStepError || len(l.Conflicts) != maxConflicts || len(next.Workspace.Notes) != maxNotes ||
+		utf8.RuneCountInString(next.Workspace.Notes[0]) != maxText || len(l.Issue) != maxIssue {
+		t.Errorf("next sent tail %d, report %d, error %d, conflicts %d, notes %d", len(*l.Tail), len(*l.Report), len(*l.Error), len(l.Conflicts), len(next.Workspace.Notes))
+	}
+	if len(tail) != 5003 || len(conflicts[0]) != 6000 {
+		t.Error("the caller's texts were changed")
 	}
 }

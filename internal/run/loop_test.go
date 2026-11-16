@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -65,6 +66,7 @@ func TestThePollRequest(t *testing.T) {
 	f.p.AddRefused()
 	f.p.saveNote("CSR-9", Note{Dir: "/runs/CSR-9", Session: "s", Client: "claude", Origin: "kept"})
 	f.ws.Strandeds = []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"}}}}
+	f.ws.Clones = []string{"/runs/CSR-8"}
 	app := &fakeApp{}
 	polls := runLoop(t, f, app, nil, nil, stopAt(2, answer(t, proj, `"held":[{"ref":"CSR-9","session":"keep"},{"ref":"CSR-8","session":"keep"}],"review":[]`)))
 	first := polls[0]
@@ -72,10 +74,11 @@ func TestThePollRequest(t *testing.T) {
 	if r.RunnerVersion != "0.0.0-test" || len(r.Clients) != 1 || !slices.Equal(r.Environments, Environments) || r.Errors == nil || len(r.Errors) != 0 || r.RefusedConnections != 1 {
 		t.Errorf("report = %+v", r)
 	}
-	if first.Running == nil || len(first.Running) != 0 || !first.Idle {
-		t.Errorf("running %v, idle %v", first.Running, first.Idle)
+	// Not idle while it asks for the review list: the pass comes first.
+	if first.Running == nil || len(first.Running) != 0 || first.Idle || !polls[1].Idle {
+		t.Errorf("running %v, idle %v then %v", first.Running, first.Idle, polls[1].Idle)
 	}
-	if !slices.Equal(first.Held, []string{"CSR-9", "CSR-8"}) || first.Review == nil || len(first.Review) != 0 {
+	if !slices.Equal(first.Held, []string{"CSR-8", "CSR-9"}) || first.Review == nil || len(first.Review) != 0 {
 		t.Errorf("held %v, review %v; want both, review empty", first.Held, first.Review)
 	}
 	if second := polls[1]; second.Held != nil || second.Review != nil {
@@ -92,10 +95,11 @@ func TestAJobRunsAndAStopEndsItsTurn(t *testing.T) {
 	f := newFixture(t)
 	f.p.Clients["claude"] = &blocking{started: make(chan struct{})}
 	app := &fakeApp{onNext: stepsOf(runNew, `{"kind":"stop"}`, `{"kind":"done","session":"paused"}`)}
-	running := 0
+	running, offered := 0, -1
 	polls := runLoop(t, f, app, nil, nil, func(n int, req cinderline.PollRequest, stop func()) reply {
 		switch {
-		case n == 0:
+		case offered < 0 && req.Idle:
+			offered = n
 			return answer(t, proj, jobJSON)
 		case slices.Contains(req.Running, "CSR-1"):
 			running++
@@ -105,8 +109,8 @@ func TestAJobRunsAndAStopEndsItsTurn(t *testing.T) {
 		}
 		return answer(t, proj, "")
 	})
-	if polls[1].Idle || !slices.Equal(polls[1].Running, []string{"CSR-1"}) {
-		t.Errorf("poll after the job: running %v, idle %v", polls[1].Running, polls[1].Idle)
+	if after := polls[offered+1]; after.Idle || !slices.Equal(after.Running, []string{"CSR-1"}) {
+		t.Errorf("poll after the job: running %v, idle %v", after.Running, after.Idle)
 	}
 	lasts := app.lasts()
 	if len(lasts) != 2 || lasts[0].Outcome != "stopped" || lasts[1].Step != "stop" {
@@ -240,5 +244,101 @@ func TestTheOutboxIsReplayedBeforeEachPoll(t *testing.T) {
 	}
 	if reqs := app.requests(); len(reqs) != 2 || reqs[1].ID != "id-5" {
 		t.Errorf("next requests %+v", reqs)
+	}
+}
+
+// The runner is not idle before client detection has a result, so the app
+// never judges its clients by an empty report.
+func TestNotIdleBeforeDetection(t *testing.T) {
+	f := newFixture(t)
+	f.p.clients = nil
+	f.p.detect = func(context.Context) []cinderline.ReportClient {
+		return []cinderline.ReportClient{{Name: "claude", State: "ready"}}
+	}
+	polls := runLoop(t, f, &fakeApp{}, nil, nil, func(n int, _ cinderline.PollRequest, stop func()) reply {
+		switch n {
+		case 1:
+			f.p.Detect(context.Background())
+		case 2:
+			stop()
+		}
+		return answer(t, proj, "")
+	})
+	if polls[1].Idle || len(polls[1].Report.Clients) != 0 || !polls[2].Idle || len(polls[2].Report.Clients) != 1 {
+		t.Errorf("idle %v with %v, then %v with %v", polls[1].Idle, polls[1].Report.Clients, polls[2].Idle, polls[2].Report.Clients)
+	}
+}
+
+// blockingForge holds the upkeep pass in its first forge call until release.
+type blockingForge struct {
+	*forge.Fake
+	started, release chan struct{}
+}
+
+func (b blockingForge) MergeState(ctx context.Context, branch string) (forge.MergeState, error) {
+	close(b.started)
+	<-b.release
+	return "", nil
+}
+
+// While an upkeep pass runs the runner is not idle, so no job starts on the
+// clones it works on, and no tidying or second pass starts either.
+func TestAnUpkeepPassExcludesJobsAndTidying(t *testing.T) {
+	f := newFixture(t)
+	f.ws.Behinds = []workspace.BehindReply{{}}
+	fg := blockingForge{&forge.Fake{}, make(chan struct{}), make(chan struct{})}
+	f.p.Forge = func(string) (forge.Forge, error) { return fg, nil }
+	polls := runLoop(t, f, &fakeApp{}, nil, nil, func(n int, _ cinderline.PollRequest, stop func()) reply {
+		switch n {
+		case 0:
+			return answer(t, proj, `"review":[{"ref":"CSR-7","title":"T","merge":false}]`)
+		case 1:
+			<-fg.started
+		case 3:
+			close(fg.release)
+			stop()
+		}
+		return answer(t, proj, jobJSON+`,"review":[]`)
+	})
+	for _, p := range polls[1:3] {
+		if p.Idle || p.Held != nil || p.Review != nil {
+			t.Errorf("poll during the pass: idle %v, held %v, review %v", p.Idle, p.Held, p.Review)
+		}
+	}
+	if len(f.cl.Calls()) != 0 {
+		t.Error("a job ran during the pass")
+	}
+}
+
+// While a run is in flight no upkeep pass and no tidying start.
+func TestARunExcludesUpkeepAndTidying(t *testing.T) {
+	f := newFixture(t)
+	app := &fakeApp{onPoll: func(int, cinderline.PollRequest) reply { return answer(t, proj, "") }}
+	l := &loop{p: f.p, c: app.client(t), ctx: context.Background(), runDone: make(chan ended, 1), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: time.Minute, running: "CSR-1"}
+	l.poll()
+	if p := app.pollsSoFar()[0]; p.Idle || p.Held != nil || p.Review != nil || l.upkeep {
+		t.Errorf("poll during a run: idle %v, held %v, review %v", p.Idle, p.Held, p.Review)
+	}
+}
+
+// The first detection's result brings the next poll forward, so a job need
+// not wait a whole interval after a start.
+func TestTheFirstDetectionPollsAtOnce(t *testing.T) {
+	f := newFixture(t)
+	f.p.clients, f.p.detected = nil, make(chan struct{})
+	f.p.detect = func(context.Context) []cinderline.ReportClient { return nil }
+	old := waitFor
+	t.Cleanup(func() { waitFor = old })
+	waitFor = func(time.Duration) time.Duration { return time.Hour }
+	polls := runLoop(t, f, &fakeApp{}, nil, nil, func(n int, _ cinderline.PollRequest, stop func()) reply {
+		if n == 0 {
+			go f.p.Detect(context.Background())
+		} else {
+			stop()
+		}
+		return answer(t, proj, "")
+	})
+	if len(polls) != 2 || polls[0].Idle || !polls[1].Idle {
+		t.Errorf("%d polls; want a second, idle one at once", len(polls))
 	}
 }
