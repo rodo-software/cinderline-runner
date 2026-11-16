@@ -370,6 +370,9 @@ func TestReload(t *testing.T) {
 	a := newApp(t)
 	p := paths(t)
 	pa, pb := project(a.url, "A"), project(a.url, "B")
+	// With the workspace the app names, fillWorkspace has nothing to save: a
+	// save racing the test's own writes could undo them (CSR-188).
+	pa.Workspace, pb.Workspace = config.DefaultWorkspace, config.DefaultWorkspace
 	writeConfig(t, p, pa)
 	setToken(t, p, pa)
 	setToken(t, p, pb)

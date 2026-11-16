@@ -356,6 +356,12 @@ func TestSyncEndToEnd(t *testing.T) {
 		}
 	}
 	s, _ := sched()
+	// The timers start beside the slot's handshake and fire after 10ms: on a
+	// slow runner the first one came before it, listed Review without sync and
+	// sent GET /issues (CSR-188). In production they wait minutes.
+	if err := handshake(t.Context(), c); err != nil {
+		t.Fatal(err)
+	}
 	began := time.Now()
 	syncSlot(t, s, c, Hooks{
 		Pin: handshake, // as the real Pin: a GET /project before the claims
