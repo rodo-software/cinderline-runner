@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -34,16 +35,34 @@ func OutboxFile(state string, p config.Project) string {
 // Recover puts back what a previous process left: a project has one runner
 // and it works on one issue at a time, so at start none of its In progress
 // issues is really being worked on. First it removes the containers and
-// networks a previous process left (review item 9), puts back the issues left
-// In progress and pushes stranded branches; then Prune drops the notes,
-// clones and sessions of issues a person has since closed (0114) and the
-// kept sessions over their limits (CSR-145).
+// networks a previous process left (review item 9), moves the issues left
+// In progress to Blocked with a note (Unheld) and pushes stranded branches;
+// then Prune drops the notes, clones and sessions of issues a person has
+// since closed (0114) and the kept sessions over their limits (CSR-145).
 func (p Project) Recover(ctx context.Context, c *cinderline.Client) error {
 	if err := p.Env.Cleanup(ctx); err != nil {
 		// Only hygiene: a failure must not keep the project from working.
 		p.Log.Warn("stale containers and networks not removed", "project", p.Config.Key, "err", err)
 	}
+	if err := p.Unheld(ctx, c); err != nil {
+		return err
+	}
 
+	// Stranded branch recovery (decision 2026-11-07-publish-resilience point 3),
+	// before pruning deletes any clone.
+	if err := p.pushStranded(ctx, c); err != nil {
+		return err
+	}
+	return p.Prune(ctx, c)
+}
+
+// Unheld moves the project's In progress issues that no run holds to
+// Blocked with a note naming the branch and the clone's last commit, so
+// nothing reruns without a person looking (EMBER-143 D). The scheduler
+// calls it only while the project's one slot holds no issue: at start, from
+// Recover, and after each run (decision 2026-11-16-unheld-in-progress). An
+// issue whose move still waits in the outbox is left alone (CSR-159).
+func (p Project) Unheld(ctx context.Context, c *cinderline.Client) error {
 	issues, err := c.ListIssues(ctx, "in_progress")
 	if err != nil {
 		return err
@@ -55,22 +74,31 @@ func (p Project) Recover(ctx context.Context, c *cinderline.Client) error {
 			continue
 		}
 		var conflict *cinderline.ConflictError
-		_, err := c.UpdateIssue(ctx, issue.Ref, cinderline.UpdateIssueRequest{Status: "todo", ExpectedStatus: "in_progress"})
+		_, err := c.UpdateIssue(ctx, issue.Ref, cinderline.UpdateIssueRequest{Status: "blocked", ExpectedStatus: "in_progress"})
 		if errors.As(err, &conflict) {
-			continue // someone moved it meanwhile; nothing to put back
+			continue // someone moved it meanwhile; nothing to block
 		}
 		if err != nil {
 			return err
 		}
-		p.Log.Info("back to To do after a restart", "project", p.Config.Key, "issue", issue.Ref)
+		p.Log.Info("to Blocked: In progress without a run", "project", p.Config.Key, "issue", issue.Ref)
+		p.comment(ctx, c, issue.Ref, p.unheldNote(ctx, issue.Ref))
 	}
+	return nil
+}
 
-	// Stranded branch recovery (decision 2026-11-07-publish-resilience point 3),
-	// before pruning deletes any clone.
-	if err := p.pushStranded(ctx, c); err != nil {
-		return err
+// unheldNote is Unheld's comment. It names the clone's last commit only when
+// this machine still has the clone: Head on a missing one would make its dir (docker run -w).
+func (p Project) unheldNote(ctx context.Context, ref string) string {
+	msg := "The runner found this issue In progress with no run working on it (after a restart of the runner, or a move to In progress by hand), so it moved it to Blocked instead of starting a new run. Its branch is `" + name.Name + "/" + ref + "`"
+	if ws, dir := p.Workspace, path.Join(workspace.RunsPath, ref); ws != nil {
+		if ok, _ := ws.Exists(ctx, dir); ok {
+			if head, err := ws.Head(ctx, dir); err == nil {
+				msg += "; its last commit on the runner's machine is `" + head + "`"
+			}
+		}
 	}
-	return p.Prune(ctx, c)
+	return msg + ". Move the issue to To do to run it again."
 }
 
 // pushStranded pushes any stranded branches and opens pull requests for

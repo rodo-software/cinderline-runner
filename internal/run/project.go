@@ -276,6 +276,7 @@ func (p *Project) Hooks() scheduler.Hooks {
 	}
 	return scheduler.Hooks{
 		Recover:        p.Recover,
+		Unheld:         p.Unheld,
 		Pin:            p.Pin,
 		Check:          p.Check,
 		Run:            p.hookRun,

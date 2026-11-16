@@ -108,25 +108,60 @@ func issueJSON(ref, status string) string {
 }
 
 // Ported from legacy runner.test.mjs "a restart puts team issues left In
-// progress back in To do". Its team-less issue is the API's job here: the
-// runner API lists only issues with a team. An issue someone moved meanwhile
-// (409) is left alone.
-func TestRecoverPutsInProgressBackInTodo(t *testing.T) {
+// progress back in To do", changed by decision 2026-11-16-unheld-in-progress:
+// they go to Blocked with a note naming the branch, not back to To do, so
+// nothing reruns unseen (EMBER-143 D). Its team-less issue is the API's job
+// here: the runner API lists only issues with a team. An issue someone moved
+// meanwhile (409) is left alone, without a note.
+func TestRecoverBlocksInProgressWithANote(t *testing.T) {
 	p := project(t)
 	api := &fakeAPI{routes: map[string]reply{
 		"GET /issues?status=in_progress": {200, `{"issues":[` + issueJSON("CSR-1", "in_progress") + `,` + issueJSON("CSR-2", "in_progress") + `]}`},
-		"PATCH /issues/CSR-1":            {200, issueJSON("CSR-1", "todo")},
+		"PATCH /issues/CSR-1":            {200, issueJSON("CSR-1", "blocked")},
 		"PATCH /issues/CSR-2":            {409, `{"message":"Status changed.","status":"review"}`},
+		"POST /issues/CSR-1/comments":    {201, `{"id":1}`},
 	}}
 	if err := p.Recover(context.Background(), api.client(t)); err != nil {
 		t.Fatal(err)
 	}
+	got := api.writes()
 	want := []string{
-		`PATCH /issues/CSR-1 {"status":"todo","expected_status":"in_progress"}`,
-		`PATCH /issues/CSR-2 {"status":"todo","expected_status":"in_progress"}`,
+		`PATCH /issues/CSR-1 {"status":"blocked","expected_status":"in_progress"}`,
+		`POST /issues/CSR-1/comments`,
+		`PATCH /issues/CSR-2 {"status":"blocked","expected_status":"in_progress"}`,
 	}
-	if got := api.writes(); !slices.Equal(got, want) {
+	if len(got) != len(want) || got[0] != want[0] || !strings.HasPrefix(got[1], want[1]) || got[2] != want[2] {
 		t.Fatalf("writes = %q, want %q", got, want)
+	}
+	if !strings.Contains(got[1], "`cinderline/CSR-1`") || !strings.Contains(got[1], "Blocked") {
+		t.Errorf("note = %s, want the branch named", got[1])
+	}
+}
+
+// When this machine still has the issue's clone, the note names its last
+// commit too; the clone is only read.
+func TestUnheldNamesTheClonesLastCommit(t *testing.T) {
+	p := project(t)
+	ws := &workspace.Fake{Clones: []string{"/runs/CSR-1"}, Heads: []workspace.HeadReply{{Commit: "abc123"}}}
+	p.Workspace = ws
+	api := &fakeAPI{routes: map[string]reply{
+		"GET /issues?status=in_progress": {200, `{"issues":[` + issueJSON("CSR-1", "in_progress") + `]}`},
+		"PATCH /issues/CSR-1":            {200, issueJSON("CSR-1", "blocked")},
+		"POST /issues/CSR-1/comments":    {201, `{"id":1}`},
+	}}
+	if err := p.Unheld(context.Background(), api.client(t)); err != nil {
+		t.Fatal(err)
+	}
+	got := api.writes()
+	if len(got) != 2 || !strings.Contains(got[1], "`cinderline/CSR-1`") || !strings.Contains(got[1], "`abc123`") {
+		t.Fatalf("writes = %q, want a note with branch and commit", got)
+	}
+	var methods []string
+	for _, c := range ws.Calls() {
+		methods = append(methods, c.Method)
+	}
+	if want := []string{"Exists", "Head"}; !slices.Equal(methods, want) {
+		t.Errorf("workspace calls = %q, want %q", methods, want)
 	}
 }
 
@@ -432,24 +467,30 @@ func TestRecoverStrandedListingFailureOnlyLogs(t *testing.T) {
 	}
 }
 
-// An In progress issue whose move waits in the outbox is not put back in To
-// do: the replay moves it where its run decided (CSR-159).
+// An In progress issue whose move waits in the outbox is not blocked: the
+// replay moves it where its run decided (CSR-159).
 func TestRecoverLeavesIssuesWithKeptWrites(t *testing.T) {
 	p := project(t)
 	api := &fakeAPI{routes: map[string]reply{
 		"GET /issues?status=in_progress": {200, `{"issues":[` + issueJSON("CSR-1", "in_progress") + `,` + issueJSON("CSR-2", "in_progress") + `]}`},
 		"PATCH /issues/CSR-1":            {502, `{}`},
 		"POST /issues/CSR-1/comments":    {502, `{}`},
-		"PATCH /issues/CSR-2":            {200, issueJSON("CSR-2", "todo")},
+		"PATCH /issues/CSR-2":            {200, issueJSON("CSR-2", "blocked")},
+		"POST /issues/CSR-2/comments":    {201, `{"id":1}`},
 	}}
 	c := api.client(t)
 	c.Send(context.Background(), cinderline.Write{Ref: "CSR-1", Comment: "The run stopped with an error: boom"})
 	if err := p.Recover(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
+	blocked := false
 	for _, w := range api.writes() {
 		if strings.HasPrefix(w, "PATCH /issues/CSR-1") {
 			t.Fatalf("writes = %q, want CSR-1 left alone", api.writes())
 		}
+		blocked = blocked || w == `PATCH /issues/CSR-2 {"status":"blocked","expected_status":"in_progress"}`
+	}
+	if !blocked {
+		t.Fatalf("writes = %q, want CSR-2 blocked", api.writes())
 	}
 }

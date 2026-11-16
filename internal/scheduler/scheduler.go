@@ -34,6 +34,7 @@ const maxStartBackoff = 10 * time.Minute
 // Hooks are the steps M3 fills. A nil hook is skipped.
 type Hooks struct {
 	Recover        func(ctx context.Context, c *cinderline.Client) error                         // once at slot start, before the first Work
+	Unheld         func(ctx context.Context, c *cinderline.Client) error                         // after each run, while the slot holds no issue; an error only logs
 	Pin            func(ctx context.Context, c *cinderline.Client) error                         // before the claims of each poll; an error is a slot failure, so nothing is claimed
 	Check          func(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error // before each claim; an error skips the issue, unclaimed
 	Run            func(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error
@@ -326,9 +327,11 @@ func (s *Scheduler) cycle(ctx context.Context, work context.Context, slot Slot) 
 		}
 		notStarted := s.finish(ctx, slot, *claimed, strikes.n+1, strikes.wait)
 		c.SyncNow() // the answer from before the run is out of date
+		s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
+		// Here, not on a timer: between runs the slot holds nothing, so no claim races it (decision 2026-11-16-unheld-in-progress).
+		s.tick(work, slot, "unheld check failed", h.Unheld)
 		if notStarted {
 			strikes.n++
-			s.setStatus(slot.Project, func(st *ProjectStatus) { st.Issue = "" })
 			select {
 			case <-work.Done():
 				return polled, work.Err()
@@ -421,7 +424,7 @@ func (s *Scheduler) claimNext(work context.Context, slot Slot, first *cinderline
 // finish runs and publishes a claimed issue. From the claim on, every failure
 // ends in a comment and Blocked (EMBER-177), so an issue never stays In progress
 // with nobody working on it. A stop leaves it In progress: the next start's
-// recovery puts it back in To do.
+// recovery moves it to Blocked with a note.
 //
 // A Run error wrapping ErrNotStarted (a failure before the first agent turn)
 // puts the issue back in To do without a comment, logs it, and tells the

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -92,6 +93,7 @@ type Fake struct {
 	FastForwards []error
 	Removes      []error
 	Frees        []FreeReply
+	Clones       []string // dirs Exists reports, besides those on disk
 
 	mu    sync.Mutex
 	calls []Call
@@ -265,7 +267,7 @@ func (f *Fake) Exists(_ context.Context, dir string) (bool, error) {
 	defer f.mu.Unlock()
 	f.record("Exists", dir)
 	_, err := os.Stat(dir)
-	return err == nil, nil
+	return err == nil || slices.Contains(f.Clones, dir), nil
 }
 
 func (f *Fake) FastForward(_ context.Context, dir, branch string) error {

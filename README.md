@@ -138,7 +138,7 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 - `min_free_disk`: when free space on Docker's disk (where the worktree and session volumes are) is below this, kept sessions are deleted oldest first; such as `"10GB"`, in `MB`, `GB` or `TB`, `"10GB"` by default, `"off"` to never delete them for space. The runner checks both limits at start and before each run, per project; a paused run (waiting for an answer, or between an orchestrator's rounds) and a worktree with unpushed commits are never deleted. A follow-up whose session was deleted starts fresh and says so in a comment.
 - Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key; `extra_repositories`, which `add-repo` writes (see "Extra repositories").
 
-Unknown fields are refused. `add`, `manage`, `key set`, `login`, `add-repo` and `remove-repo` make a running runner reload the file, which aborts its runs in flight; they are recovered right after. `remove` reloads it too. After a hand edit, restart the runner.
+Unknown fields are refused. `add`, `manage`, `key set`, `login`, `add-repo` and `remove-repo` make a running runner reload the file, which aborts its runs in flight: their issues go to Blocked with a note naming the branch, and a person moves them back to To do to run them again. `remove` reloads it too. After a hand edit, restart the runner.
 
 ## Network
 

@@ -117,7 +117,7 @@ func (p *Project) steps(ctx context.Context, c *cinderline.Client, j runJob) (ha
 	author := gitAuthor(j.Team, lead.Name)
 	defer func() {
 		if ctx.Err() != nil {
-			return // a stop: the next start's recovery puts the issue back
+			return // a stop: the next start's recovery moves the issue to Blocked
 		}
 		if !paused {
 			// Kept for a follow-up even when the run failed: the next run can continue it.

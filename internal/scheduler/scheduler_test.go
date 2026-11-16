@@ -255,6 +255,32 @@ func TestHappyPathOrder(t *testing.T) {
 	}
 }
 
+// Unheld runs after each run ends, never during one, so the slot's own issue
+// is not In progress then; its failure only logs, the slot polls on without
+// a new recovery (decision 2026-11-16-unheld-in-progress).
+func TestUnheldAfterEachRun(t *testing.T) {
+	s, buf := sched()
+	ev := &events{}
+	c := app{issue: issue, claimStatus: 200, hold: time.Second, ev: ev}.start(t)
+	start(t, s, []Slot{{Project: "CSR", Client: c, Hooks: Hooks{
+		Recover: record(ev, "recover"),
+		Run:     recordIssue(ev, "run"),
+		Publish: recordIssue(ev, "publish"),
+		Unheld: func(context.Context, *cinderline.Client) error {
+			ev.add("unheld")
+			return errors.New("list failed")
+		},
+	}}})
+	want := []string{"recover", "GET /work", "POST /issues/CSR-9/claim todo", "run CSR-9", "publish CSR-9", "unheld", "GET /work cached"}
+	waitFor(t, "the sequence", func() bool { return len(ev.all()) >= len(want) })
+	if got := ev.all()[:len(want)]; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("sequence = %q, want %q", got, want)
+	}
+	if l := buf.String(); !strings.Contains(l, `"msg":"unheld check failed"`) || strings.Contains(l, "slot failed") {
+		t.Errorf("log = %s, want only a warning", l)
+	}
+}
+
 func TestRecoverBeforeFirstWork(t *testing.T) {
 	s, _ := sched()
 	ev := &events{}
