@@ -1,0 +1,1243 @@
+openapi: 3.1.0
+info:
+  title: Cinderline runner API
+  version: 1.0.0
+  license:
+    name: Functional Source License, Version 1.1, ALv2 Future License
+    identifier: FSL-1.1-ALv2
+  description: |
+    The REST API a runner uses to take issues from a Cinderline instance, run
+    agent teams on them and report back (plan M1, decision 2026-11-05-runner-rewrite-details).
+    This file is authored in the runner repository and mirrored into the app
+    repository, where a test checks it against the routes.
+
+    **Authentication.** Every route needs a Sanctum personal access token as a
+    bearer token that carries the `runner` ability. The token belongs to the
+    runner user of exactly one project (0099), and every route is limited to
+    that project by the app's policies:
+
+    - no or an invalid token: `401`;
+    - a valid token without the `runner` ability (a person's token, a scoped
+      agent token): `403`;
+    - an issue, team or run of another project, or one that does not exist:
+      `404`, so a token never learns what exists outside its project.
+
+    **Versions (EMBER-44).** Every request carries `Cinderline-Runner-Version`.
+    Any route may answer `426` with the minimum runner version. Every response,
+    including errors, `304` and `426`, carries `Cinderline-Api-Version`.
+
+    **Polling intervals (EMBER-210, CSR-174).** The answers to the requests the
+    runner repeats on a timer (`getWork`, `heartbeat`, and `listIssues` with a
+    `purpose`) may carry `Cinderline-Poll-After`: whole seconds to wait,
+    counted from that answer, before sending the same request again. The
+    runner clamps it to 1 to 3600 seconds and adds a few seconds of jitter.
+    Without it the runner keeps its own defaults. Errors keep the runner's
+    own backoff.
+
+    **Unavailable (CSR-93).** Any route may answer `429` or `503`, for example
+    under a per-token rate limit or during a deploy, with `Retry-After` in
+    seconds or as an HTTP date. The runner then sends no request at all with
+    that token until it has passed (capped at an hour). Without it, on any
+    `5xx` or no answer, the runner backs off exponentially from a second to a
+    minute, and reports `poll_failed` only after two minutes of failures.
+
+    **Issue references** such as `CSR-9` identify issues in paths.
+servers:
+  - url: '{instance}/api/runner/v1'
+    variables:
+      instance:
+        default: https://cinderline.example.com
+        description: Base URL of the Cinderline instance.
+security:
+  - runnerToken: []
+paths:
+  /project:
+    get:
+      operationId: getProject
+      summary: The project this token belongs to.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          description: The project.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /work:
+    get:
+      operationId: getWork
+      summary: Poll for the next To do issue with a team.
+      description: |
+        Answers as soon as the project has a To do issue with a team, or after
+        `wait` seconds; it may answer at once. The answer is the first such
+        issue in board order, or `issue: null` when there is none; both are
+        `200` with an `ETag`. When the request's `If-None-Match` matches the
+        current answer, the app keeps waiting until the answer changes or
+        `wait` runs out, and then answers `304` without a body. The runner
+        sends `wait` only when the project's `long_poll` is true, and never
+        relies on the request being held: it paces its own polls between
+        answers that bring no work, counted from the answer.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+        - name: wait
+          in: query
+          description: The most seconds the app may hold the request waiting for work; it may answer sooner, also at once.
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 25
+            default: 25
+        - name: If-None-Match
+          in: header
+          description: The `ETag` of the previous answer.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The first To do issue with a team, or none.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cinderline-Poll-After:
+              $ref: '#/components/headers/PollAfter'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [issue]
+                properties:
+                  issue:
+                    oneOf:
+                      - $ref: '#/components/schemas/Issue'
+                      - type: 'null'
+        '304':
+          description: The answer is unchanged since `If-None-Match`.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+            ETag:
+              $ref: '#/components/headers/ETag'
+            Cinderline-Poll-After:
+              $ref: '#/components/headers/PollAfter'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues:
+    get:
+      operationId: listIssues
+      summary: The project's issues with a team in the given statuses.
+      description: |
+        Used for recovery (In progress at start), keeping Review branches
+        current and checking merges (Review). Archived issues are left out.
+
+        Returns at most 200 issues, in board order; there is no paging. The
+        runner logs a warning when a list comes back with 200 issues and handles
+        only those.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+        - name: status
+          in: query
+          required: true
+          description: One or more statuses, comma-separated, e.g. `in_progress,review`.
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 1
+            items:
+              $ref: '#/components/schemas/StatusValue'
+        - name: purpose
+          in: query
+          description: |
+            Sent with `status=review` by the runner's timed checks: `review`
+            keeps Review branches current, `merge` checks merges. It tells the
+            app which check asks, so it can answer each with its own
+            `Cinderline-Poll-After`. Requests without it are not repeated on a
+            timer.
+          schema:
+            type: string
+            enum: [review, merge]
+      responses:
+        '200':
+          description: At most 200 issues, the first in board order, without their comments.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+            Cinderline-Poll-After:
+              $ref: '#/components/headers/PollAfter'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [issues]
+                properties:
+                  issues:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Issue'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    get:
+      operationId: getIssue
+      summary: One issue with its comments.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          $ref: '#/components/responses/IssueWithComments'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+    patch:
+      operationId: updateIssue
+      summary: Change an issue's status or merge status.
+      description: |
+        A `status` change needs `expected_status`; when the issue's current
+        status differs the app answers `409` and changes nothing. At least one
+        of `status` and `merge_status` is required.
+
+        The runner token may not move a top-level issue to `done`: that is `403`
+        "This token may not move issues to done." Finished work goes to
+        `review`. A sub-issue may be moved to `done`, because its orchestrator
+        reviews it (decision 2026-11-08-runner-tokens-without-done).
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                status:
+                  $ref: '#/components/schemas/StatusValue'
+                expected_status:
+                  $ref: '#/components/schemas/StatusValue'
+                merge_status:
+                  $ref: '#/components/schemas/MergeStatus'
+              dependentRequired:
+                status: [expected_status]
+      responses:
+        '200':
+          $ref: '#/components/responses/IssueWithComments'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}/claim:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    post:
+      operationId: claimIssue
+      summary: Move an issue to In progress to run it.
+      description: |
+        Moves the issue from `expected_status` to `in_progress`. `409` when its
+        status is no longer `expected_status`, for example because someone
+        else took it.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expected_status]
+              properties:
+                expected_status:
+                  $ref: '#/components/schemas/StatusValue'
+      responses:
+        '200':
+          $ref: '#/components/responses/IssueWithComments'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}/attachments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+      - name: id
+        in: path
+        required: true
+        description: An attachment ID from the issue's `attachments`.
+        schema:
+          type: integer
+    get:
+      operationId: downloadAttachment
+      summary: One of the issue's files, as listed in its attachments (EMBER-208).
+      description: |
+        The bytes as uploaded, with the file's `mime_type` as Content-Type and
+        its `name` in Content-Disposition; `X-Content-Type-Options: nosniff`
+        is set, so take the declared type as it is. The runner puts the files
+        in the run's container. An attachment of another issue, or of an issue
+        outside the token's project, is 404.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          description: The file.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}/comments:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    get:
+      operationId: listComments
+      summary: An issue's latest comments, at most 200, oldest first.
+      description: |
+        Returns at most 200 comments, oldest first. With after, the oldest 200
+        comments whose ID is greater than after; without it, the newest 200.
+        The runner keeps a comment cursor and asks with after=<cursor>, so the
+        cap hides a newer comment only when more than 200 arrived since the
+        cursor (decision 2026-11-08-comment-cursor).
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+        - name: after
+          in: query
+          required: false
+          description: A comment ID; only comments with a greater ID are returned.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: The comments.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [comments]
+                properties:
+                  comments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Comment'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+    post:
+      operationId: addComment
+      summary: Add a comment as the runner user.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageBody'
+      responses:
+        '201':
+          description: The new comment.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /issues/{ref}/progress:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    post:
+      operationId: addProgress
+      summary: Report what a run is doing now.
+      description: A short progress message shown on the issue while it runs.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageBody'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /teams/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      operationId: getTeam
+      summary: A team of the project, with its agents.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '200':
+          description: The team.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Team'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /report:
+    put:
+      operationId: putReport
+      summary: Replace the runner's report.
+      description: |
+        Stored per token, as columns on `personal_access_tokens` (D5, EMBER-41),
+        and shown in the app (EMBER-42). Each call replaces the previous report.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Report'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /heartbeat:
+    post:
+      operationId: heartbeat
+      summary: Tell the app the runner is alive (EMBER-43).
+      description: Sent every `Cinderline-Poll-After` seconds, else every 60, also while a long run is in flight. No body.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '204':
+          description: Done.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+            Cinderline-Poll-After:
+              $ref: '#/components/headers/PollAfter'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /runs/{ref}/agent-token:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    post:
+      operationId: createAgentToken
+      summary: Create a short-lived token for one agent run on this issue.
+      description: |
+        The token an agent uses for the Cinderline MCP tools. It is scoped to
+        the issue `ref` and its tree; outside the issue tree, a token reaches
+        only the issues of projects its project links to, with the tools
+        listed in `AgentTokenKind`. See
+        `AgentTokenKind` for what each kind may do. The token is named after
+        the issue's team and the agent, so the app detects the agent from it
+        (0045). It expires after the team's `max_minutes` plus a margin. The
+        runner deletes it when the run ends. Workers and the Merge Resolver get
+        no Cinderline access and so no token (0122).
+
+        A new token for the same issue and agent replaces the previous one.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, agent]
+              properties:
+                kind:
+                  $ref: '#/components/schemas/AgentTokenKind'
+                agent:
+                  type: string
+                  description: Name of the team's agent that runs with the token.
+      responses:
+        '201':
+          description: The plain token, shown only once.
+          headers:
+            Cinderline-Api-Version:
+              $ref: '#/components/headers/ApiVersion'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expires_at]
+                properties:
+                  token:
+                    type: string
+                  expires_at:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+    delete:
+      operationId: deleteAgentTokens
+      summary: Delete the issue's agent tokens when its run ends.
+      description: Deletes every agent token of the issue `ref`. Also `204` when there is none.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+  /runs/{ref}/usage:
+    parameters:
+      - $ref: '#/components/parameters/Ref'
+    post:
+      operationId: reportUsage
+      summary: Record the usage of a run's agent CLI runs, in one call when the run ends.
+      description: |
+        The tokens and USD cost of every agent CLI run of one run on the
+        top-level issue `ref`, collected by the runner and sent in one call
+        when the run ends, also when it failed, paused or was stopped
+        (EMBER-112; batched per app decision
+        2026-11-07-shared-tables-and-scalability, point 16, EMBER-161).
+
+        Each entry becomes one `usage` activity entry on its `issue`, which is
+        `ref` or one of its sub-issues, under the team's agent named, as
+        `RecordUsage` does for the MCP tool `report_usage`: labelled
+        "<team> / <agent>" like an agent token, with `model`. Without
+        `cost_usd` the app estimates the cost from the model's price.
+        `422` when an entry's issue is not `ref` or one of its sub-issues, or
+        its agent is not one of the team's.
+      parameters:
+        - $ref: '#/components/parameters/RunnerVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entries]
+              properties:
+                entries:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/UsageEntry'
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '426':
+          $ref: '#/components/responses/UpgradeRequired'
+components:
+  securitySchemes:
+    runnerToken:
+      type: http
+      scheme: bearer
+      description: A Sanctum personal access token of the project's runner user with the `runner` ability.
+  parameters:
+    RunnerVersion:
+      name: Cinderline-Runner-Version
+      in: header
+      required: true
+      description: The runner's version, e.g. `1.2.0`.
+      schema:
+        type: string
+    Ref:
+      name: ref
+      in: path
+      required: true
+      description: An issue reference.
+      schema:
+        type: string
+        pattern: '^[A-Z][A-Z0-9]*-[0-9]+$'
+        examples: [CSR-9]
+  headers:
+    ApiVersion:
+      description: The app's runner API version, e.g. `1.0.0`. On every response.
+      required: true
+      schema:
+        type: string
+    ETag:
+      description: Identifies the answer; send it back as `If-None-Match`.
+      required: true
+      schema:
+        type: string
+    PollAfter:
+      description: Whole seconds the runner waits, counted from this answer, before sending the same request again (EMBER-210). Optional; the runner clamps it to 1 to 3600.
+      required: false
+      schema:
+        type: integer
+  responses:
+    NoContent:
+      description: Done.
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+    IssueWithComments:
+      description: The issue, with its comments.
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/IssueWithComments'
+    Unauthenticated:
+      description: No token, or the token is invalid or expired.
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: The token lacks the `runner` ability.
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Not found in this token's project (also when it exists in another project).
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: The issue's status is not `expected_status`; nothing changed.
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                required: [status]
+                properties:
+                  status:
+                    $ref: '#/components/schemas/StatusValue'
+    ValidationFailed:
+      description: The request is invalid.
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                required: [errors]
+                properties:
+                  errors:
+                    description: Messages per field, as Laravel returns them.
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: string
+    UpgradeRequired:
+      description: The runner is older than the app supports, or sent no version.
+      headers:
+        Cinderline-Api-Version:
+          $ref: '#/components/headers/ApiVersion'
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Error'
+              - type: object
+                required: [minimum_runner_version]
+                properties:
+                  minimum_runner_version:
+                    type: string
+  schemas:
+    Error:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    StatusValue:
+      type: string
+      enum: [backlog, todo, in_progress, blocked, review, done, cancelled]
+    MergeStatus:
+      description: Whether a trusted team's merge went through (`success`), failed (`issue`) or is unknown.
+      enum: [success, issue, null]
+    Labeled:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+    IssueSummary:
+      type: object
+      required: [ref, title]
+      properties:
+        ref:
+          type: string
+        title:
+          type: string
+    Issue:
+      description: An issue as the app's `get_issue` tool returns it, without comments.
+      type: object
+      required:
+        - id
+        - number
+        - ref
+        - title
+        - body
+        - status
+        - priority
+        - merge_status
+        - position
+        - team
+        - parent
+        - agent
+        - sub_issues
+        - attachments
+        - created_at
+        - updated_at
+        - completed_at
+        - archived_at
+      properties:
+        id:
+          type: integer
+        number:
+          type: integer
+        ref:
+          type: string
+          pattern: '^[A-Z][A-Z0-9]*-[0-9]+$'
+        title:
+          type: string
+        body:
+          description: Untrusted text written by people or agents.
+          type: [string, 'null']
+        status:
+          allOf:
+            - $ref: '#/components/schemas/Labeled'
+            - properties:
+                value:
+                  $ref: '#/components/schemas/StatusValue'
+        priority:
+          allOf:
+            - $ref: '#/components/schemas/Labeled'
+            - properties:
+                value:
+                  enum: [low, normal, high, urgent]
+        merge_status:
+          $ref: '#/components/schemas/MergeStatus'
+        position:
+          type: integer
+        team:
+          oneOf:
+            - type: object
+              required: [id, name]
+              properties:
+                id:
+                  type: integer
+                name:
+                  type: string
+            - type: 'null'
+        parent:
+          oneOf:
+            - $ref: '#/components/schemas/IssueSummary'
+            - type: 'null'
+        agent:
+          description: The agent that created the issue, if any.
+          oneOf:
+            - type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+            - type: 'null'
+        sub_issues:
+          description: Sub-issues in creation order.
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/IssueSummary'
+              - type: object
+                required: [status]
+                properties:
+                  status:
+                    $ref: '#/components/schemas/Labeled'
+        attachments:
+          description: The files attached to the issue, oldest first; [] without any (EMBER-208).
+          type: array
+          items:
+            $ref: '#/components/schemas/Attachment'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: [string, 'null']
+          format: date-time
+        archived_at:
+          type: [string, 'null']
+          format: date-time
+    UsageEntry:
+      description: The tokens and cost of one agent CLI run.
+      type: object
+      required: [issue, agent, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd]
+      properties:
+        issue:
+          description: The issue the CLI ran for, the run's issue or one of its sub-issues.
+          type: string
+          pattern: '^[A-Z][A-Z0-9]*-[0-9]+$'
+        agent:
+          description: Name of the team's agent that ran.
+          type: string
+        model:
+          description: The agent's model; null when it runs on its client's default.
+          type: [string, 'null']
+        input_tokens:
+          description: Input tokens, without cache reads and writes.
+          type: integer
+          minimum: 0
+        output_tokens:
+          type: integer
+          minimum: 0
+        cache_read_tokens:
+          type: integer
+          minimum: 0
+        cache_write_tokens:
+          type: integer
+          minimum: 0
+        cost_usd:
+          description: The cost as the CLI reports it; null to have the app estimate it.
+          type: [number, 'null']
+          minimum: 0
+        kind:
+          description: |
+            Optional: a short label for the kind of run, e.g. "first", "fix 2",
+            "round 3" or "merge", shown in the issue's runs timeline (app
+            decision 2026-11-08-run-timeline-kind-and-verdict).
+          type: [string, 'null']
+          maxLength: 50
+        verdict:
+          description: Optional, when the runner ran the project's check command after the run.
+          type: [string, 'null']
+          enum: [passed, failed, null]
+    IssueWithComments:
+      allOf:
+        - $ref: '#/components/schemas/Issue'
+        - type: object
+          required: [comments, usage, budget_usd, over_budget]
+          properties:
+            comments:
+              type: array
+              items:
+                $ref: '#/components/schemas/Comment'
+            usage:
+              description: |
+                The totals of the usage entries on the issue and its
+                sub-issues, as the app's `get_issue` tool has them (EMBER-112).
+                Further keys, such as the breakdown per agent, may follow.
+              type: object
+              required: [input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, cost_incomplete]
+              properties:
+                input_tokens:
+                  type: integer
+                output_tokens:
+                  type: integer
+                cache_read_tokens:
+                  type: integer
+                cache_write_tokens:
+                  type: integer
+                cost_usd:
+                  description: The known cost in USD; entries without a cost and without a price add nothing.
+                  type: number
+                cost_incomplete:
+                  description: Some entry's cost is unknown.
+                  type: boolean
+            budget_usd:
+              description: The cost budget in effect, the issue's or else its team's; a sub-issue's is its parent's. Null when there is none.
+              type: [number, 'null']
+            over_budget:
+              description: |
+                Whether the known cost reached `budget_usd`; for a sub-issue,
+                its parent's total. The runner starts no agent CLI run on an
+                issue over its budget (EMBER-112).
+              type: boolean
+    Attachment:
+      description: A file attached to an issue; `url` downloads it through this API (EMBER-208).
+      type: object
+      required: [id, name, size, mime_type, url]
+      properties:
+        id:
+          type: integer
+        name:
+          description: The original file name, untrusted text from the uploader.
+          type: string
+        size:
+          description: Bytes.
+          type: integer
+          minimum: 0
+        mime_type:
+          type: string
+        url:
+          description: The absolute URL of `GET /issues/{ref}/attachments/{id}` for this file.
+          type: string
+          format: uri
+    Comment:
+      type: object
+      required: [id, body, author, created_at]
+      properties:
+        id:
+          type: integer
+        body:
+          description: Untrusted text written by people or agents.
+          type: string
+        author:
+          description: The user who wrote it; `agent` is set when an agent wrote it through its token.
+          type: object
+          required: [name, agent]
+          properties:
+            name:
+              type: string
+            agent:
+              type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+    MessageBody:
+      type: object
+      required: [body]
+      properties:
+        body:
+          type: string
+          minLength: 1
+    Project:
+      type: object
+      required: [key, name, repository_url, forge, base_branch, environment, linked_projects]
+      properties:
+        key:
+          type: string
+          examples: [CSR]
+        name:
+          type: string
+        repository_url:
+          type: string
+          format: uri
+        forge:
+          description: The forge that hosts the repository.
+          type: string
+          examples: [github, forgejo]
+        base_branch:
+          type: string
+          examples: [main]
+        environment:
+          description: Where runs happen; set by admins in the app, never from issue text (0098).
+          enum: [default, docker, existing]
+        compose_file:
+          description: For environment docker, the compose file's path in the repository, read from the base branch only; set by admins. Null or absent means the default (decision 2026-11-08-m6-environments point 1).
+          type: [string, 'null']
+          default: .cinderline/compose.yml
+        agent_service:
+          description: For environment docker, the compose file's service the agents run in; set by admins. Null or absent means the default.
+          type: [string, 'null']
+          default: agent
+        check_command:
+          description: The project's check command, set by admins in the project settings, never from issue text. The runner runs it through `sh -c` in the issue's clone after each agent run that changes code, and sends a failure back to the agent's session at most three times (CSR-80). Null or absent means no check, and the orchestrator is told the reports are unverified.
+          type: [string, 'null']
+        idle_minutes:
+          description: An agent run that prints nothing this many minutes is stalled; the runner stops it, pushes its work and moves the issue to Blocked with a note. Set per project by admins. Null or absent means the runner's default (CSR-159).
+          type: [integer, 'null']
+          minimum: 1
+          default: 20
+        workspace:
+          description: The workspace the project belongs to (EMBER-159); project keys are unique per workspace, not per instance. The runner names a project's local config entry, Docker volumes and labels by URL, workspace slug and key (CSR-97). Null or absent, from an app before workspaces, means the slug `default`.
+          type: [object, 'null']
+          required: [id, slug]
+          properties:
+            id:
+              type: integer
+            slug:
+              description: Letters, digits, `-` and `_`, starting with a letter or digit; it ends up in Docker names.
+              type: string
+              pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$'
+              examples: [acme]
+        long_poll:
+          description: Whether the app can hold `GET /work` open (it runs on FrankenPHP or Octane). Only then does the runner send `wait`. False or absent means short polls with `If-None-Match` (CSR-93).
+          type: boolean
+          default: false
+        linked_projects:
+          description: The projects this project's agents may reach, one direction per link. Empty when there are none.
+          type: array
+          items:
+            type: object
+            required: [key, name, repository_url, base_branch]
+            properties:
+              key:
+                type: string
+                examples: [EMBER]
+              name:
+                type: string
+              repository_url:
+                type: string
+                format: uri
+              base_branch:
+                type: string
+                examples: [main]
+    Team:
+      type: object
+      required: [id, name, max_minutes, trusted, max_sub_issues, ponytail, agents]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        max_minutes:
+          description: The longest an agent run of this team may take.
+          type: integer
+          minimum: 1
+        max_turns:
+          description: The most turns an agent run of this team may take (Claude Code's --max-turns, OpenCode's steps). The runner uses 50 when it is missing (decision 2026-11-07-team-max-turns).
+          type: integer
+          minimum: 1
+        trusted:
+          description: Whether the runner requests the merge after the pull request (2026-11-04-runner-waits-for-merge).
+          type: boolean
+        max_sub_issues:
+          description: The most sub-issues one issue may get, for the orchestrator's prompt (decision 0122).
+          type: integer
+          minimum: 0
+        ponytail:
+          description: Whether the team's Claude Code runs load the ponytail plugin (2026-11-03-per-team-ponytail-plugin).
+          type: boolean
+        generic_runs:
+          description: Whether the team's runs are generic (app decision 2026-11-05-generic-runs-and-agent-proposals) - the orchestrator runs alone, acts through Cinderline's MCP tools, changes no files and gets no pull request; the issue moves to review with the run's report. The runner treats a missing value as false, a coding run.
+          type: boolean
+        agents:
+          type: array
+          items:
+            type: object
+            required: [name, role, client, model, effort, instructions, description, price]
+            properties:
+              name:
+                type: string
+              role:
+                description: The agent's part in the team, e.g. orchestrator, worker, merge resolver.
+                type: string
+              client:
+                description: The agent CLI, e.g. `claude` or `opencode`.
+                type: string
+              model:
+                type: [string, 'null']
+              effort:
+                description: The slot's effort level from its client's list (Claude Code's --effort, OpenCode's --variant, Codex's model_reasoning_effort); null is the client's default (app decision 2026-11-06-effort-per-team-slot).
+                type: [string, 'null']
+              instructions:
+                description: The agent's own instructions, first in its prompt (decision 2026-11-06-prompts).
+                type: [string, 'null']
+              description:
+                description: What the agent is good at, listed in the orchestrator's prompt.
+                type: [string, 'null']
+              price:
+                description: The model's price in USD per million tokens, listed in the orchestrator's prompt; null when unknown.
+                type: [object, 'null']
+                required: [input, output]
+                properties:
+                  input:
+                    type: number
+                  output:
+                    type: number
+    Report:
+      type: object
+      required: [runner_version, clients, environments]
+      properties:
+        runner_version:
+          type: string
+        clients:
+          type: array
+          items:
+            type: object
+            required: [name, version, state]
+            properties:
+              name:
+                type: string
+                examples: [claude]
+              version:
+                type: [string, 'null']
+              state:
+                description: Whether the client can run (EMBER-40).
+                enum: [ready, missing_binary, missing_credential, invalid_credential]
+        environments:
+          description: The environments this runner can serve.
+          type: array
+          items:
+            enum: [default, docker, existing]
+        errors:
+          description: Errors the runner holds in memory now (decision 2026-11-08-errors-reach-cinderline); sent only when changed, at most once per heartbeat. Messages never carry tokens.
+          type: array
+          items:
+            type: object
+            required: [kind, message]
+            properties:
+              kind:
+                type: string
+                enum: [repository_mismatch, missing_key, unsupported_client, poll_failed]
+              message:
+                type: string
+              issue:
+                description: An issue ref, set only for missing_key and unsupported_client.
+                type: string
+        refused_connections:
+          description: Connections the egress proxy of this project's agent runs refused since the runner started (CSR-63); left out while 0.
+          type: integer
+          minimum: 1
+    AgentTokenKind:
+      description: |
+        What an agent token may do, limited to the issue it was made for:
+
+        - `orchestrator`: the agent tools `get_issue`,
+          `list_comments`, `add_comment`, `create_issue` (sub-issues of the
+          issue only), `update_issue` (within the issue tree), `ask_person`
+          and `reply_person`.
+        - `reader`: for the orchestrator's own sub-issue, only `get_issue` and
+          `list_comments`.
+
+        Outside the issue tree, a token reaches only the issues of projects
+        its project links to, with the tools listed here: in a linked project
+        an `orchestrator` token may use `get_issue`,
+        `list_comments`, `list_issues`, `search`, `add_comment`,
+        `create_issue` (top-level only) and `update_issue` (title, body,
+        priority, status; the rule for `done` unchanged). The `reader` kind
+        reaches no linked project. No kind has the `runner` ability
+        (decision 2026-11-11-project-links).
+      enum: [orchestrator, reader]

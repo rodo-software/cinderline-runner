@@ -1,0 +1,28 @@
+# Draft for Willem (CSR-39): agents may not edit .forgejo/ (AGENTS.md), so
+# this file waits here. To put it in place:
+#   1. Register a Forgejo runner in host mode on a Linux machine with Docker,
+#      with the label linux-host (or rename it below). Its user must be able
+#      to run docker; it needs git and outbound HTTPS (Go, the pinned agent
+#      CLIs from downloads.claude.ai and registry.npmjs.org, and images).
+#   2. Copy this file to .forgejo/workflows/integration.yml.
+# Host mode, not runs-on: docker: the test bind-mounts a folder from its
+# temp dir and reaches containers at their bridge IP, which only work
+# directly on the Docker host (decision 2026-11-06-integration-ci-host-runner).
+# The tools volume and the default image stay on the host as caches, so only
+# the first run downloads about 400 MB and builds the image.
+name: integration
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+jobs:
+  linux-integration:
+    runs-on: linux-host
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -race -tags integration -run Integration -timeout 30m -v ./internal/run/

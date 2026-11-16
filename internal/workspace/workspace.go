@@ -1,0 +1,63 @@
+// Package workspace defines Workspace, the git clones runs work in (prepare,
+// commit, base merges, the Merge Resolver's checks, push), and Fake, its
+// in-memory stand-in for tests.
+package workspace
+
+import "context"
+
+// Workspace manages the per-issue clones of one project's repository. A clone
+// is identified by the dir Prepare returns.
+type Workspace interface {
+	// Prepare makes or reuses the clone for branch, starting from base when
+	// the branch is new, and returns its dir.
+	Prepare(ctx context.Context, branch, base string) (string, error)
+	// Commit commits everything left in dir, with author ("<team> / <agent>")
+	// as author and committer, and reports whether there was anything to
+	// commit.
+	Commit(ctx context.Context, dir, author, message string) (bool, error)
+	// MergeBase fetches and merges base into the clone's branch and returns
+	// the conflicting files; none means the merge succeeded. A conflicted
+	// merge is aborted, so the clone is as it was. A merge commit is author's.
+	MergeBase(ctx context.Context, dir, base, author string) ([]string, error)
+	// IsAncestor reports whether commit ancestor is an ancestor of
+	// descendant. A branch name other than the clone's own means the
+	// remote's branch as last fetched.
+	IsAncestor(ctx context.Context, dir, ancestor, descendant string) (bool, error)
+	// Clean reports whether the clone has nothing uncommitted or untracked
+	// and no merge in progress.
+	Clean(ctx context.Context, dir string) (bool, error)
+	// ConflictMarkers reports whether a line of one of files starts with a
+	// conflict marker ("<<<<<<< " or ">>>>>>> ").
+	ConflictMarkers(ctx context.Context, dir string, files []string) (bool, error)
+	// Reset aborts a merge in progress, moves the branch back to commit and
+	// removes untracked files.
+	Reset(ctx context.Context, dir, commit string) error
+	// Log returns the one-line log of the commits on the clone's branch that
+	// are not on base.
+	Log(ctx context.Context, dir, base string) (string, error)
+	Push(ctx context.Context, dir, branch string) error
+	// Head returns the commit the clone's branch is on.
+	Head(ctx context.Context, dir string) (string, error)
+	// Stranded lists the clones whose branch has commits that no remote
+	// branch has: work never pushed, or not since its last commit
+	// (decision 2026-11-07-publish-resilience).
+	Stranded(ctx context.Context) ([]Clone, error)
+	// Behind fetches once and lists the runner's branches on the remote
+	// that base has moved past: not merged into base and without base's
+	// head. The review timer makes a clone only for those.
+	Behind(ctx context.Context, base string) ([]string, error)
+	// Exists reports whether dir is still a clone.
+	Exists(ctx context.Context, dir string) (bool, error)
+	// FastForward brings a clean clone up to the remote's branch; it fails
+	// when the clone is not clean or the branch cannot fast-forward.
+	FastForward(ctx context.Context, dir, branch string) error
+	// Remove deletes the clone at dir.
+	Remove(ctx context.Context, dir string) error
+	// Free returns the bytes available where the clones are kept.
+	Free(ctx context.Context) (int64, error)
+}
+
+// Clone is one per-issue clone and the branch it is on.
+type Clone struct {
+	Dir, Branch string
+}

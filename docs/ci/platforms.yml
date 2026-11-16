@@ -1,0 +1,65 @@
+# Draft for Willem (CSR-48): agents may not edit .github/ (AGENTS.md), so
+# this file waits here. To put it in place, copy it over
+# .github/workflows/ci.yml. It is that file with one change: the test job's
+# matrix runs the oldest and newest GitHub-hosted image per OS and arch the
+# README's "Supported platforms" names, instead of only macos-latest and
+# windows-latest. Labels checked on 2026-11-07 against
+# https://github.com/actions/runner-images (macOS 14 retired 2026-11-02).
+#   macos-15-intel   oldest macOS, x86-64
+#   macos-26         newest macOS, ARM64
+#   windows-2022     oldest Windows image, x86-64 (build 20348, passes the 19045 check)
+#   windows-2025     newest Windows image, x86-64
+#   windows-11-arm   Windows on ARM64; no -race, the race detector does not support windows/arm64
+# GitHub offers Windows Server images, not Windows 10 22H2; the server
+# builds run the same Win32 APIs the runner uses. When GitHub retires an
+# image (it keeps the two newest GA versions), bump that label here.
+# Linux stays on Forgejo (decision 2026-11-05-ci): Forgejo has no hosted
+# images, only the labels its runners register, and ours is `docker`, so
+# .forgejo/workflows/ci.yml stays as it is. GitHub's ubuntu-22.04 and
+# ubuntu-26.04-arm could cover the oldest Linux and ARM64 if you want them.
+# macOS/Windows checks and the GoReleaser snapshot; Linux checks run on Forgejo; see decision 2026-11-05-ci.
+name: ci
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-26, windows-2022, windows-2025]
+        race: [-race]
+        include:
+          - os: windows-11-arm
+            race: ''
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      # No gofmt here: Windows checkouts get CRLF, and Linux on Forgejo already checks formatting.
+      - run: go vet ./...
+      - run: staticcheck ./...
+      - run: go test ${{ matrix.race }} ./...
+      - run: govulncheck ./...
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.20.0
+          args: release --snapshot --clean

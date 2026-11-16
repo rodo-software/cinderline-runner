@@ -1,0 +1,18 @@
+# Pull request lookup by head label; publish retry; stranded branches pushed at start; no Review without a run
+
+- **Status:** Accepted
+- **Date:** 2026-11-07
+- **Source:** CSR-81, written by Willem after EMBER-115 kept a "merge problem" badge nothing could clear; the lookup rule decided by Willem on CSR-81 (no base/head endpoint: "we need a solution that works, guaranteed").
+
+## Decision
+
+1. **Pull request lookup.** The Forgejo forge finds the pull request of a branch by its recorded head branch, `head.label`, walking the list (`pulls?state=all&sort=recentupdate`, or `state=open` for an open one) page by page until it is found or the list ends. It does not use `GET pulls/{base}/{head}`: that endpoint returns an arbitrary one of the pull requests that ever shared a base and head (Gitea's query has no ordering), so on an issue run again after its pull request merged it can answer the old merged one. GitHub (`head=owner:branch`), GitLab (`source_branch=`) and Bitbucket (`source.branch.name`) already filter on the server and survive branch deletion; their tests pin that. The `Forge` interface is unchanged.
+2. **Publish retry.** Once the agent has finished and its work is committed, a failure in the base merge (fetch), push, or pull request open is tried again from the base merge, five attempts in all with waits of 30 s, 1, 2 and 4 minutes, as constants. Only after the fifth does the issue go to Review with the error comment, which names the unpushed commit and branch so a person can recover them. The retry is in memory, inside the run; the issue's status does not change during it (0091). The merge request to the forge and the merge wait are not retried: they already have their own handling.
+3. **Stranded branches.** At start, after the In progress reset, the runner lists the clones whose branch has commits no remote branch has (the push updates the clone's remote-tracking ref, so this is exact), pushes each, and for an issue in Review finds or opens its pull request. A clone whose issue is Done or Cancelled, or whose pull request is already merged or closed, is left alone, so a squash-merged branch is never pushed again. A refused push is logged and skipped, never forced. Every failure here only logs: recovery goes on.
+4. **No Review without a run.** A failure before the first agent turn (tools, team, issue, project, base branch, worktree, token) puts the issue back in To do with `expected_status: in_progress`, posts no comment, logs a warning, and the slot waits 60 s before its next claim, doubling per failure in a row up to 10 minutes; a run that starts resets the wait. The third failure in a row of the same issue gets one comment, so a persistent misconfiguration is visible; the issue still goes back to To do. This is the runner side of EMBER-139 (a waiting status); until that exists, To do plus the wait is the state.
+
+The app repository's decision 2026-11-04-merge-status ("`issue` turns `success` on a later merge") now holds after branch deletion too; its record and the parity list in the app repository's plan are to be updated there.
+
+## Reason
+
+On 2026-11-06/07 four small gaps chained: a fetch failure after the agent had finished moved EMBER-115 to Review with its commit unpushed; four more issues went to Review with no work done; and once the pull request was merged by hand with branch deletion, the lookup by `head.ref` found nothing, so `issue` stayed forever. Forgejo rewrites `head.ref` to `refs/pull/N/head` when the branch is gone but keeps `head.label` (seen on git.rodo.nl PR 53 and on codeberg.org), which makes the label the one key that survives. A Review that no agent earned, and an error comment for a transient outage, cost a person a round of triage each time.
