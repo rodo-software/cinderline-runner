@@ -280,6 +280,7 @@ func TestHooksRunIssueToReview(t *testing.T) {
 			cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: "Added hello.", Usage: cost(0.5)}}}}
 			ws := &workspace.Fake{
 				Prepares:   []workspace.PrepareReply{{Dir: "/clone"}},
+				Strandeds:  []workspace.StrandedReply{{}, {}}, // the start's and the run's
 				Commits:    []workspace.CommitReply{{Committed: true}, {Committed: true}, {Committed: true}},
 				MergeBases: []workspace.MergeBaseReply{{}, {}, {}},
 				Ancestors:  []workspace.IsAncestorReply{{Yes: false}, {Yes: false}, {Yes: false}},

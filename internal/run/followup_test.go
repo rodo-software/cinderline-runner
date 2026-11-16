@@ -63,6 +63,7 @@ func TestAFollowUpResumesTheKeptSession(t *testing.T) {
 			}}
 			ws := &workspace.Fake{
 				Prepares:     []workspace.PrepareReply{{Dir: clone}, {Dir: clone}},
+				Strandeds:    []workspace.StrandedReply{{}, {}},
 				Commits:      make([]workspace.CommitReply, 4), // the catch-up's and publish's of two runs
 				MergeBases:   make([]workspace.MergeBaseReply, 4),
 				FastForwards: []error{tt.ff},

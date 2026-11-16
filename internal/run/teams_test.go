@@ -491,7 +491,7 @@ func TestAMergeTheRunnerCannotVerifyIsUndone(t *testing.T) {
 			if l := r.reqs(t)[1].Last; l.Outcome != tt.outcome || (tt.outcome != "finished") != (l.Error != nil) {
 				t.Errorf("last = %+v, want %s", l, tt.outcome)
 			}
-			want := append([]string{"Prepare", "Commit", "MergeBase", "Head", "Log"}, tt.checks...)
+			want := append([]string{"Stranded", "Prepare", "Commit", "MergeBase", "Head", "Log"}, tt.checks...)
 			if tt.outcome != "finished" {
 				want = append(want, "Reset")
 			}

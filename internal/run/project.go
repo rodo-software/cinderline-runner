@@ -386,6 +386,8 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 		if !note.Kept.IsZero() {
 			j.Origin = "kept"
 		}
+	} else if err := p.pushBeforePrepare(ctx, ref, branch, generic); err != nil {
+		return notStarted(err)
 	} else if j.Dir, err = p.Workspace.Prepare(ctx, branch, base); err != nil {
 		return notStarted(err)
 	}
@@ -397,6 +399,29 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	}
 	handed, err = p.steps(ctx, c, j)
 	return err
+}
+
+// pushBeforePrepare pushes the issue's clone if it holds commits no remote
+// branch has, as Prepare replaces it; an error keeps the clone (CSR-180). A
+// generic run's clone is replaced as before: its commits are never published (CSR-75).
+func (p *Project) pushBeforePrepare(ctx context.Context, ref, branch string, generic bool) error {
+	if generic {
+		return nil
+	}
+	clones, err := p.Workspace.Stranded(ctx)
+	if err != nil {
+		return err // unknown, so the clone may not be replaced
+	}
+	for _, clone := range clones {
+		if clone.Branch != branch {
+			continue
+		}
+		if err := p.Workspace.Push(ctx, clone.Dir, branch); err != nil {
+			return fmt.Errorf("the clone has unpushed commits, kept: %w", err)
+		}
+		p.Log.Info("stranded branch pushed", "project", p.Config.Key, "issue", ref, "branch", branch)
+	}
+	return nil
 }
 
 // extraRepositories fetches the project's extra repositories and returns

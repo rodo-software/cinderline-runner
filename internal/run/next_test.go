@@ -74,7 +74,7 @@ func newStepRunOf(t *testing.T, ref string, api *fakeAPI, steps []string) *stepR
 		env: &environment.Fake{Cleanups: []error{nil}},
 		dir: t.TempDir(),
 	}
-	r.ws.Prepares = []workspace.PrepareReply{{Dir: r.dir}}
+	r.ws.Prepares, r.ws.Strandeds = []workspace.PrepareReply{{Dir: r.dir}}, []workspace.StrandedReply{{}}
 	if _, err := r.p.Secrets.Set(cfg, secrets.AnthropicCredential, "sk-ant"); err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +367,7 @@ func TestABudgetPausePushesFirst(t *testing.T) {
 	if err := r.run(t); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.wsMethods(); !slices.Equal(got, []string{"Prepare", "Commit", "MergeBase", "Commit", "Push"}) {
+	if got := r.wsMethods(); !slices.Equal(got, []string{"Stranded", "Prepare", "Commit", "MergeBase", "Commit", "Push"}) {
 		t.Errorf("workspace = %v, want the work committed and pushed", got)
 	}
 	if got := r.writesTo("/issues/CSR-7"); !slices.Equal(got, []string{`PATCH {"status":"blocked","expected_status":"in_progress"}`}) {
@@ -630,5 +630,41 @@ func TestInTree(t *testing.T) {
 		if got := inTree("CSR-1", issue); got != want {
 			t.Errorf("inTree(CSR-1, %q) = %v, want %v", issue, got, want)
 		}
+	}
+}
+
+// A fresh run replaces the issue's clone, so a clone with commits no remote
+// branch has is pushed first; while that push, or the listing, fails, the
+// clone is kept and the run does not start (CSR-180). Other issues' clones
+// are not the run's to push.
+func TestAStrandedCloneIsPushedBeforeItIsReplaced(t *testing.T) {
+	clones := []workspace.Clone{{Dir: "/runs/CSR-9", Branch: "cinderline/CSR-9"}, {Dir: "/runs/CSR-7", Branch: "cinderline/CSR-7"}}
+	for _, tt := range []struct {
+		name     string
+		stranded workspace.StrandedReply
+		push     error
+		want     []string
+	}{
+		{"pushed, then replaced", workspace.StrandedReply{Clones: clones}, nil, []string{"Stranded", "Push", "Prepare"}},
+		{"push fails, kept", workspace.StrandedReply{Clones: clones}, errors.New("forge down"), []string{"Stranded", "Push"}},
+		{"listing fails, kept", workspace.StrandedReply{Err: errors.New("docker down")}, nil, []string{"Stranded"}},
+		{"nothing stranded", workspace.StrandedReply{Clones: clones[:1]}, nil, []string{"Stranded", "Prepare"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newStepRun(t, failStep)
+			r.ws.Strandeds, r.ws.Pushes = []workspace.StrandedReply{tt.stranded}, []error{tt.push}
+			err := r.p.Hooks().Run(context.Background(), r.api.client(t), cinderline.Issue{Ref: "CSR-7", Team: &cinderline.IssueTeam{ID: 1}})
+			calls := r.ws.Calls()
+			if got := wsMethods(r.ws); len(got) < len(tt.want) || !slices.Equal(got[:len(tt.want)], tt.want) {
+				t.Fatalf("workspace = %v, want %v first", got, tt.want)
+			}
+			if len(tt.want) > 1 && tt.want[1] == "Push" && !slices.Equal(calls[1].Args, []any{"/runs/CSR-7", "cinderline/CSR-7"}) {
+				t.Errorf("push %v, want the issue's clone", calls[1].Args)
+			}
+			kept := tt.want[len(tt.want)-1] != "Prepare"
+			if kept != errors.Is(err, scheduler.ErrNotStarted) || kept && len(calls) != len(tt.want) {
+				t.Errorf("run = %v after %v; want ErrNotStarted and no Prepare only when the clone is kept", err, wsMethods(r.ws))
+			}
+		})
 	}
 }

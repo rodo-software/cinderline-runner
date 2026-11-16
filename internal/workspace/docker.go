@@ -208,7 +208,8 @@ func checkDir(dir string) error {
 // Prepare fetches, then makes a fresh clone for branch (always
 // cinderline/<REF>), continuing the remote branch if a run pushed one, else
 // starting from base. A clone left from before is removed, as today's runner
-// does with old worktrees; a paused run keeps its clone by not preparing.
+// does with old worktrees; a paused run keeps its clone by not preparing, and
+// callers push a clone with unpushed commits first (CSR-180).
 func (d *Docker) Prepare(ctx context.Context, branch, base string) (string, error) {
 	ref, ok := strings.CutPrefix(branch, name.Name+"/")
 	if !ok || !IssueRef.MatchString(ref) {
