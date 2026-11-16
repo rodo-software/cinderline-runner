@@ -251,7 +251,7 @@ func (f *Forgejo) do(ctx context.Context, method, u string, in, out any) error {
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := f.HTTP.Do(req)
+	resp, err := send(f.HTTP, req)
 	if err != nil {
 		return err
 	}

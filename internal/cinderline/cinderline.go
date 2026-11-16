@@ -114,7 +114,8 @@ type Client struct {
 	// Outbox is the file that keeps the writes Send could not deliver, on
 	// the state volume; empty keeps them in memory only (CSR-159).
 	Outbox string
-	// SendWaits are the waits between Send's tries; nil: 2 and 8 seconds.
+	// SendWaits are the waits between the tries of Send, of a read and of
+	// the run's next call; nil: 2 and 8 seconds.
 	SendWaits []time.Duration
 	// SyncWait and SyncWatchWait are the waits between syncs when the app
 	// sends no interval: while no turn runs and while one does. Zero:
@@ -603,8 +604,31 @@ func (c *capped) Write(p []byte) (int, error) {
 
 func issuePath(ref string) string { return "/issues/" + url.PathEscape(ref) }
 
-// call does one request with the default timeout.
+// call does a request with the default timeout. A read, or createAgentToken,
+// that Cinderline did not answer is tried again after SendWaits; pause holds
+// each try until a server-set Retry-After has passed (CSR-181). Other writes
+// are tried once: Send and next decide their own retries.
 func (c *Client) call(ctx context.Context, op, method, path string, in any, want int, out any) error {
+	var waits []time.Duration
+	// A repeated createAgentToken leaves at most an unused token, which DeleteAgentTokens removes with the rest.
+	if method == http.MethodGet || op == "createAgentToken" {
+		waits = c.sendWaits()
+	}
+	for i := 0; ; i++ {
+		err := c.callOnce(ctx, op, method, path, in, want, out)
+		if err == nil || i == len(waits) || !Unavailable(err) || ctx.Err() != nil {
+			return err
+		}
+		c.Log.Debug("runner api request failed, trying again", "op", op, "retry_in", waits[i], "err", err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(waits[i]):
+		}
+	}
+}
+
+func (c *Client) callOnce(ctx context.Context, op, method, path string, in any, want int, out any) error {
 	if err := c.pause(ctx); err != nil {
 		return fmt.Errorf("%s: %w", op, err)
 	}

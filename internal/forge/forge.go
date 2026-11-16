@@ -8,6 +8,8 @@ package forge
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 )
 
 // Forge talks to the host of one repository.
@@ -72,5 +74,27 @@ func New(kind, repository, token string) (Forge, error) {
 		return NewBitbucket(repository, token)
 	default:
 		return nil, fmt.Errorf("unsupported forge kind %q", kind)
+	}
+}
+
+// readWaits are the waits between the tries of a forge read; a variable so tests need not wait.
+var readWaits = []time.Duration{2 * time.Second, 8 * time.Second}
+
+// send sends req. A GET that got no answer, a 5xx or a 429 is tried again
+// after readWaits (CSR-181); any other request is sent once: Publish
+// retries the writes itself.
+func send(hc *http.Client, req *http.Request) (*http.Response, error) {
+	for i := 0; ; i++ {
+		resp, err := hc.Do(req)
+		retry := err != nil || resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
+		if !retry || req.Method != http.MethodGet || i == len(readWaits) || req.Context().Err() != nil {
+			return resp, err
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		if err := Sleep(req.Context(), readWaits[i]); err != nil {
+			return nil, err
+		}
 	}
 }

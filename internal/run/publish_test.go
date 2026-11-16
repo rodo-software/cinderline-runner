@@ -699,6 +699,37 @@ func TestPublishGivesUpAfterFiveAttempts(t *testing.T) {
 	}
 }
 
+// CSR-181 (EMBER-143 A): with Cinderline down, a publish whose base merge
+// conflicts still pushes the branch and opens the pull request; no
+// Cinderline read stands before the push, and the report and the move to
+// Review wait in the outbox.
+func TestPublishWithCinderlineDown(t *testing.T) {
+	noSleep(t)
+	r := newPubRun(false)
+	r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
+	r.api.handle = func(string, string) (reply, bool) { return reply{503, `{"message":"down"}`}, true }
+	p := project(t)
+	p.Log = slog.New(slog.NewTextHandler(&r.log, nil))
+	c := r.api.client(t)
+	if err := p.Publish(context.Background(), c, r.ws, r.forge, r.pub); err != nil {
+		t.Fatalf("Publish = %v, want the pull request opened", err)
+	}
+	if got := r.wsMethods(); !reflect.DeepEqual(got, []string{"Commit", "MergeBase", "IsAncestor", "Push"}) {
+		t.Errorf("workspace calls = %v, want one push", got)
+	}
+	if got := r.forgeMethods(); !reflect.DeepEqual(got, []string{"OpenPullRequest"}) {
+		t.Errorf("forge calls = %v, want the pull request", got)
+	}
+	for _, call := range r.api.calls {
+		if strings.HasPrefix(call, "GET ") {
+			t.Errorf("Publish read %q", call)
+		}
+	}
+	if !c.Waiting("CSR-1") {
+		t.Error("the report and the move are not kept for a replay")
+	}
+}
+
 // TestPullRequestTextRedacted: a known secret in the issue's title or body
 // never reaches the pull request (CSR-157).
 func TestPullRequestTextRedacted(t *testing.T) {

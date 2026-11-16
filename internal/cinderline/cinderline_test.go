@@ -451,6 +451,7 @@ func TestPollAfter(t *testing.T) {
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, `{"issues":[]}`)
 	})
+	c.SendWaits = []time.Duration{} // one try: the 500 step needs no retry
 	ctx := context.Background()
 	step := func(what string, call func() error, set string, code int, p Poll, want time.Duration, wantOK bool) {
 		t.Helper()
@@ -522,7 +523,7 @@ func TestNoTokensInLogsOrErrors(t *testing.T) {
 	for _, m := range modes {
 		for _, op := range operations {
 			c, _ := server(t, m.status(op), m.body(op), nil)
-			c.Log = log
+			c.Log, c.SendWaits = log, []time.Duration{0, 0} // the retry's log line too
 			_, err := op.call(context.Background(), c)
 			if (m.name == "error" || m.name == "garbage" && op.status != 204) && err == nil {
 				t.Errorf("%s %s: no error", m.name, op.name)
@@ -724,7 +725,9 @@ func TestRetryAfterWaitEndsWithContext(t *testing.T) {
 // Unavailable is true for what a deploy or an overload looks like, and
 // false for answers that will not change by waiting.
 func TestUnavailable(t *testing.T) {
-	_, err := New("http://127.0.0.1:1", runnerToken, version).GetProject(context.Background())
+	refused := New("http://127.0.0.1:1", runnerToken, version)
+	refused.SendWaits = []time.Duration{}
+	_, err := refused.GetProject(context.Background())
 	for _, tc := range []struct {
 		err  error
 		want bool
@@ -828,4 +831,63 @@ func TestUpgradeRequiredWaitsAnHour(t *testing.T) {
 			t.Errorf("first heartbeat after %v, want the normal interval", at[0].Sub(start))
 		}
 	})
+}
+
+// CSR-181: a read Cinderline did not answer is tried again after
+// SendWaits, held as long as a Retry-After asks; a write is sent once, and
+// an answer that will not change by waiting is not tried again.
+func TestReadRetries(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var at []time.Time
+		fail := 1
+		retryAfter := ""
+		c := memClient(func(w http.ResponseWriter, r *http.Request) {
+			at = append(at, time.Now())
+			if len(at) <= fail {
+				if retryAfter != "" {
+					w.Header().Set("Retry-After", retryAfter)
+				}
+				w.WriteHeader(503)
+				return
+			}
+			_, _ = io.WriteString(w, issueWithCommentsJSON)
+		})
+		ctx := context.Background()
+
+		if got, err := c.GetIssue(ctx, "CSR-9"); err != nil || got.Ref != "CSR-9" {
+			t.Fatalf("GetIssue = %v, %v; want CSR-9 after one retry", got.Ref, err)
+		}
+		if len(at) != 2 || at[1].Sub(at[0]) != 2*time.Second {
+			t.Errorf("%d requests, second after %v; want 2, after 2s", len(at), at[len(at)-1].Sub(at[0]))
+		}
+
+		at, fail, retryAfter = nil, 1, "30"
+		if _, err := c.GetIssue(ctx, "CSR-9"); err != nil {
+			t.Fatal(err)
+		}
+		if gap := at[1].Sub(at[0]); gap != 30*time.Second {
+			t.Errorf("retry after %v, want the Retry-After's 30s", gap)
+		}
+
+		at, fail, retryAfter = nil, 9, ""
+		var api *APIError
+		if _, err := c.GetIssue(ctx, "CSR-9"); !errors.As(err, &api) || api.StatusCode != 503 || len(at) != 3 {
+			t.Errorf("GetIssue = %v after %d requests; want the 503 after 3", err, len(at))
+		}
+
+		at, fail = nil, 9
+		if err := c.AddProgress(ctx, "CSR-9", "x"); err == nil || len(at) != 1 {
+			t.Errorf("AddProgress = %v after %d requests; want an error after 1", err, len(at))
+		}
+	})
+
+	c, _ := server(t, 404, `{"message":"Not found."}`, nil)
+	n := 0
+	c.HTTP.Transport = roundTrip(func(r *http.Request) (*http.Response, error) {
+		n++
+		return http.DefaultTransport.RoundTrip(r)
+	})
+	if _, err := c.GetIssue(context.Background(), "CSR-9"); err == nil || n != 1 {
+		t.Errorf("GetIssue = %v after %d requests; want the 404 after 1", err, n)
+	}
 }

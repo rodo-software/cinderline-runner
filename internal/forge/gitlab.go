@@ -236,7 +236,7 @@ func (g *GitLab) do(ctx context.Context, method, u string, in, out any) error {
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := g.HTTP.Do(req)
+	resp, err := send(g.HTTP, req)
 	if err != nil {
 		return err
 	}

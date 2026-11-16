@@ -55,10 +55,7 @@ func (c *Client) Send(ctx context.Context, w Write) {
 	}
 	c.outMu.Unlock()
 
-	waits := sendWaits
-	if c.SendWaits != nil {
-		waits = c.SendWaits
-	}
+	waits := c.sendWaits()
 	var err error
 	for i := 0; ; i++ {
 		if err = c.deliver(ctx, w); err == nil || !transient(err) || i == len(waits) || ctx.Err() != nil {
@@ -144,6 +141,14 @@ func (c *Client) Replay(ctx context.Context) {
 	}
 	c.out.replayWait = min(max(c.out.replayWait*2, minReplayWait), maxReplayWait)
 	c.out.replayAt = time.Now().Add(c.out.replayWait)
+}
+
+// sendWaits are Client.SendWaits, else the default ones.
+func (c *Client) sendWaits() []time.Duration {
+	if c.SendWaits != nil {
+		return c.SendWaits
+	}
+	return sendWaits
 }
 
 func (c *Client) deliver(ctx context.Context, w Write) error {
