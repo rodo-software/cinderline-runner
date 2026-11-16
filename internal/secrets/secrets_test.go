@@ -252,22 +252,16 @@ func TestGetRegistersForRedaction(t *testing.T) {
 	}
 }
 
-// CSR-97: one key in two workspaces on one URL keeps two sets of secrets, and
-// an entry filled in on upgrade still finds the secrets it was stored under.
+// CSR-97: one key in two workspaces on one URL keeps two sets of secrets.
 func TestProjectsInTwoWorkspacesDoNotCollide(t *testing.T) {
 	keyring.MockInit()
 	s := New(t.TempDir())
-	old := config.Project{URL: "https://a.example.com", Key: "WEB"}
+	def := config.Project{URL: "https://a.example.com", Key: "WEB", Workspace: config.DefaultWorkspace}
 	acme := config.Project{URL: "https://a.example.com", Key: "WEB", Workspace: "acme"}
-	if _, err := s.Set(old, RunnerToken, "old"); err != nil {
+	if _, err := s.Set(def, RunnerToken, "old"); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.Get(acme, RunnerToken); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("acme sees the other workspace's token: %v", err)
-	}
-	filled := old
-	filled.FillWorkspace("beta")
-	if v, _, err := s.Get(filled, RunnerToken); err != nil || v != "old" {
-		t.Fatalf("filled-in entry: %q, %v, want its old token", v, err)
 	}
 }

@@ -40,7 +40,7 @@ const forgejoImage = "codeberg.org/forgejo/forgejo:17.0.1@sha256:fcd19ff4ebc85fb
 const itCredential = "sk-ant-api-integration"
 
 // scripted is the default Environment with the agent's command swapped for
-// agentScript, so everything around it (image, network, MySQL, mounts,
+// agentScript, so everything around it (image, network, mounts,
 // environment, the Claude Client's argv and parsing) is the real thing.
 type scripted struct {
 	*environment.Docker
@@ -55,8 +55,8 @@ func (s *scripted) Run(ctx context.Context, spec environment.Spec) (string, erro
 
 // agentScript checks what a real agent relies on, then does the work: the
 // tools volume's Claude Code runs on the image's libc, the prompt arrives on
-// stdin, the credential arrives by name, MySQL is on the private network and
-// the clone is on the issue's branch. It commits hello.txt with the identity
+// stdin, the credential arrives by name and the clone is on the issue's
+// branch. It commits hello.txt with the identity
 // the runner set and leaves left.txt for the runner to commit (CSR-169). It
 // ends with Claude Code's JSON result.
 func agentScript(ref string) string {
@@ -64,7 +64,6 @@ func agentScript(ref string) string {
 ` + tools.Path + `/bin/claude --version
 grep '# Your task: ` + ref + `' >/dev/null
 test "$ANTHROPIC_API_KEY" = ` + itCredential + `
-getent hosts mysql
 test "$(git rev-parse --abbrev-ref HEAD)" = ` + name.Name + `/` + ref + `
 echo 'written by the scripted agent' > hello.txt
 git add hello.txt
@@ -107,44 +106,9 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	}
 	fg.HTTP = &http.Client{Timeout: 30 * time.Second, Transport: toHTTP{}}
 
-	status := "in_progress"
-	api := &fakeAPI{handle: func(key, body string) (reply, bool) {
-		switch key {
-		case "GET /project":
-			return reply{200, `{"key":"` + project + `","repository_url":"` + repo + `","forge":"forgejo","base_branch":""}`}, true
-		case "GET /issues/" + ref:
-			return reply{200, issueJSON(ref, status)}, true
-		case "GET /issues/" + ref + "/comments":
-			return reply{200, `{"comments":[]}`}, true
-		case "POST /issues/" + ref + "/comments":
-			return reply{201, `{"id":1,"body":"x","author":{"name":"runner"}}`}, true
-		case "POST /issues/" + ref + "/progress":
-			return reply{204, ""}, true
-		case "PATCH /issues/" + ref:
-			var r cinderline.UpdateIssueRequest
-			_ = json.Unmarshal([]byte(body), &r)
-			if r.Status != "" {
-				status = r.Status
-			}
-			return reply{200, issueJSON(ref, status)}, true
-		}
-		return reply{}, false
-	}}
-	c := api.client(t)
-
-	p := Project{Config: config.Project{URL: "http://cinderline.invalid", Key: project, Repository: repo}, State: t.TempDir(), Env: env, Log: log}
-	ws := &workspace.Docker{Project: project, Repository: repo + ".git", Token: token}
-	team := cinderline.Team{ID: 1, Name: "Dev", MaxMinutes: 10, Agents: []cinderline.TeamAgent{{Name: "Coder", Role: "coder", Client: "claude"}}}
-	branch := name.Name + "/" + ref
-
-	base, err := BaseBranch(ctx, c, fg)
-	if err != nil || base != "main" {
-		t.Fatalf("BaseBranch = %q, %v; want main", base, err)
-	}
-	dir, err := ws.Prepare(ctx, branch, base)
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := &Project{Config: config.Project{URL: "http://cinderline.invalid", Key: project, Repository: repo}, State: t.TempDir(), Env: env, Log: log}
+	p.Workspace = &workspace.Docker{Project: project, Repository: repo + ".git", Token: token}
+	p.Forge = func(string) (forge.Forge, error) { return fg, nil }
 	image, err := env.Image(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -153,38 +117,42 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl := &client.Claude{Project: project, Env: env, Credential: itCredential, MCPURL: "http://host.docker.internal/mcp", Tools: mount}
+	p.Clients = map[string]client.Client{"claude": &client.CLI{Name: "claude", Project: project, Env: env, Credential: itCredential, MCPURL: "http://host.docker.internal/mcp", Tools: mount}}
+	branch := name.Name + "/" + ref
 
-	// The prompt is the app's (EMBER-214); the scripted agent ignores it.
-	out, err := p.turn(ctx, c, cl, ref, client.Turn{
-		Dir: dir, Prompt: "Add hello.txt to " + ref + ".", MaxTurns: 10, MaxMinutes: team.MaxMinutes,
-		Author: gitAuthor(team, "Coder"),
-	})
-	if err != nil {
-		t.Fatalf("turn: %v", err)
+	// The prompt is the app's; the scripted agent only checks its first line.
+	app := &fakeApp{onNext: stepsOf(
+		`{"kind":"run","issue":{"ref":"`+ref+`","title":"Add hello.txt"},"agent":"Coder","session":"new","token":null,"prompt":"# Your task: `+ref+`\nAdd hello.txt."}`,
+		`{"kind":"publish"}`,
+	)}
+	jb := cinderline.Job{
+		Issue: cinderline.JobIssue{Ref: ref, Title: "Add hello.txt", Body: "Add a file."},
+		Team:  cinderline.Team{Name: "Dev", MaxMinutes: 10, MaxTurns: 10, Agents: []cinderline.TeamAgent{{Name: "Coder", Client: "claude"}}},
 	}
-	if out.Report != "Added hello.txt." {
-		t.Fatalf("turn = %+v, want the scripted agent's report", out)
+	started, err := p.run(ctx, app.client(t), cinderline.Project{Key: project, RepositoryURL: repo, Forge: "forgejo", IdleMinutes: 20}, jb)
+	if !started || err != nil {
+		t.Fatalf("run = %v, %v", started, err)
+	}
+	lasts := app.lasts()
+	if len(lasts) != 2 || lasts[0].Outcome != "finished" || deref(lasts[0].Report) != "Added hello.txt." {
+		t.Fatalf("lasts = %+v; want the scripted agent's finished turn and the publish", lasts)
 	}
 	if got := env.specs[0].Cmd[0]; got != tools.Path+"/bin/claude" {
 		t.Errorf("the Claude Client ran %q, want the tools volume's claude", got)
-	}
-
-	if err := p.Publish(ctx, c, ws, fg, Pub{
-		Ref: ref, Title: "Add hello.txt", Body: "Add a file.", Base: base, Dir: dir, Team: team, Forge: "forgejo",
-	}); err != nil {
-		t.Fatalf("Publish: %v", err)
 	}
 
 	pr, found, err := fg.FindPullRequest(ctx, branch)
 	if err != nil || !found {
 		t.Fatalf("FindPullRequest = %+v, %v, %v; want the run's pull request", pr, found, err)
 	}
+	if pub := lasts[1]; pub.Outcome != "published" || deref(pub.PullRequest) != pr.URL {
+		t.Errorf("publish facts = %+v, want %s", pub, pr.URL)
+	}
 	if got := get(t, ctx, forgejoURL+"/api/v1/repos/it/repo/raw/hello.txt?ref="+branch, token); got != "written by the scripted agent\n" {
 		t.Errorf("hello.txt on %s = %q", branch, got)
 	}
-	// CSR-169: the agent's commit and the runner's, and nothing else, carry
-	// the run's one identity as author and committer.
+	// The agent's commit and the runner's, and nothing else, carry the
+	// run's one identity as author and committer.
 	var commits []struct {
 		Commit struct{ Author, Committer struct{ Name, Email string } }
 	}
@@ -196,21 +164,6 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 		if c.Commit.Author != who || c.Commit.Committer != who {
 			t.Errorf("commit %d on %s by %+v, committed by %+v; want %+v", i, branch, c.Commit.Author, c.Commit.Committer, who)
 		}
-	}
-	api.mu.Lock()
-	final := status
-	api.mu.Unlock()
-	if final != "review" {
-		t.Errorf("issue status = %q, want review", final)
-	}
-	var report string
-	for _, w := range api.writes() {
-		if strings.HasPrefix(w, "POST /issues/"+ref+"/comments") {
-			report = w
-		}
-	}
-	if !strings.Contains(report, pr.URL) {
-		t.Errorf("finish report %q lacks the pull request %s", report, pr.URL)
 	}
 
 	// Review item 9: nothing labelled is left behind.

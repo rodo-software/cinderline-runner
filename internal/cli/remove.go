@@ -2,7 +2,6 @@ package cli
 
 import (
 	"cmp"
-	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,8 +10,6 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
-	"github.com/rodo-software/cinderline-runner/internal/localapi"
-	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -26,10 +23,7 @@ import (
 func (c *CLI) remove(args []string) int {
 	f := c.flags("remove", "[-url URL] [-workspace SLUG] KEY")
 	instance, ws := projectFlags(f)
-	if err := f.Parse(args); err != nil || f.NArg() != 1 {
-		if err == nil {
-			f.Usage()
-		}
+	if !c.parsed(f, args, 1) {
 		return 2
 	}
 	cfg, err := c.loadConfig()
@@ -46,26 +40,17 @@ func (c *CLI) remove(args []string) int {
 		}
 	}
 	cfg.Projects = without(cfg.Projects, p)
-	if err := c.saveConfig(cfg); err != nil {
+	if err := cfg.Save(c.Paths.File); err != nil {
 		return c.fail(err)
 	}
 	// Before Docker: the reload ends the project's runs, which hold its volumes.
-	if err := (localapi.Client{Socket: c.Paths.Socket}).Reload(context.Background()); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
-		fmt.Fprintf(c.Stderr, "warning: the running %s did not reload, restart it: %v\n", name.Name, err)
-	}
+	c.reload()
 	// Docker names carry only the ID, so a namesake on another instance still uses them.
 	shared := slices.ContainsFunc(cfg.Projects, func(q config.Project) bool { return q.ID() == p.ID() })
 	if !shared {
 		label := "label=" + workspace.ProjectLabel(p.ID())
-		for _, step := range [][2][]string{
-			{{"ps", "--all", "--quiet", "--filter", label}, {"rm", "--force", "--volumes"}},
-			{{"network", "ls", "--quiet", "--filter", label}, {"network", "rm"}},
-			{{"volume", "ls", "--quiet", "--filter", label}, {"volume", "rm", "--force"}},
-		} {
-			if err := c.dockerRemove(step[0], step[1]); err != nil {
-				fmt.Fprintf(c.Stderr, "warning: %s's Docker volumes, with its clones and sign-ins, are not all removed; list them with `docker volume ls --filter %s`: %v\n", p.Key, label, err)
-				break
-			}
+		if err := c.removeLabelled(label); err != nil {
+			fmt.Fprintf(c.Stderr, "warning: %s's Docker volumes, with its clones and sign-ins, are not all removed; list them with `docker volume ls --filter %s`: %v\n", p.Key, label, err)
 		}
 	}
 	if err := os.RemoveAll(run.PausedDir(c.Paths.State, p)); err != nil {

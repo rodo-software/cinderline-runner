@@ -7,9 +7,7 @@ import (
 	"testing"
 )
 
-// The Bitbucket cases of the app repository's runner/lib.forge.test.mjs at
-// commit ecde51a (decision 2026-11-05-legacy-reference, amendments), run
-// against recorded answers instead of a network.
+// The Bitbucket forge against recorded answers instead of a network.
 
 // recordedBitbucket is recorded, for a Bitbucket Forge.
 func recordedBitbucket(t *testing.T, replies ...reply) (*Bitbucket, *[]request) {
@@ -29,8 +27,8 @@ const (
 	bbPR    = `{"id":8,"state":"OPEN","source":{"branch":{"name":"cinderline/EMB-3"},"commit":{"hash":"abc123"}},"links":{"html":{"href":"https://bitbucket.org/ws/repo/pull-requests/8"}}}`
 )
 
-// Ported from "parseRepository treats bitbucket.org as Bitbucket, in every
-// URL form": the API is always api.bitbucket.org, and only bitbucket.org is
+// parseRepository treats bitbucket.org as Bitbucket, in every
+// URL form: the API is always api.bitbucket.org, and only bitbucket.org is
 // Bitbucket Cloud (decision 2026-11-04-bitbucket-cloud).
 func TestBitbucketRepositoryForms(t *testing.T) {
 	for _, repository := range []string{
@@ -54,7 +52,7 @@ func TestBitbucketRepositoryForms(t *testing.T) {
 	}
 
 	for _, bad := range []string{
-		"https://bitbucket.org.evil.example/o/r", // legacy: not Bitbucket
+		"https://bitbucket.org.evil.example/o/r", // not Bitbucket
 		"https://bitbucket.example.com/ws/repo",  // Data Center is not supported
 		"https://bitbucket.org:8443/ws/repo",
 		"https://bitbucket.org/ws/sub/repo",
@@ -85,8 +83,8 @@ func TestBitbucketDefaultBranch(t *testing.T) {
 	}
 }
 
-// Ported from "openPullRequest opens a Bitbucket pull request with a bearer
-// header": its id is the number, links.html.href the URL.
+// OpenPullRequest opens a Bitbucket pull request with a bearer
+// header: its id is the number, links.html.href the URL.
 func TestBitbucketOpenPullRequest(t *testing.T) {
 	b, reqs := recordedBitbucket(t, reply{201, bbPR})
 	in := input
@@ -122,8 +120,8 @@ func TestBitbucketOpenPullRequest(t *testing.T) {
 	}
 }
 
-// Ported from "openPullRequest finds the open Bitbucket pull request of the
-// branch when it refuses a duplicate": Bitbucket answers a duplicate with a
+// OpenPullRequest finds the open Bitbucket pull request of the
+// branch when it refuses a duplicate: Bitbucket answers a duplicate with a
 // plain 400, so any 400 looks for the open one first.
 func TestBitbucketOpenPullRequestFindsEarlier(t *testing.T) {
 	b, reqs := recordedBitbucket(t,
@@ -137,8 +135,8 @@ func TestBitbucketOpenPullRequestFindsEarlier(t *testing.T) {
 	wantURLs(t, *reqs, "POST "+bbPulls, "GET "+bbPulls+"?state=OPEN&q=source.branch.name%3D%22cinderline%2FEMB-3%22")
 }
 
-// Ported from "openPullRequest reports a Bitbucket 400 that is not a
-// duplicate", and the Bitbucket side of "openPullRequest reports a refusal
+// OpenPullRequest reports a Bitbucket 400 that is not a
+// duplicate, and the Bitbucket side of "openPullRequest reports a refusal
 // with the forge's answer": the first answer, without the token.
 func TestBitbucketOpenPullRequestRefused(t *testing.T) {
 	b, _ := recordedBitbucket(t, reply{400, `{"error":{"message":"bad"}}`}, reply{200, `{"values":[]}`})
@@ -170,8 +168,8 @@ func TestBitbucketFindPullRequest(t *testing.T) {
 	wantURLs(t, (*reqs)[:1], "GET "+bbPulls+"?state=OPEN&q=source.branch.name%3D%22cinderline%2FEMB-3%22")
 }
 
-// Ported from "requestMerge on Bitbucket asks a person to merge and never
-// calls the API" (decision 2026-11-04-bitbucket-cloud).
+// RequestMerge on Bitbucket asks a person to merge and never
+// calls the API (decision 2026-11-04-bitbucket-cloud).
 func TestBitbucketRequestMerge(t *testing.T) {
 	b, reqs := recordedBitbucket(t)
 	err := b.RequestMerge(context.Background(), PullRequest{Number: 8})
@@ -183,9 +181,8 @@ func TestBitbucketRequestMerge(t *testing.T) {
 	}
 }
 
-// Legacy has no Bitbucket pullRequestOutcome: it asked api.bitbucket.org a
-// Forgejo route and always failed. This reads the newest pull request of
-// the branch, then the build statuses of its head commit, as the other forges.
+// The merge state reads the newest pull request of the branch, then the
+// build statuses of its head commit, as the other forges.
 func TestBitbucketMergeState(t *testing.T) {
 	const list = "GET " + bbPulls + "?q=source.branch.name%3D%22cinderline%2FEMB-3%22&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&sort=-created_on"
 	const statuses = "GET " + bbRepo + "/commit/abc123/statuses"

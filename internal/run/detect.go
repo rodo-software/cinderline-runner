@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
@@ -25,12 +24,6 @@ var loginFiles = map[string]string{
 }
 
 var versionPat = regexp.MustCompile(`[0-9]+\.[0-9]+(?:\.[0-9]+)+`)
-
-// clientCache is a thread-safe cache of the last detection result.
-type clientCache struct {
-	mu  sync.Mutex
-	got []cinderline.ReportClient
-}
 
 func allMissingBinary() []cinderline.ReportClient {
 	var r []cinderline.ReportClient
@@ -187,34 +180,4 @@ func checkHTTP(ctx context.Context, exec workspace.Exec, mount tools.Mount, imag
 		log.Warn("key check failed", "client", name, "err", err)
 	}
 	return "ready"
-}
-
-// Detect reruns client detection and caches the result. Thread-safe.
-func (p *Project) Detect(ctx context.Context) []cinderline.ReportClient {
-	if p.clients == nil {
-		p.clients = &clientCache{}
-	}
-	p.clients.mu.Lock()
-	defer p.clients.mu.Unlock()
-	if p.detect != nil {
-		p.clients.got = p.detect(ctx)
-	}
-	return p.clients.got
-}
-
-// detected returns the cached detection result, running detection once if
-// needed. Thread-safe.
-func (p *Project) detected(ctx context.Context) []cinderline.ReportClient {
-	if p.clients == nil {
-		p.clients = &clientCache{}
-	}
-	p.clients.mu.Lock()
-	defer p.clients.mu.Unlock()
-	if p.clients.got != nil {
-		return p.clients.got
-	}
-	if p.detect != nil {
-		p.clients.got = p.detect(ctx)
-	}
-	return p.clients.got
 }

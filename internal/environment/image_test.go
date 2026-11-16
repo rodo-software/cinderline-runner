@@ -144,14 +144,6 @@ func TestImageBuiltWhenNotPinned(t *testing.T) {
 	localOnly(t, d, calls)
 }
 
-// CSR-49: config.json "build_image": true (decision on CSR-49, option A) skips GHCR.
-func TestImageBuiltWhenTold(t *testing.T) {
-	pin(t, testDigest, dockerfileSum())
-	d, calls := scripted(nil, nil)
-	d.BuildImage = true
-	localOnly(t, d, calls)
-}
-
 // CSR-49: the workflow publishes the image the runner pulls; arm64 only
 // (decision 2026-11-12-ci-speedups).
 func TestWorkflowDraft(t *testing.T) {

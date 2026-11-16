@@ -14,9 +14,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
-	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 )
 
 var (
@@ -41,17 +41,27 @@ func Listen(path string) (net.Listener, error) {
 	return net.Listen("unix", path)
 }
 
+// ProjectStatus is what the daemon tells of one project.
+type ProjectStatus struct {
+	Project     string    `json:"project"`
+	Connected   bool      `json:"connected"`            // the last poll succeeded
+	LastPoll    time.Time `json:"last_poll,omitzero"`   // the last successful poll
+	Issue       string    `json:"issue,omitempty"`      // the run in flight
+	LastError   string    `json:"last_error,omitempty"` // the last failure; cleared by the next successful poll
+	LastErrorAt time.Time `json:"last_error_at,omitzero"`
+}
+
 // Status is the answer of GET /status.
 type Status struct {
-	Version  string                    `json:"version"`
-	PID      int                       `json:"pid"` // the daemon's process id; stop --drain and update wait for it to exit
-	Projects []scheduler.ProjectStatus `json:"projects"`
+	Version  string          `json:"version"`
+	PID      int             `json:"pid"` // the daemon's process id; stop --drain and update wait for it to exit
+	Projects []ProjectStatus `json:"projects"`
 }
 
 // Handlers are what the daemon does for each endpoint.
 type Handlers struct {
 	Version string
-	Status  func() []scheduler.ProjectStatus
+	Status  func() []ProjectStatus
 	Reload  func() error
 	Stop    func()
 	// Drain makes the daemon finish its runs in flight, take no new work, and exit.

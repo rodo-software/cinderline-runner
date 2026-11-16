@@ -120,8 +120,8 @@ func TestCodexRunFresh(t *testing.T) {
 		`{"type":"turn.completed","usage":{"input_tokens":5,"cached_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0}}`
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: out}}}
 	var docker [][]string
-	c := &Codex{
-		Project: "CSR", Env: env, Key: "sk-oa", MCPURL: "https://cs.example/mcp",
+	c := &CLI{
+		Name: "codex", Project: "CSR", Env: env, Credential: "sk-oa", MCPURL: "https://cs.example/mcp",
 		Tools: tools.Mount{
 			Args:        []string{"-v", "tools:/opt/cinderline:ro"},
 			Env:         []string{"DISABLE_AUTOUPDATER=1"},
@@ -167,7 +167,7 @@ func TestCodexRunFresh(t *testing.T) {
 // fails before Codex printed one; the failure is returned with the result.
 func TestCodexRunResumeFails(t *testing.T) {
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: "crash", Err: environment.ErrTimeout}}}
-	c := &Codex{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	c := &CLI{Name: "codex", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
 	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", SessionID: "th_1"})
 	if !errors.Is(err, environment.ErrTimeout) || res.SessionID != "th_1" || res.Tail != "crash" {
 		t.Errorf("Run = %+v, %v", res, err)
@@ -180,7 +180,7 @@ func TestCodexRunResumeFails(t *testing.T) {
 func TestCodexRunStateVolumeFails(t *testing.T) {
 	env := &environment.Fake{}
 	boom := errors.New("docker broke")
-	c := &Codex{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
+	c := &CLI{Name: "codex", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
 	if _, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"}); !errors.Is(err, boom) {
 		t.Errorf("Run err = %v, want %v", err, boom)
 	}

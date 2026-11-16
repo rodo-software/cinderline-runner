@@ -1,3 +1,5 @@
+Superseded by decision 2026-11-16-runner-protocol-v2
+
 # The app decides each step of a run and writes its prompt
 
 - **Status:** Accepted

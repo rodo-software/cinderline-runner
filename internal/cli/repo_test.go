@@ -29,7 +29,7 @@ func lsRemoteDocker(good string, seen *[]string) func(context.Context, []string,
 // add-repo re-asks a URL outside the allowlist, a bad ref, and everything
 // after a token ls-remote rejects; list and remove-repo follow (CSR-160).
 func TestAddListRemoveRepo(t *testing.T) {
-	web := config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/web"}
+	web := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/web"}
 	c, out, errb := newCLI(t, lines(
 		"https://tok@git.example.com/o/lib", // credentials in the URL
 		"https://git.example.com/o/web",     // the project's own
@@ -90,7 +90,7 @@ func TestAddListRemoveRepo(t *testing.T) {
 // Removing the project removes its extra repositories' tokens too.
 func TestRemoveProjectDeletesExtraTokens(t *testing.T) {
 	r := config.ExtraRepository{URL: "https://git.example.com/o/lib"}
-	web := config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/web", ExtraRepositories: []config.ExtraRepository{r}}
+	web := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/web", ExtraRepositories: []config.ExtraRepository{r}}
 	c, _, errb := newCLI(t, "")
 	c.exec = func(context.Context, []string, ...string) (string, error) { return "", nil }
 	saveConfig(t, c, web)

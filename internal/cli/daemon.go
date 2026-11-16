@@ -22,10 +22,7 @@ var drainPoll = time.Second // how often stop --drain asks the daemon what it st
 func (c *CLI) run(args []string) int {
 	f := c.flags("run", "[-v]")
 	verbose := f.Bool("v", false, "also log to stderr, and log Debug lines")
-	if err := f.Parse(args); err != nil || f.NArg() > 0 {
-		if err == nil {
-			f.Usage()
-		}
+	if !c.parsed(f, args, 0) {
 		return 2
 	}
 	if c.pathsErr != nil {
@@ -46,7 +43,7 @@ func (c *CLI) run(args []string) int {
 
 // status prints the daemon's version and one line per project.
 func (c *CLI) status(args []string) int {
-	if !c.noArgs("status", args) {
+	if !c.parsed(c.flags("status", ""), args, 0) {
 		return 2
 	}
 	if c.pathsErr != nil {
@@ -85,10 +82,7 @@ func (c *CLI) status(args []string) int {
 func (c *CLI) logs(args []string) int {
 	f := c.flags("logs", "[-n LINES]")
 	n := f.Int("n", 100, "number of lines to print before following")
-	if err := f.Parse(args); err != nil || f.NArg() > 0 {
-		if err == nil {
-			f.Usage()
-		}
+	if !c.parsed(f, args, 0) {
 		return 2
 	}
 	if c.pathsErr != nil {
@@ -106,10 +100,7 @@ func (c *CLI) logs(args []string) int {
 func (c *CLI) stopDaemon(args []string) int {
 	f := c.flags("stop", "[--drain]")
 	drainFlag := f.Bool("drain", false, "let current runs finish before stopping")
-	if err := f.Parse(args); err != nil || f.NArg() > 0 {
-		if err == nil {
-			f.Usage()
-		}
+	if !c.parsed(f, args, 0) {
 		return 2
 	}
 	if c.pathsErr != nil {
@@ -193,16 +184,4 @@ func (c *CLI) drainAndWait(ctx context.Context) error {
 		case <-time.After(drainPoll):
 		}
 	}
-}
-
-// noArgs reports whether args is empty, printing the command's usage when it is not.
-func (c *CLI) noArgs(cmd string, args []string) bool {
-	f := c.flags(cmd, "")
-	if err := f.Parse(args); err != nil || f.NArg() > 0 {
-		if err == nil {
-			f.Usage()
-		}
-		return false
-	}
-	return true
 }

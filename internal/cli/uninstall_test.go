@@ -14,13 +14,14 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 var (
-	uninstallA     = config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
-	uninstallB     = config.Project{URL: "https://b.example.com", Key: "API", Repository: "https://git.example.com/o/b"}
+	uninstallA     = config.Project{Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
+	uninstallB     = config.Project{Workspace: "default", URL: "https://b.example.com", Key: "API", Repository: "https://git.example.com/o/b"}
 	uninstallKinds = []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey, secrets.GeminiKey}
 )
 
@@ -75,18 +76,20 @@ func untouched(t *testing.T, c *CLI, d *fakeDocker, removed []string) {
 }
 
 // TestUninstallDockerByLabel: containers, networks and volumes by the project
-// label key, the tools volumes by name, and the runner's own images.
+// label key, the unlabelled tools and state volumes by name, and every image
+// the runner built or pulled, each once.
 func TestUninstallDockerByLabel(t *testing.T) {
 	c, d, _, _, errb := uninstallCLI(t, "")
 	label := "label=" + name.Name + ".project"
-	tools := "name=" + name.Name + "-tools-"
-	images := "reference=" + name.Name + "-default"
+	volumes := "docker volume ls --quiet --filter name=" + name.Name + "-"
+	images := "docker image ls --quiet --filter reference=" + name.Name + "-default --filter reference=" + name.Name + "-proxy" +
+		" --filter reference=" + name.Name + "-*-agent --filter reference=" + environment.PublishedImage
 	d.lists = map[string]string{
-		"docker ps --all --quiet --filter " + label:                            "c1\nc2\n",
-		"docker network ls --quiet --filter " + label:                          "n1\n",
-		"docker volume ls --quiet --filter " + label:                           "v1\nv2\n",
-		"docker volume ls --quiet --filter " + tools:                           name.Name + "-tools-abc\n",
-		"docker image ls --format {{.Repository}}:{{.Tag}} --filter " + images: name.Name + "-default:123abc\n",
+		"docker ps --all --quiet --filter " + label:   "c1\nc2\n",
+		"docker network ls --quiet --filter " + label: "n1\n",
+		"docker volume ls --quiet --filter " + label:  "v1\nv2\n",
+		volumes: name.Name + "-tools-abc\n" + name.Name + "-WEB-state\n" + name.Name + "-acme-WEB-state-claude\n" + name.Name + "-runner_data\nmy-" + name.Name + "-WEB-state\n",
+		images:  "i2\ni1\ni2\n",
 	}
 	if code := c.Run([]string{"uninstall", "--yes"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
@@ -98,10 +101,10 @@ func TestUninstallDockerByLabel(t *testing.T) {
 		{"docker", "network", "rm", "n1"},
 		{"docker", "volume", "ls", "--quiet", "--filter", label},
 		{"docker", "volume", "rm", "--force", "v1", "v2"},
-		{"docker", "volume", "ls", "--quiet", "--filter", tools},
-		{"docker", "volume", "rm", "--force", name.Name + "-tools-abc"},
-		{"docker", "image", "ls", "--format", "{{.Repository}}:{{.Tag}}", "--filter", images},
-		{"docker", "image", "rm", "--force", name.Name + "-default:123abc"},
+		strings.Fields(volumes),
+		{"docker", "volume", "rm", "--force", name.Name + "-WEB-state", name.Name + "-acme-WEB-state-claude", name.Name + "-tools-abc"},
+		strings.Fields(images),
+		{"docker", "image", "rm", "--force", "i1", "i2"},
 	}
 	if !reflect.DeepEqual(d.calls, want) {
 		t.Errorf("docker calls\n got %q\nwant %q", d.calls, want)

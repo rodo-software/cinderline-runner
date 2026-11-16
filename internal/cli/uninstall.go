@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 
+	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -20,10 +23,7 @@ import (
 func (c *CLI) uninstall(args []string) int {
 	f := c.flags("uninstall", "[-yes]")
 	yes := f.Bool("yes", false, "proceed without asking for confirmation")
-	if err := f.Parse(args); err != nil || f.NArg() > 0 {
-		if err == nil {
-			f.Usage()
-		}
+	if !c.parsed(f, args, 0) {
 		return 2
 	}
 	cfg, err := c.loadConfig()
@@ -52,18 +52,20 @@ func (c *CLI) uninstall(args []string) int {
 	if err := removeService(exe); err != nil {
 		fmt.Fprintln(c.Stderr, "warning: could not remove the service (it may not be installed):", err)
 	}
-	label := "label=" + name.Name + ".project"
-	steps := [][2][]string{
-		{{"ps", "--all", "--quiet", "--filter", label}, {"rm", "--force", "--volumes"}},
-		{{"network", "ls", "--quiet", "--filter", label}, {"network", "rm"}},
-		{{"volume", "ls", "--quiet", "--filter", label}, {"volume", "rm", "--force"}},
-		{{"volume", "ls", "--quiet", "--filter", "name=" + name.Name + "-tools-"}, {"volume", "rm", "--force"}},
-		{{"image", "ls", "--format", "{{.Repository}}:{{.Tag}}", "--filter", "reference=" + name.Name + "-default"}, {"image", "rm", "--force"}},
+	err = c.removeLabelled("label=" + name.Name + ".project")
+	if err == nil {
+		// The tools volumes carry no label, nor does a state volume Docker made for a mount.
+		err = c.dockerRemove([]string{"volume", "ls", "--quiet", "--filter", "name=" + name.Name + "-"}, []string{"volume", "rm", "--force"}, unlabelledVolume.MatchString)
 	}
-	for _, step := range steps {
-		if err := c.dockerRemove(step[0], step[1]); err != nil {
-			return c.fail(fmt.Errorf("start Docker and run %s uninstall again: %w", name.Name, err))
-		}
+	if err == nil {
+		// The default image, built or pulled, the proxy's, and those compose built for an agent service.
+		err = c.dockerRemove([]string{"image", "ls", "--quiet",
+			"--filter", "reference=" + name.Name + "-default", "--filter", "reference=" + name.Name + "-proxy",
+			"--filter", "reference=" + name.Name + "-*-agent", "--filter", "reference=" + environment.PublishedImage,
+		}, []string{"image", "rm", "--force"}, nil)
+	}
+	if err != nil {
+		return c.fail(fmt.Errorf("start Docker and run %s uninstall again: %w", name.Name, err))
 	}
 	for _, p := range cfg.Projects {
 		for _, k := range secrets.Kinds(p) {
@@ -89,9 +91,28 @@ func (c *CLI) uninstall(args []string) int {
 	return 0
 }
 
-// dockerRemove lists what list finds and removes it; a list that names
-// nothing runs no rm argument.
-func (c *CLI) dockerRemove(list, rm []string) error {
+// unlabelledVolume matches the runner's volumes that removeLabelled misses:
+// the tools volumes and the projects' state volumes, per client or not.
+var unlabelledVolume = regexp.MustCompile("^" + name.Name + `-(tools-.+|.+-state(-[a-z]+)?)$`)
+
+// removeLabelled removes the containers, networks and volumes with label,
+// which names one project or, without a value, all of them.
+func (c *CLI) removeLabelled(label string) error {
+	for _, step := range [][2][]string{
+		{{"ps", "--all", "--quiet", "--filter", label}, {"rm", "--force", "--volumes"}},
+		{{"network", "ls", "--quiet", "--filter", label}, {"network", "rm"}},
+		{{"volume", "ls", "--quiet", "--filter", label}, {"volume", "rm", "--force"}},
+	} {
+		if err := c.dockerRemove(step[0], step[1], nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dockerRemove lists what list finds and removes it, only what keep says
+// when it is set; a list that names nothing runs no rm argument.
+func (c *CLI) dockerRemove(list, rm []string, keep func(string) bool) error {
 	exec := c.exec
 	if exec == nil {
 		exec = workspace.RunCommand
@@ -101,6 +122,11 @@ func (c *CLI) dockerRemove(list, rm []string) error {
 		return err
 	}
 	ids := strings.Fields(out)
+	if keep != nil {
+		ids = slices.DeleteFunc(ids, func(id string) bool { return !keep(id) })
+	}
+	slices.Sort(ids)
+	ids = slices.Compact(ids) // an image with two tags is listed twice
 	if len(ids) == 0 {
 		return nil
 	}

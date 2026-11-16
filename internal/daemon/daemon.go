@@ -1,6 +1,6 @@
 // Package daemon is the service process: it holds the local API socket, writes
-// the rotating log, and runs the scheduler over the configured projects until
-// it is stopped.
+// the rotating log, and runs one loop per configured project until it is
+// stopped.
 package daemon
 
 import (
@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -23,7 +22,6 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/run"
-	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
@@ -42,11 +40,9 @@ const detectInterval = time.Hour
 
 // daemon is the state Run shares with the local API handlers.
 type daemon struct {
-	sched *scheduler.Scheduler
-
 	mu       sync.Mutex
-	projects []scheduler.ProjectStatus // the config's projects; one without a slot carries its error
-	slotted  map[string]bool
+	projects []localapi.ProjectStatus // the config's projects; one that does not run carries its error
+	live     map[string]*run.Project  // the projects that run, by ID
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -54,7 +50,7 @@ type daemon struct {
 func Run(ctx context.Context, o Options) error {
 	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	// Decision 2026-11-05-runner-rewrite-details point 14: stop at once; recovery at the next start returns a run in flight to To do.
+	// A plain stop cancels a run in flight at once; the app blocks its issue at the next poll after the restart.
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 
@@ -74,7 +70,7 @@ func Run(ctx context.Context, o Options) error {
 	} else {
 		log = slog.New(redact.Handler(slog.NewJSONHandler(lf, nil)))
 	}
-	d := &daemon{sched: &scheduler.Scheduler{Log: log}}
+	d := &daemon{}
 
 	reloads := make(chan chan error)
 	drain := make(chan struct{})
@@ -116,15 +112,13 @@ func Run(ctx context.Context, o Options) error {
 	var reply chan error
 	var reloadErr error
 	for {
-		// Decision 2026-11-05-reload-config: a reload restarts the whole scheduler, as stop then start.
+		// Decision 2026-11-05-reload-config: a reload restarts every loop, as stop then start.
 		runCtx, cancel := context.WithCancel(ctx)
 		var wg sync.WaitGroup
-		slots := d.slots(runCtx, &wg, log, o, cfg)
-		d.sched.MergeInterval = cfg.MergePoll() // no Run is going: the last one returned
-		d.sched.Drain = drain
-		schedDone := make(chan struct{})
-		wg.Go(func() { d.sched.Run(runCtx, slots); close(schedDone) })
-		log.Info("scheduler started", "slots", len(slots))
+		n := d.start(runCtx, &wg, log, o, cfg, drain)
+		loopsDone := make(chan struct{})
+		go func() { wg.Wait(); close(loopsDone) }()
+		log.Info("projects started", "projects", n)
 		if reply != nil {
 			reply <- reloadErr
 		}
@@ -132,7 +126,7 @@ func Run(ctx context.Context, o Options) error {
 		case <-drain:
 			log.Info("draining")
 			select {
-			case <-schedDone:
+			case <-loopsDone:
 			case <-ctx.Done():
 			}
 			cancel()
@@ -155,136 +149,88 @@ func Run(ctx context.Context, o Options) error {
 			reloadErr = err
 			cancel()
 			wg.Wait()
-			log.Info("scheduler stopped")
+			log.Info("projects stopped")
 		}
 	}
 }
 
-// slots builds a client and a slot for every project with a runner token, and
-// runs each client's heartbeats in wg until ctx is done. A project without a
-// token gets no slot; its error shows in the status.
-func (d *daemon) slots(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger, o Options, cfg *config.Config) []scheduler.Slot {
+// start builds a client and a project for every configured project with a
+// runner token and runs its loop and its hourly client detection in wg
+// until ctx is done, or until drain once its loop is done. A project
+// without a token does not run; its error shows in the status. It returns
+// how many run.
+func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger, o Options, cfg *config.Config, drain <-chan struct{}) int {
 	sec := secrets.New(o.Paths.State)
-	var slots []scheduler.Slot
-	projects := make([]scheduler.ProjectStatus, 0, len(cfg.Projects))
-	slotted := map[string]bool{}
+	projects := make([]localapi.ProjectStatus, 0, len(cfg.Projects))
+	live := map[string]*run.Project{}
 	for _, p := range cfg.Projects {
 		id := p.ID()
-		st := scheduler.ProjectStatus{Project: id}
-		// Volumes, containers and networks are named by the ID, so two
-		// projects with one ID would share them (decision 2026-11-11-audit-fixes, CSR-97).
-		if slotted[id] {
-			log.Error("another project has the same key, project not started", "project", id, "url", p.URL)
-			st.LastError, st.LastErrorAt = "another project has key "+id+": only the first one runs; remove one of them", time.Now()
+		st := localapi.ProjectStatus{Project: id}
+		fail := func(msg string, err error) {
+			log.Error(msg, "project", id, "err", err)
+			st.LastError, st.LastErrorAt = err.Error(), time.Now()
 			projects = append(projects, st)
+		}
+		// Volumes, containers and networks are named by the ID, so two
+		// projects with one ID would share them.
+		if live[id] != nil {
+			fail("another project has the same key, project not started", errors.New("another project has key "+id+": only the first one runs; remove one of them"))
 			continue
 		}
 		token, _, err := sec.Get(p, secrets.RunnerToken)
 		if err != nil {
-			log.Error("no runner token, project not started", "project", id, "err", err)
-			st.LastError, st.LastErrorAt = err.Error(), time.Now()
-			projects = append(projects, st)
+			fail("no runner token, project not started", err)
 			continue
 		}
 		c := cinderline.New(p.URL, token, o.Version)
 		c.Log = log.With("project", id)
 		c.Outbox = run.OutboxFile(o.Paths.State, p)
+		var proj *run.Project
 		env := &environment.Docker{
-			Project: id, Log: log, BuildImage: cfg.BuildImage,
+			Project: id, Log: log,
 			Allow:     environment.ProjectHosts(p.URL, p.AllowHosts),
-			OnRefused: func(string) { c.AddRefused() },
+			OnRefused: func(string) { proj.AddRefused() },
 		}
-		proj, err := run.NewProject(p, sec, o.Paths.State, env, log)
+		proj, err = run.NewProject(p, sec, o.Paths.State, env, log)
 		if err != nil {
-			log.Error("project not started", "project", id, "err", err)
-			st.LastError, st.LastErrorAt = err.Error(), time.Now()
-			projects = append(projects, st)
+			fail("project not started", err)
 			continue
 		}
 		proj.KeepFor, proj.MinFree, proj.Others = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects
+		detectCtx, stopDetect := context.WithCancel(ctx)
 		wg.Go(func() {
-			d.fillWorkspace(ctx, c, o.Paths.File, p)
-			// Decision on CSR-74 (Willem, option A): report and heartbeat at start so the app sees the runner at once.
-			r := cinderline.Report{RunnerVersion: o.Version, Clients: []cinderline.ReportClient{}, Environments: []string{"default", "docker"}}
-			if err := c.SyncReport(ctx, r); err != nil && ctx.Err() == nil {
-				c.Log.Warn("report failed", "err", err)
-			}
-			if err := c.Heartbeat(ctx); err != nil && ctx.Err() == nil {
-				c.Log.Warn("heartbeat failed", "err", err)
-			}
-			c.RunHeartbeats(ctx, r)
+			defer stopDetect() // a drained loop ends its detection too
+			proj.Loop(ctx, c, drain)
 		})
 		wg.Go(func() {
-			// CSR-137: detection runs at slot start, then every hour.
 			t := time.NewTicker(detectInterval)
 			defer t.Stop()
-			c.SetClients(proj.Detect(ctx))
-			for {
+			for proj.Detect(detectCtx); ; proj.Detect(detectCtx) {
 				select {
-				case <-ctx.Done():
+				case <-detectCtx.Done():
 					return
 				case <-t.C:
-					c.SetClients(proj.Detect(ctx))
 				}
 			}
 		})
-		slots = append(slots, scheduler.Slot{Project: id, Client: c, Hooks: proj.Hooks()})
 		projects = append(projects, st)
-		slotted[id] = true
+		live[id] = proj
 	}
 	d.mu.Lock()
-	d.projects, d.slotted = projects, slotted
+	d.projects, d.live = projects, live
 	d.mu.Unlock()
-	return slots
+	return len(live)
 }
 
-// fillWorkspace writes the workspace the handshake names into p's entry
-// when it has none yet, keeping its names (CSR-97). It only warns: the
-// project runs the same either way, and the next start tries again.
-func (d *daemon) fillWorkspace(ctx context.Context, c *cinderline.Client, file string, p config.Project) {
-	if p.Workspace != "" && p.Workspace != config.DefaultWorkspace {
-		return
-	}
-	proj, err := c.GetProject(ctx)
-	if err != nil {
-		if ctx.Err() == nil {
-			c.Log.Warn("workspace not filled in", "err", err)
-		}
-		return
-	}
-	unlock, err := config.Lock(file)
-	if err != nil {
-		c.Log.Warn("workspace not filled in", "err", err)
-		return
-	}
-	defer unlock()
-	cfg, err := config.Load(file)
-	if err == nil {
-		i := slices.IndexFunc(cfg.Projects, func(q config.Project) bool {
-			return q.URL == p.URL && q.Workspace == p.Workspace && q.Key == p.Key
-		})
-		if i < 0 || !cfg.Projects[i].FillWorkspace(proj.WorkspaceSlug()) {
-			return
-		}
-		err = cfg.Save(file)
-	}
-	if err != nil {
-		c.Log.Warn("workspace not filled in", "err", err)
-		return
-	}
-	c.Log.Info("workspace filled in", "workspace", proj.WorkspaceSlug())
-}
-
-// status lists the config's projects in order, with the scheduler's facts for those with a slot.
-func (d *daemon) status() []scheduler.ProjectStatus {
-	live := d.sched.Status()
+// status lists the config's projects in order, with their loops' facts for those that run.
+func (d *daemon) status() []localapi.ProjectStatus {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	out := make([]scheduler.ProjectStatus, len(d.projects))
+	out := make([]localapi.ProjectStatus, len(d.projects))
 	for i, p := range d.projects {
-		// One with its own error has no slot, also when a namesake has.
-		if s, ok := live[p.Project]; ok && d.slotted[p.Project] && p.LastError == "" {
-			p = s
+		// One with its own error does not run, also when a namesake does.
+		if live := d.live[p.Project]; live != nil && p.LastError == "" {
+			p = live.Status()
 		}
 		out[i] = p
 	}

@@ -1,19 +1,14 @@
 package forge
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 var _ Forge = (*GitLab)(nil)
@@ -26,7 +21,6 @@ type GitLab struct {
 	HTTP *http.Client // set by NewGitLab; replace it before first use, e.g. in tests
 
 	project string // REST base of the project: <host>/api/v4/projects/<group%2F...%2Frepo>
-	host    string // API base: https://<host>/api/v4
 	token   string
 }
 
@@ -34,17 +28,12 @@ type GitLab struct {
 // ssh://git@host[:port]/g/r or git@host:g/r, with or without .git, in any
 // depth of subgroups. Its API is https://<host>/api/v4 on any host: the
 // project's forge, not the host, says it is GitLab. An https port is kept
-// for the API, an ssh one dropped, as legacy parseRepository.
+// for the API, an ssh one dropped.
 func NewGitLab(repository, token string) (*GitLab, error) {
-	s := repository
-	if host, path, ok := strings.Cut(s, ":"); ok && strings.HasPrefix(s, "git@") && !strings.Contains(s, "://") {
-		s = "ssh://" + host + "/" + path // scp form: git@host:g/r
+	host, path, err := parseRepository(repository)
+	if err != nil {
+		return nil, err
 	}
-	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh") || u.Hostname() == "" {
-		return nil, fmt.Errorf("unsupported repository URL %q", repository)
-	}
-	path := strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git")
 	segments := strings.Split(path, "/")
 	if len(segments) < 2 {
 		return nil, fmt.Errorf("repository URL %q does not name a GitLab group/project", repository)
@@ -54,15 +43,10 @@ func NewGitLab(repository, token string) (*GitLab, error) {
 			return nil, fmt.Errorf("repository URL %q does not name a GitLab group/project", repository)
 		}
 	}
-	host := strings.ToLower(u.Hostname())
-	if p := u.Port(); u.Scheme == "https" && p != "" && p != "443" {
-		host += ":" + p
-	}
 	return &GitLab{
 		HTTP: &http.Client{Timeout: 30 * time.Second},
 		// PathEscape also escapes the slashes: GitLab takes the project's full path as one segment.
 		project: "https://" + host + "/api/v4/projects/" + url.PathEscape(path),
-		host:    "https://" + host + "/api/v4",
 		token:   token,
 	}, nil
 }
@@ -73,17 +57,6 @@ type gitlabMR struct {
 	WebURL       string `json:"web_url"`
 	State        string `json:"state"`
 	SourceBranch string `json:"source_branch"`
-}
-
-// gitlabError is a non-2xx answer.
-type gitlabError struct {
-	method, url string
-	status      int
-	message     string
-}
-
-func (e *gitlabError) Error() string {
-	return fmt.Sprintf("GitLab answered %s %s with %d: %s", e.method, e.url, e.status, e.message)
 }
 
 func (g *GitLab) DefaultBranch(ctx context.Context) (string, error) {
@@ -100,8 +73,7 @@ func (g *GitLab) OpenPullRequest(ctx context.Context, in PullRequestInput) (Pull
 		"source_branch": in.Branch, "target_branch": in.Base, "title": in.Title, "description": in.Body,
 	}, &mr)
 	// GitLab answers 409 when the source branch already has an open merge request.
-	var e *gitlabError
-	if errors.As(err, &e) && e.status == http.StatusConflict {
+	if status(err) == http.StatusConflict {
 		if found, ok, ferr := g.FindPullRequest(ctx, in.Branch); ferr == nil && ok {
 			return found, nil
 		}
@@ -169,89 +141,13 @@ func (g *GitLab) MergeState(ctx context.Context, branch string) (MergeState, err
 	return MergePending, nil
 }
 
-func (g *GitLab) CISecrets(ctx context.Context) ([]string, error) {
-	var exposed []string
-
-	var projectVars []struct {
-		Key       string `json:"key"`
-		Protected bool   `json:"protected"`
-	}
-	err := g.do(ctx, http.MethodGet, g.project+"/variables?per_page=100", nil, &projectVars)
-	if err != nil {
-		return nil, err
-	}
-	for _, v := range projectVars {
-		if !v.Protected {
-			exposed = append(exposed, "project variable "+v.Key)
-		}
-	}
-
-	var projInfo struct {
-		Namespace struct {
-			ID   int    `json:"id"`
-			Kind string `json:"kind"`
-		} `json:"namespace"`
-	}
-	err = g.do(ctx, http.MethodGet, g.project, nil, &projInfo)
-	if err != nil {
-		return nil, err
-	}
-	if projInfo.Namespace.Kind == "group" {
-		var groupVars []struct {
-			Key       string `json:"key"`
-			Protected bool   `json:"protected"`
-		}
-		err = g.do(ctx, http.MethodGet, g.host+"/groups/"+strconv.Itoa(projInfo.Namespace.ID)+"/variables?per_page=100", nil, &groupVars)
-		if err != nil {
-			return nil, err
-		}
-		for _, v := range groupVars {
-			if !v.Protected {
-				exposed = append(exposed, "group variable "+v.Key)
-			}
-		}
-	}
-	// shortcut: first page only (100 entries), upgrade when a repository has more
-	return exposed, nil
-}
-
 // do sends one API request with in as its JSON body, when not nil, and
 // decodes a 2xx answer into out.
 func (g *GitLab) do(ctx context.Context, method, u string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		data, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(data)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("PRIVATE-TOKEN", g.token)
-	req.Header.Set("User-Agent", name.Name+"-runner")
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := send(g.HTTP, req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &gitlabError{method, u, resp.StatusCode, gitlabMessage(data)}
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("GitLab answered %s %s with %d and unreadable JSON: %w", method, u, resp.StatusCode, err)
-	}
-	return nil
+	return do(ctx, g.HTTP, "GitLab", method, u, map[string]string{
+		"Accept":        "application/json",
+		"PRIVATE-TOKEN": g.token,
+	}, gitlabMessage, in, out)
 }
 
 // gitlabMessage is the message of an error answer: its JSON message, which
@@ -262,7 +158,7 @@ func gitlabMessage(data []byte) string {
 		Message json.RawMessage `json:"message"`
 		Error   string          `json:"error"`
 	}
-	s := strings.TrimSpace(string(data))
+	s := string(data)
 	if json.Unmarshal(data, &r) == nil {
 		var m string
 		switch {
@@ -274,8 +170,5 @@ func gitlabMessage(data []byte) string {
 			return r.Error
 		}
 	}
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	return textStart(s)
 }

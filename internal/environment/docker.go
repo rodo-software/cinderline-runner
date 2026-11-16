@@ -24,10 +24,6 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// MySQLImage is the run's database, MySQL 8 as today's compose file, pinned
-// by digest (mysql 8.0.46, multi-arch index).
-const MySQLImage = "mysql:8.0.46@sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b"
-
 // PublishedImage is the default image on GHCR, multi-arch, without agent
 // CLIs (decision 2026-11-05-runner-rewrite-details point 2).
 const PublishedImage = "ghcr.io/rodo-software/" + name.Name + "-runner-default"
@@ -39,21 +35,13 @@ const PublishedImage = "ghcr.io/rodo-software/" + name.Name + "-runner-default"
 // change (.github/workflows/default-image.yml, its header).
 var publishedDigest, publishedSum = "sha256:22dc9fdeda6197570675db35feb6826639a35ae3f16079151c7b3cddcb95e95d", "8bc0a5e245dc"
 
-// DBEnv are the variables today's compose file sets, so Laravel's tests in
-// the clone reach the run's MySQL; real environment variables win over the
-// project's .env file.
-var DBEnv = []string{"DB_HOST=mysql", "DB_PORT=3306", "DB_DATABASE=laravel_testing", "DB_USERNAME=laravel", "DB_PASSWORD=laravel"}
-
-// mysqlEnv creates the database and user DBEnv names.
-var mysqlEnv = []string{"-e", "MYSQL_DATABASE=laravel_testing", "-e", "MYSQL_USER=laravel", "-e", "MYSQL_PASSWORD=laravel", "-e", "MYSQL_ROOT_PASSWORD=root"}
-
 // ProxyEnv sends the agent's HTTP(S) traffic through the run's egress proxy;
 // the agent CLIs, git, Composer, npm and Go read either spelling, curl only
-// the lowercase http_proxy. MySQL stays direct on the internal network.
+// the lowercase http_proxy. With a compose file its services stay direct.
 var ProxyEnv = []string{
 	"HTTPS_PROXY=http://proxy:3128", "HTTP_PROXY=http://proxy:3128",
 	"https_proxy=http://proxy:3128", "http_proxy=http://proxy:3128",
-	"NO_PROXY=mysql,localhost,127.0.0.1", "no_proxy=mysql,localhost,127.0.0.1",
+	"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
 }
 
 // hardening keeps the agent from gaining privileges (CSR-63): no
@@ -62,15 +50,14 @@ var ProxyEnv = []string{
 var hardening = []string{"--cap-drop", "ALL", "--security-opt", "no-new-privileges"}
 
 // Docker is the default Environment: the default image, an internal network
-// per run with a fresh MySQL (decision 2026-11-05-runner-rewrite-details
-// point 13) and an egress proxy as its only way out (CSR-63), and every
+// per run with an egress proxy as its only way out (CSR-63) and no other
+// service (a project that needs a database brings a compose file), and every
 // container and network labelled with the project and issue (review item 9).
 type Docker struct {
-	Project    string         // project key, in names and labels
-	Exec       workspace.Exec // nil means workspace.RunCommand
-	Stream     Stream         // the agent container; nil means streamCommand
-	Log        *slog.Logger   // the agent's output, line by line; nil means slog.Default()
-	BuildImage bool           // config.json build_image: always build the image locally
+	Project string         // project key, in names and labels
+	Exec    workspace.Exec // nil means workspace.RunCommand
+	Stream  Stream         // the agent container; nil means streamCommand
+	Log     *slog.Logger   // the agent's output, line by line; nil means slog.Default()
 	// Allow is the project's hosts every run may reach, as host:port
 	// (ProjectHosts); each run adds its client's Spec.Allow.
 	Allow []string
@@ -98,14 +85,14 @@ func streamCommand(ctx context.Context, env []string, stdin string, out io.Write
 	return cmd.Run()
 }
 
-// Run runs one agent turn: an internal network with a fresh MySQL and the
-// egress proxy allowing d.Allow and s.Allow, then the hardened agent
-// container with only DBEnv, ProxyEnv and s.Env, stopped with docker stop
-// at s.Timeout. With a compose file (SetCompose), its services replace
-// MySQL, and the agent runs as hardened in the agent service's image with
-// that service's environment instead of DBEnv. Its output goes to the log line by line as it comes, then the
-// hosts the proxy refused. All are removed afterwards, also after a failure
-// or a stop of the runner.
+// Run runs one agent turn: an internal network with the egress proxy
+// allowing d.Allow and s.Allow, then the hardened agent container with only
+// ProxyEnv and s.Env, stopped with docker stop at s.Timeout. With a compose
+// file (SetCompose), its services start beside the proxy, and the agent runs
+// as hardened in the agent service's image with that service's environment
+// too. Its output goes to the log line by line as it comes, then the hosts
+// the proxy refused. All are removed afterwards, also after a failure or a
+// stop of the runner.
 func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	if !workspace.IssueRef.MatchString(s.Issue) || len(s.Cmd) == 0 {
 		return "", fmt.Errorf("run: issue %q, command %q", s.Issue, s.Cmd)
@@ -133,7 +120,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := d.up(ctx, s.Issue, proxy, append(slices.Clip(d.Allow), s.Allow...), compose == nil); err != nil {
+	if err := d.up(ctx, s.Issue, proxy, append(slices.Clip(d.Allow), s.Allow...)); err != nil {
 		return "", err
 	}
 	var p *composed
@@ -150,7 +137,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 			d.log().Warn("run's containers not removed", "project", d.Project, "issue", s.Issue, "err", err)
 		}
 	}()
-	env := append(slices.Clip(DBEnv), ProxyEnv...)
+	env := ProxyEnv
 	if compose != nil {
 		if p, err = d.composeProject(ctx, s.Issue, compose); err != nil {
 			return "", err
@@ -282,13 +269,13 @@ func (l *lines) flush() {
 // Image returns the default image: the published one by its pinned digest
 // when a pin is set for this Dockerfile, else the locally built one, whose
 // tag is the Dockerfile's hash, so a runner with a changed Dockerfile
-// builds its own. config.json's build_image always builds locally.
+// builds its own.
 func (d *Docker) Image(ctx context.Context) (string, error) {
 	sum := sha256.Sum256(defaultimage.Dockerfile)
 	sumHex := hex.EncodeToString(sum[:6])
 	tag := name.Name + "-default:" + sumHex
 	onFetch := d.OnFetch
-	if !d.BuildImage && publishedDigest != "" && publishedSum == sumHex {
+	if publishedDigest != "" && publishedSum == sumHex {
 		ref := PublishedImage + "@" + publishedDigest
 		if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref); err == nil {
 			return ref, nil
@@ -338,17 +325,17 @@ func (d *Docker) localImage(ctx context.Context, tag string, files map[string][]
 }
 
 // network is the name of the issue's internal network; its containers are
-// network+"-mysql", network+"-proxy" and network+"-agent".
+// network+"-proxy" and network+"-agent".
 func (d *Docker) network(issue string) string {
 	return name.Name + "-" + d.Project + "-" + issue
 }
 
 // up creates the issue's internal network, which has no route out and no
 // upstream DNS, starts the egress proxy on it as proxy, allowing allow, and
-// connects the proxy to the default bridge as its way out, then starts a
-// fresh MySQL as mysql when mysql is set. What an earlier turn left under
-// these names is removed first when it is in the way. A failure leaves nothing behind.
-func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string, mysql bool) error {
+// connects the proxy to the default bridge as its way out. What an earlier
+// turn left under these names is removed first when it is in the way. A
+// failure leaves nothing behind.
+func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string) error {
 	labels := workspace.Labels(d.Project, issue)
 	net := d.network(issue)
 	create := append(append([]string{"docker", "network", "create", "--internal"}, labels...), net)
@@ -364,13 +351,7 @@ func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []strin
 	proxy := append(append([]string{"docker", "run", "--detach"}, labels...),
 		"--name", net+"-proxy", "--network", net, "--network-alias", "proxy")
 	proxy = append(append(append(proxy, hardening...), "--read-only", proxyImage), allow...)
-	steps := [][]string{proxy, {"docker", "network", "connect", "bridge", net + "-proxy"}}
-	if mysql {
-		db := append(append([]string{"docker", "run", "--detach"}, labels...),
-			"--name", net+"-mysql", "--network", net, "--network-alias", "mysql")
-		steps = append(steps, append(append(db, mysqlEnv...), MySQLImage))
-	}
-	for _, argv := range steps {
+	for _, argv := range [][]string{proxy, {"docker", "network", "connect", "bridge", net + "-proxy"}} {
 		if _, err := d.exec(ctx, argv...); err != nil {
 			return errors.Join(err, d.down(ctx, issue))
 		}
@@ -378,13 +359,13 @@ func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []strin
 	return nil
 }
 
-// down removes the issue's agent, if a killed docker command left it,
-// MySQL with its data volume and the proxy, then the network. It tries both, so one
-// failure does not leave the other behind. docker rm --force ignores a
+// down removes the issue's agent, if a killed docker command left it, and
+// the proxy, then the network. It tries both, so one failure does not leave
+// the other behind. docker rm --force ignores a
 // container that is already gone.
 func (d *Docker) down(ctx context.Context, issue string) error {
 	net := d.network(issue)
-	_, err := d.exec(ctx, "docker", "rm", "--force", "--volumes", net+"-agent", net+"-mysql", net+"-proxy")
+	_, err := d.exec(ctx, "docker", "rm", "--force", "--volumes", net+"-agent", net+"-proxy")
 	if _, nerr := d.exec(ctx, "docker", "network", "rm", net); nerr != nil {
 		err = errors.Join(err, nerr)
 	}

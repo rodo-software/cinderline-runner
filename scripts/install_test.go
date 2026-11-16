@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
@@ -265,7 +266,7 @@ func TestInstallShTamperedChecksumRefuses(t *testing.T) {
 
 // runPs runs install.ps1 with LOCALAPPDATA in a temporary directory. It
 // returns the install path, output and error.
-func runPs(t *testing.T, srv *httptest.Server) (string, string, error) {
+func runPs(t *testing.T, srv *httptest.Server, extra ...string) (string, string, error) {
 	t.Helper()
 	if runtime.GOOS != "windows" {
 		t.Skip("install.ps1 runs on Windows with PowerShell") // macOS runners have powershell too, but the script reads Windows-only variables
@@ -290,7 +291,7 @@ func runPs(t *testing.T, srv *httptest.Server) (string, string, error) {
 	// machine's real user PATH.
 	env = append(env, "LOCALAPPDATA="+local, urlEnv+"="+srv.URL, noModifyEnv+"=1")
 	cmd := exec.Command(ps, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "install.ps1")
-	cmd.Env = env
+	cmd.Env = append(env, extra...)
 	out, err := cmd.CombinedOutput()
 	return filepath.Join(local, "Programs", name.Name, name.Name+".exe"), string(out), err
 }
@@ -319,6 +320,75 @@ func TestInstallPs1TamperedChecksumRefuses(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Fatal("binary installed despite checksum mismatch")
+	}
+}
+
+var installDirEnv = strings.ToUpper(name.Name) + "_INSTALL_DIR"
+
+// `update` runs the installer with the folder of the binary it replaces:
+// the binary goes there and the PATH is left alone.
+func TestInstallShInstallDirReplacesThereAndLeavesThePath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, name.Name), []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	home, out, err := runSh(t, release(t, false), installDirEnv+"="+dir)
+	if err != nil {
+		t.Fatalf("install.sh failed: %v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, name.Name)); !bytes.Equal(got, binary) {
+		t.Fatalf("installed %q, want %q", got, binary)
+	}
+	if entries, _ := os.ReadDir(home); len(entries) != 0 {
+		t.Errorf("wrote in the home folder: %v\n%s", entries, out)
+	}
+	if strings.Contains(out, "PATH") {
+		t.Errorf("output speaks of the PATH:\n%s", out)
+	}
+}
+
+// TestHelperSleep is not a test: TestInstallPs1ReplacesRunningExecutable
+// starts a copy of the test binary with this env var set, to have a running
+// executable.
+func TestHelperSleep(t *testing.T) {
+	if os.Getenv("INSTALL_HELPER_SLEEP") == "" {
+		t.Skip("helper process only")
+	}
+	time.Sleep(30 * time.Second)
+}
+
+// CSR-44: Windows cannot overwrite a running .exe, and `update` runs the
+// installer from the one it replaces.
+func TestInstallPs1ReplacesRunningExecutable(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("install.ps1 runs on Windows with PowerShell")
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	exe := filepath.Join(dir, name.Name+".exe")
+	if err := os.WriteFile(exe, bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestHelperSleep$")
+	cmd.Env = append(os.Environ(), "INSTALL_HELPER_SLEEP=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	time.Sleep(200 * time.Millisecond) // let the OS map it
+
+	if _, out, err := runPs(t, release(t, false), installDirEnv+"="+dir); err != nil {
+		t.Fatalf("install.ps1 failed: %v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(exe); !bytes.Equal(got, binary) {
+		t.Fatalf("installed %q, want %q", got, binary)
 	}
 }
 

@@ -10,9 +10,7 @@ import (
 	"time"
 )
 
-// The Forgejo cases of the app repository's runner/lib.forge.test.mjs at
-// commit ecde51a (decision 2026-11-05-legacy-reference, amendments), run
-// against recorded answers instead of a network. Gitea has the same API.
+// The Forgejo forge against recorded answers instead of a network. Gitea has the same API.
 
 // recordedForgejo is recorded, for a Forgejo Forge whose merge retries
 // record their waits instead of sleeping.
@@ -34,8 +32,8 @@ func recordedForgejo(t *testing.T, repository string, replies ...reply) (*Forgej
 
 const pulls = "https://git.rodo.nl/api/v1/repos/willem/cinderline/pulls"
 
-// Ported from "parseRepository takes the three URL forms and ports, and
-// clones over https" and "parseRepository keeps an https port for the
+// parseRepository takes the three URL forms and ports, and
+// clones over https and "parseRepository keeps an https port for the
 // clone, the push and the API" (its API side; the clone URL is
 // internal/workspace's, the repository check internal/config's).
 func TestForgejoRepositoryForms(t *testing.T) {
@@ -74,8 +72,8 @@ func TestForgejoDefaultBranch(t *testing.T) {
 	}
 }
 
-// Ported from "openPullRequest opens a Forgejo pull request with a token
-// header" and "openPullRequest targets the given base branch".
+// OpenPullRequest opens a Forgejo pull request with a token
+// header and "openPullRequest targets the given base branch".
 func TestForgejoOpenPullRequest(t *testing.T) {
 	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{201, `{"number":7,"html_url":"u"}`})
 	in := input
@@ -105,8 +103,8 @@ func TestForgejoOpenPullRequest(t *testing.T) {
 	}
 }
 
-// Ported from "openPullRequest finds the pull request an earlier run
-// opened", its Forgejo half: a 409, then the open pull requests, matched by
+// OpenPullRequest finds the pull request an earlier run
+// opened, its Forgejo half: a 409, then the open pull requests, matched by
 // head ref.
 func TestForgejoOpenPullRequestFindsEarlier(t *testing.T) {
 	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git",
@@ -120,7 +118,7 @@ func TestForgejoOpenPullRequestFindsEarlier(t *testing.T) {
 	wantURLs(t, *reqs, "POST "+pulls, "GET "+pulls+"?state=open&limit=50")
 }
 
-// Ported from "openPullRequest reports a refusal with the forge's answer",
+// OpenPullRequest reports a refusal with the forge's answer,
 // on Forgejo: a 409 with none found, and any other refusal, end in the
 // first answer, without the token.
 func TestForgejoOpenPullRequestRefused(t *testing.T) {
@@ -157,8 +155,8 @@ func TestForgejoFindPullRequest(t *testing.T) {
 	wantURLs(t, (*reqs)[:1], "GET "+pulls+"?state=open&limit=50")
 }
 
-// Ported from "requestMerge asks Forgejo to squash-merge when the checks
-// succeed": Forgejo answers the merge with an empty 200.
+// RequestMerge asks Forgejo to squash-merge when the checks
+// succeed: Forgejo answers the merge with an empty 200.
 func TestForgejoRequestMerge(t *testing.T) {
 	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{200, ``})
 
@@ -174,7 +172,7 @@ func TestForgejoRequestMerge(t *testing.T) {
 
 const tryAgain = `{"message":"Please try again later"}`
 
-// Ported from "requestMerge retries a Forgejo 405 and then succeeds".
+// RequestMerge retries a Forgejo 405 and then succeeds.
 func TestForgejoRequestMergeRetries405(t *testing.T) {
 	f, reqs, waits := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git",
 		reply{405, tryAgain}, reply{405, tryAgain}, reply{200, `null`})
@@ -188,7 +186,7 @@ func TestForgejoRequestMergeRetries405(t *testing.T) {
 	}
 }
 
-// Ported from "requestMerge gives up on Forgejo after twelve 405s".
+// RequestMerge gives up on Forgejo after twelve 405s.
 func TestForgejoRequestMergeGivesUp(t *testing.T) {
 	replies := make([]reply, 12)
 	for i := range replies {
@@ -205,7 +203,7 @@ func TestForgejoRequestMergeGivesUp(t *testing.T) {
 	}
 }
 
-// Not in legacy: other refusals are not retried, and a cancelled wait ends
+// Other refusals are not retried, and a cancelled wait ends
 // the retries with the context's error.
 func TestForgejoRequestMergeStops(t *testing.T) {
 	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{409, `{"message":"not mergeable"}`})
@@ -226,7 +224,7 @@ func TestForgejoRequestMergeStops(t *testing.T) {
 	}
 }
 
-// Ported from "pullRequestOutcome on Forgejo": the most recently updated
+// pullRequestOutcome on Forgejo: the most recently updated
 // pull request of the branch among the last 50, then the combined commit
 // status of its head.
 func TestForgejoMergeState(t *testing.T) {
@@ -262,7 +260,7 @@ func TestForgejoMergeState(t *testing.T) {
 	}
 }
 
-// Ported from "pullRequestOutcome throws on an error answer" (Forgejo).
+// pullRequestOutcome throws on an error answer (Forgejo).
 func TestForgejoMergeStateError(t *testing.T) {
 	f, _, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{401, `{"message":"no"}`})
 	if _, err := f.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401: no") {

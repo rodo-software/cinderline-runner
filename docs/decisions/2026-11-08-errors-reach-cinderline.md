@@ -1,3 +1,5 @@
+Superseded by decision 2026-11-16-runner-protocol-v2
+
 # Errors reach Cinderline
 
 - **Status:** Accepted

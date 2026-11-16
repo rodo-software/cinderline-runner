@@ -523,8 +523,8 @@ func TestDetectMountOpenCodeEnvInKeyCheck(t *testing.T) {
 	}
 }
 
-// Detect reruns detection on every call (the hourly refresh), while Check
-// reuses the cached result.
+// Detect reruns detection on every call (the hourly refresh) and keeps the
+// result for the report.
 func TestDetectRefreshes(t *testing.T) {
 	p := &Project{}
 	n := 0
@@ -534,8 +534,7 @@ func TestDetectRefreshes(t *testing.T) {
 	}
 	p.Detect(context.Background())
 	p.Detect(context.Background())
-	p.detected(context.Background())
-	if n != 2 {
-		t.Errorf("detection ran %d times, want 2", n)
+	if n != 2 || len(p.clients) != 1 {
+		t.Errorf("detection ran %d times, kept %v; want 2 and the result", n, p.clients)
 	}
 }

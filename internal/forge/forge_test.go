@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TestMain sends every read once, as the ported legacy cases expect;
+// TestMain sends every read once, as the recorded cases expect;
 // TestReadRetries turns the retries on.
 func TestMain(m *testing.M) {
 	readWaits = nil

@@ -15,7 +15,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
 
-// Ported from lib.test.mjs "opencodeArgs continues a session only when resuming".
+// opencodeArgs continues a session only when resuming.
 func TestOpenCodeArgs(t *testing.T) {
 	fresh := opencodeArgs(Turn{Model: "openrouter/q/c"})
 	want := []string{"run", "--format", "json", "--auto", "--title", "cinderline", "--model", "openrouter/q/c"}
@@ -29,14 +29,14 @@ func TestOpenCodeArgs(t *testing.T) {
 	if a := opencodeArgs(Turn{}); slices.Contains(a, "--model") || slices.Contains(a, "--variant") {
 		t.Errorf("args %q pass --model or --variant without one", a)
 	}
-	// Ported from legacy opencodeArgs: the slot's effort as --variant (EMBER-132).
+	// The slot's effort goes in as --variant (EMBER-132).
 	if a := opencodeArgs(Turn{Effort: "max"}); !slices.Equal(a[len(a)-2:], []string{"--variant", "max"}) {
 		t.Errorf("args %q do not end with --variant max", a)
 	}
 }
 
-// Ported from lib.test.mjs "opencodeConfig has Ember only for the
-// orchestrator, and the turn limit as steps", Ember being Cinderline's old
+// opencodeConfig has Ember only for the
+// orchestrator, and the turn limit as steps, Ember being Cinderline's old
 // name. The agent label no longer travels in a header: it is in the scoped
 // token (plan M3).
 func TestOpenCodeConfig(t *testing.T) {
@@ -93,8 +93,8 @@ func TestOpenCodeConfig(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "agentEnv without project files skips CLAUDE.md
-// and AGENTS.md" (OpenCode half) and "agentEnv gives the OpenRouter key only
+// agentEnv without project files skips CLAUDE.md
+// and AGENTS.md (OpenCode half) and "agentEnv gives the OpenRouter key only
 // to OpenCode, and no Anthropic login" (OpenCode half: only the OpenRouter
 // key, no other secret).
 func TestOpenCodeEnv(t *testing.T) {
@@ -123,8 +123,8 @@ func TestOpenCodeEnv(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "parseRun reads the session and the last message
-// of OpenCode JSON events". OpenCode has no turn limit to hit: after its
+// parseRun reads the session and the last message
+// of OpenCode JSON events. OpenCode has no turn limit to hit: after its
 // steps it asks the model for a text-only answer.
 func TestParseOpenCode(t *testing.T) {
 	event := func(typ, part string) string {
@@ -150,7 +150,7 @@ func TestParseOpenCode(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "parseRun sums the usage of the OpenCode steps".
+// parseRun sums the usage of the OpenCode steps.
 func TestParseOpenCodeUsage(t *testing.T) {
 	step := func(part string) string { return `{"type":"step_finish","sessionID":"s","part":` + part + `}` }
 	out := step(`{"reason":"tool-calls","cost":0.01,"tokens":{"input":100,"output":10,"reasoning":5,"cache":{"read":50,"write":20}}}`) + "\n" +
@@ -186,8 +186,8 @@ func TestOpenCodeRunFresh(t *testing.T) {
 		`{"type":"step_finish","sessionID":"ses_1","part":{"tokens":{"output":5}}}`
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: out}}}
 	var docker [][]string
-	c := &OpenCode{
-		Project: "CSR", Env: env, Key: "sk-or-k", MCPURL: "https://cs.example/mcp",
+	c := &CLI{
+		Name: "opencode", Project: "CSR", Env: env, Credential: "sk-or-k", MCPURL: "https://cs.example/mcp",
 		Tools: tools.Mount{
 			Args:        []string{"-v", "tools:/opt/cinderline:ro"},
 			Env:         []string{"DISABLE_AUTOUPDATER=1"},
@@ -233,7 +233,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 // fails before OpenCode printed one; the failure is returned with the result.
 func TestOpenCodeRunResumeFails(t *testing.T) {
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: "crash", Err: environment.ErrTimeout}}}
-	c := &OpenCode{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	c := &CLI{Name: "opencode", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
 	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", SessionID: "ses_1", MaxTurns: 5})
 	if !errors.Is(err, environment.ErrTimeout) || res.SessionID != "ses_1" || res.Tail != "crash" {
 		t.Errorf("Run = %+v, %v", res, err)
@@ -246,7 +246,7 @@ func TestOpenCodeRunResumeFails(t *testing.T) {
 func TestOpenCodeRunStateVolumeFails(t *testing.T) {
 	env := &environment.Fake{}
 	boom := errors.New("docker broke")
-	c := &OpenCode{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
+	c := &CLI{Name: "opencode", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
 	if _, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"}); !errors.Is(err, boom) {
 		t.Errorf("Run err = %v, want %v", err, boom)
 	}

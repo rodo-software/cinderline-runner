@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"math"
 	"net"
 	"net/url"
@@ -33,12 +32,6 @@ const maxSocketPath = 103
 // Config is the content of config.json. It holds no secrets: those live in the keychain.
 type Config struct {
 	Version int `json:"version"`
-	// MergePollSeconds is how often the merge status of trusted Review
-	// issues is checked, legacy's MERGE_POLL_SECONDS; 0 is its default.
-	MergePollSeconds int `json:"merge_poll_seconds,omitempty"`
-	// BuildImage makes the runner build the default image locally instead of
-	// pulling the published one (decision on CSR-49).
-	BuildImage bool `json:"build_image,omitempty"`
 	// KeepSessionsFor is how long a finished run's session and clone are
 	// kept for a follow-up after its last run, such as "7d" or "36h"; "off"
 	// keeps them until min_free_disk or a closed issue needs them gone.
@@ -47,14 +40,6 @@ type Config struct {
 	// oldest first, such as "10GB"; "off" never deletes them for space.
 	MinFreeDisk string    `json:"min_free_disk,omitempty"`
 	Projects    []Project `json:"projects"`
-}
-
-// MergePoll is the merge check interval, 60 seconds unless set.
-func (c *Config) MergePoll() time.Duration {
-	if c.MergePollSeconds > 0 {
-		return time.Duration(c.MergePollSeconds) * time.Second
-	}
-	return 60 * time.Second
 }
 
 // Defaults of keep_sessions_for and min_free_disk.
@@ -117,15 +102,9 @@ func parseSize(s string) (int64, error) {
 type Project struct {
 	URL string `json:"url"`
 	Key string `json:"key"`
-	// Workspace is the slug of the project's workspace from GET project;
-	// empty in an entry made before workspaces until the daemon fills it in.
-	Workspace string `json:"workspace,omitempty"`
-	// NamesByKey keeps the names an entry had before its workspace was
-	// filled in, so no running project loses its volumes, secrets or outbox
-	// (CSR-97; migrating them is out of scope).
-	NamesByKey    bool   `json:"names_by_key,omitempty"`
-	Repository    string `json:"repository"`
-	AllowExisting bool   `json:"allow_existing,omitempty"`
+	// Workspace is the slug of the project's workspace from GET project.
+	Workspace  string `json:"workspace"`
+	Repository string `json:"repository"`
 	// OpenAIBaseURL is an OpenAI-compatible base URL for Codex; empty means OpenAI's API.
 	OpenAIBaseURL string `json:"openai_base_url,omitempty"`
 	// GeminiVertex says the Gemini key is a Vertex AI express-mode key; false means the Gemini API.
@@ -140,29 +119,17 @@ type Project struct {
 }
 
 // DefaultWorkspace is the slug of a project on a Cinderline that sends no
-// workspace (from before EMBER-159). Its names stay as before workspaces.
+// workspace (from before EMBER-159).
 const DefaultWorkspace = "default"
 
 // ID names the project's Docker volumes, containers, networks and labels,
 // its keychain entries and its state files: "<workspace>-<KEY>", or the key
-// alone for an entry made before workspaces or in the default one.
+// alone in the default workspace (decision 2026-11-15-workspace-in-project-identity).
 func (p Project) ID() string {
-	if p.NamesByKey || p.Workspace == "" || p.Workspace == DefaultWorkspace {
+	if p.Workspace == DefaultWorkspace {
 		return p.Key
 	}
 	return p.Workspace + "-" + p.Key
-}
-
-// FillWorkspace sets the slug a handshake named on an entry that has none
-// yet, or only the default, without changing its ID, and reports whether it
-// changed anything. A real workspace is never replaced: a token is for one.
-func (p *Project) FillWorkspace(slug string) bool {
-	if p.Workspace == slug || (p.Workspace != "" && p.Workspace != DefaultWorkspace) {
-		return false
-	}
-	p.NamesByKey = true // its ID was the key: keep it
-	p.Workspace = slug
-	return true
 }
 
 // workspaceSlug is what a workspace slug may be: it ends up in Docker
@@ -314,12 +281,9 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// Validate reports a negative merge_poll_seconds or the first invalid
-// project. Zero projects is valid.
+// Validate reports an invalid limit or the first invalid project. Zero
+// projects is valid.
 func (c *Config) Validate() error {
-	if c.MergePollSeconds < 0 {
-		return errors.New("merge_poll_seconds must not be negative")
-	}
 	if _, err := parseAge(cmp.Or(c.KeepSessionsFor, DefaultKeepSessionsFor)); err != nil {
 		return err
 	}
@@ -336,7 +300,7 @@ func (c *Config) Validate() error {
 			problem = "key must be non-empty without whitespace"
 		} else if u, err := url.Parse(p.Repository); err != nil || !u.IsAbs() || u.Host == "" {
 			problem = "repository must be an absolute URL with a host"
-		} else if p.Workspace != "" && !workspaceSlug.MatchString(p.Workspace) {
+		} else if !workspaceSlug.MatchString(p.Workspace) {
 			problem = "workspace must be letters, digits, - and _"
 		} else if seen[id{p.URL, p.Workspace, p.Key}] {
 			problem = "another project has the same url, workspace and key"
@@ -381,7 +345,7 @@ func validHostPort(hp string) bool {
 }
 
 // Save validates c, sets its version and writes it to path atomically.
-func (c *Config) Save(path string) (err error) {
+func (c *Config) Save(path string) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -390,11 +354,17 @@ func (c *Config) Save(path string) (err error) {
 	if err != nil {
 		return err
 	}
+	return WriteFile(path, append(data, '\n'))
+}
+
+// WriteFile writes data to path atomically, readable by this user only: a
+// crash leaves the old file or the new one, never a torn one.
+func WriteFile(path string, data []byte) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".config-*.json") // created 0600
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*") // created 0600
 	if err != nil {
 		return err
 	}
@@ -404,7 +374,7 @@ func (c *Config) Save(path string) (err error) {
 			os.Remove(f.Name())
 		}
 	}()
-	if _, err = f.Write(append(data, '\n')); err != nil {
+	if _, err = f.Write(data); err != nil {
 		return err
 	}
 	if err = f.Sync(); err != nil {
@@ -413,39 +383,7 @@ func (c *Config) Save(path string) (err error) {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	// The rename makes the write atomic: a crash leaves the old file or the new one, never a torn one.
 	return os.Rename(f.Name(), path)
-}
-
-// staleLock is the age after which a lock file is taken to be left by a
-// process that died: a holder only loads and saves, which takes milliseconds.
-const staleLock = 10 * time.Second
-
-// Lock takes the lock on the config file at path, across processes, and
-// returns its release. Hold it from the Load to the Save of a change, so the
-// daemon and the CLI never write over each other's change (CSR-189). It
-// waits while another holder has it.
-func Lock(path string) (unlock func(), err error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	lock := path + ".lock"
-	for {
-		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			f.Close()
-			return func() { os.Remove(lock) }, nil
-		}
-		if !errors.Is(err, fs.ErrExist) {
-			return nil, err
-		}
-		// shortcut: two waiters breaking one stale lock at once can both take it; it needs a crash first, so an OS file lock only if that is seen.
-		if fi, err := os.Stat(lock); err == nil && time.Since(fi.ModTime()) > staleLock {
-			os.Remove(lock)
-			continue
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }
 
 // SameRepository reports whether a and b name the same repository: host and

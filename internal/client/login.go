@@ -24,14 +24,14 @@ func LoginArgv(client, project, image string, t tools.Mount) ([]string, error) {
 	switch client {
 	case "claude":
 		argv := append(prefix,
-			"-e", "CLAUDE_CONFIG_DIR="+StatePath+"/claude",
+			"-e", claudeHome,
 			image, tools.Path+"/bin/claude", "auth", "login")
 		return argv, nil
 
 	case "codex":
 		argv := append(prefix,
-			"-e", "CODEX_HOME="+StatePath+"/codex",
-			image, "sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`,
+			"-e", codexHome,
+			image, "sh", "-c", codexShell,
 			tools.Path+"/bin/codex", "login", "--device-auth")
 		return argv, nil
 
@@ -42,8 +42,8 @@ func LoginArgv(client, project, image string, t tools.Mount) ([]string, error) {
 			prefix = append(prefix, "-e", kv)
 		}
 		argv := append(prefix,
-			"-e", "GEMINI_CLI_HOME="+StatePath+"/gemini",
-			image, "sh", "-c", `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' '{"security":{"auth":{"selectedType":"oauth-personal"}}}' > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`,
+			"-e", geminiHome,
+			image, "sh", "-c", geminiShell(`'{"security":{"auth":{"selectedType":"oauth-personal"}}}'`),
 			tools.Path+"/bin/node", tools.Path+"/gemini/bundle/gemini.js")
 		return argv, nil
 

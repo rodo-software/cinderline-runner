@@ -1,61 +1,22 @@
 package client
 
 import (
-	"context"
 	"encoding/json"
-	"path"
-	"slices"
 	"strings"
-	"time"
 
-	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
-	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// OpenCode is the OpenCode Client: one container per turn through the
-// Environment (decision 2026-11-06-container-per-turn), the binary from the
-// tools volume.
-type OpenCode struct {
-	Project string                  // project key, for its volumes
-	Env     environment.Environment // where the turn runs
-	Exec    workspace.Exec          // prepares the state volume; nil means workspace.RunCommand
-	Key     string                  // the project's OpenRouter key
-	MCPURL  string                  // Cinderline's MCP endpoint, as the agent container reaches it
-	Tools   tools.Mount             // from tools.Tools.Mount for the Environment's image
-}
-
-var _ Client = (*OpenCode)(nil)
-
-// Hosts returns the provider host:port pairs a run needs, for the run's
-// network allowlist: OpenRouter only.
-func (c *OpenCode) Hosts() []string { return []string{"openrouter.ai:443"} }
-
-// Run runs one turn. OpenCode has no turn limit to hit (see opencodeConfig),
-// so HitTurnLimit stays false.
-func (c *OpenCode) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := PrepareState(ctx, c.Exec, c.Project, "opencode"); err != nil {
-		return Result{}, err
-	}
-	out, err := c.Env.Run(ctx, environment.Spec{
-		Issue:  path.Base(t.Dir), // the clone is RunsPath/<REF>
-		Dir:    t.Dir,
-		Mounts: agentMounts(c.Project, "opencode", c.Tools),
-		// OpenCodeEnv: on musl, the libraries the binary needs from the tools volume.
-		Env:     slices.Concat(c.Tools.Env, c.Tools.OpenCodeEnv, opencodeEnv(c.Key, t, c.MCPURL), workspace.Identity(c.Project, t.Author)),
-		Cmd:     append([]string{tools.Path + "/bin/opencode"}, opencodeArgs(t)...),
-		Stdin:   t.Prompt,
-		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
-		Idle:    t.Idle,
-		Allow:   c.Hosts(),
-	})
-	res := parseOpenCode(out)
-	if res.SessionID == "" {
-		res.SessionID = t.SessionID
-	}
-	res.Tail = environment.Tail(out)
-	return res, err
+// opencode is OpenCode. It has no turn limit to hit (see opencodeConfig).
+var opencode = kind{
+	libs: true,
+	env:  func(c *CLI, t Turn) []string { return opencodeEnv(c.Credential, t, c.MCPURL) },
+	cmd: func(_ *CLI, t Turn, _ string) []string {
+		return append([]string{tools.Path + "/bin/opencode"}, opencodeArgs(t)...)
+	},
+	parse: parseOpenCode,
+	hosts: func(*CLI) []string { return []string{"openrouter.ai:443"} }, // OpenRouter only
 }
 
 // opencodeArgs is OpenCode's headless argv for one turn; the prompt goes in
@@ -117,10 +78,7 @@ func opencodeEnv(key string, t Turn, mcpURL string) []string {
 		"OPENROUTER_API_KEY=" + key,
 		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(t, mcpURL),
 	}
-	if t.Token != "" {
-		return append(env, tokenVar+"="+t.Token)
-	}
-	return append(env, "OPENCODE_DISABLE_PROJECT_CONFIG=1")
+	return withToken(env, t, "OPENCODE_DISABLE_PROJECT_CONFIG=1")
 }
 
 // parseOpenCode reads OpenCode's JSON events: the session, the text of the
@@ -130,10 +88,7 @@ func parseOpenCode(out string) Result {
 	var res Result
 	var report []string
 	last := ""
-	for _, line := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(line, "{") || !json.Valid([]byte(line)) {
-			continue
-		}
+	for _, line := range jsonLines(out) {
 		var e struct {
 			Type      string `json:"type"`
 			SessionID string `json:"sessionID"`
@@ -147,7 +102,7 @@ func parseOpenCode(out string) Result {
 				} `json:"tokens"`
 			} `json:"part"`
 		}
-		_ = json.Unmarshal([]byte(line), &e) // a field of another type stays empty, as in legacy
+		_ = json.Unmarshal([]byte(line), &e) // a field of another type stays empty
 		if res.SessionID == "" {
 			res.SessionID = e.SessionID
 		}

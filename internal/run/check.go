@@ -11,19 +11,11 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// withVerdict puts the runner's verdict above the agent's report.
-func withVerdict(verdict, report string) string {
-	if verdict == "" {
-		return report
-	}
-	return verdict + "\n\n" + report
-}
-
 // runCheck runs check in dir, with the agent's clone mounts but without its
 // client state, tools or credentials, limited to maxMinutes. failed is a
 // check that ran and failed, with the tail of its output; err is a stop or
 // a check that could not run.
-func (p Project) runCheck(ctx context.Context, dir, check string, maxMinutes int) (failed bool, tail string, err error) {
+func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int) (failed bool, tail string, err error) {
 	out, err := p.Env.Run(ctx, environment.Spec{
 		Issue: path.Base(dir),
 		Dir:   dir,

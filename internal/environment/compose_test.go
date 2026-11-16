@@ -66,6 +66,7 @@ const src = "/tmp/x/src"
 func goodConfig() composeConfig {
 	var cfg composeConfig
 	if err := json.Unmarshal([]byte(`{
+		"name": "p",
 		"services": {
 			"agent": {"build": {"context": "/tmp/x/src", "dockerfile": "Dockerfile"}, "environment": {"DB_HOST": "db", "UNSET": null},
 				"env_file": [{"path": "/tmp/x/src/.env.testing"}], "networks": {"default": null}},
@@ -100,25 +101,26 @@ func TestComposeCheckRefuses(t *testing.T) {
 			s.Volumes[0].Type, s.Volumes[0].Source = "bind", "/home/w"
 			c.Services["db"] = s
 		}, "service db mounts /home/w (bind)"},
-		{"privileged", svc("db", func(s *composeService) { s.Privileged = true }), "service db is privileged"},
-		{"host network", svc("db", func(s *composeService) { s.NetworkMode = "host" }), "network_mode host"},
 		{"other network", svc("db", func(s *composeService) { s.Networks = map[string]any{"front": nil} }), "joins network front"},
-		{"host pid", svc("db", func(s *composeService) { s.Pid = "host" }), "sets pid: host"},
-		{"host uts", svc("db", func(s *composeService) { s.Uts = "host" }), "sets uts: host"},
-		{"host cgroup", svc("db", func(s *composeService) { s.Cgroup = "host" }), "sets cgroup: host"},
-		{"cap_add", svc("db", func(s *composeService) { s.CapAdd = []string{"NET_ADMIN"} }), "adds capabilities"},
-		{"devices", svc("db", func(s *composeService) { s.Devices = []json.RawMessage{[]byte(`"/dev/kvm"`)} }), "maps devices"},
-		{"ports", svc("db", func(s *composeService) { s.Ports = []json.RawMessage{[]byte(`{"target": 5432}`)} }), "publishes ports"},
-		{"volumes_from", svc("db", func(s *composeService) { s.VolumesFrom = []string{"other"} }), "uses volumes_from"},
+		{"network alias", svc("db", func(s *composeService) {
+			s.Networks = map[string]any{"default": map[string]any{"aliases": []any{"proxy"}}}
+		}), "service db sets options on its network"},
 		{"env_file outside", svc("agent", func(s *composeService) { s.EnvFile[0].Path = "/home/w/.aws/credentials" }), "env_file /home/w/.aws/credentials outside"},
 		{"build outside", svc("agent", func(s *composeService) { s.Build.Context = "/home/w" }), "builds from /home/w outside"},
+		{"dockerfile outside", svc("agent", func(s *composeService) { s.Build.Dockerfile = "../../../etc/passwd" }), "dockerfile ../../../etc/passwd outside"},
+		{"build option", svc("agent", func(s *composeService) { s.Build.keys = append(s.Build.keys, "network") }), "service agent sets build.network"},
+		// compose tags what it builds as image: cinderline-proxy:<hash> would replace the egress proxy.
+		{"build and image", svc("agent", func(s *composeService) { s.Image = "cinderline-proxy:abc" }), "service agent sets both build and image"},
 		{"secret from env", func(c *composeConfig) { c.Secrets["s"] = composeSource{Environment: "GIT_TOKEN"} }, "secret s is taken from the environment"},
 		{"secret file outside", func(c *composeConfig) { c.Secrets["s"] = composeSource{File: "/home/w/.ssh/id_ed25519"} }, "secret s reads /home/w/.ssh/id_ed25519 outside"},
-		{"external volume", func(c *composeConfig) {
-			c.Volumes["data"] = struct {
-				External bool `json:"external"`
-			}{true}
-		}, "volume data is external"},
+		{"external volume", func(c *composeConfig) { c.Volumes["data"] = map[string]any{"name": "data", "external": true} }, "volume data is external"},
+		// A local volume with type none and o bind is a bind mount of the host's root.
+		{"volume driver_opts", func(c *composeConfig) {
+			c.Volumes["data"]["driver_opts"] = map[string]any{"type": "none", "o": "bind", "device": "/"}
+		}, "volume data sets driver_opts"},
+		{"volume driver", func(c *composeConfig) { c.Volumes["data"]["driver"] = "local" }, "volume data sets driver"},
+		// Another name could be the runner's own volume with the clones.
+		{"volume name", func(c *composeConfig) { c.Volumes["data"]["name"] = "cinderline-CSR-repo" }, "volume data is named cinderline-CSR-repo, not p_data"},
 		{"service named proxy", func(c *composeConfig) { c.Services["proxy"] = composeService{Image: "x"} }, "service proxy"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -137,6 +139,71 @@ func svc(name string, edit func(*composeService)) func(*composeConfig) {
 		s := c.Services[name]
 		edit(&s)
 		c.Services[name] = s
+	}
+}
+
+// A service key the runner does not know is refused, as decoded from
+// compose's JSON: a list of refused keys let security_opt, runtime and
+// device_cgroup_rules through, because the struct had no field for them.
+func TestComposeCheckRefusesServiceKeys(t *testing.T) {
+	for key, value := range map[string]string{
+		"security_opt":        `["seccomp=unconfined"]`,
+		"runtime":             `"sysbox-runc"`,
+		"device_cgroup_rules": `["c 1:3 mr"]`,
+		"privileged":          `true`,
+		"cap_add":             `["NET_ADMIN"]`,
+		"devices":             `[{"source": "/dev/kvm", "target": "/dev/kvm"}]`,
+		"ports":               `[{"target": 5432, "published": "5432"}]`,
+		"volumes_from":        `["other"]`,
+		"network_mode":        `"host"`,
+		"pid":                 `"host"`,
+		"ipc":                 `"host"`,
+		"uts":                 `"host"`,
+		"cgroup":              `"host"`,
+		"userns_mode":         `"host"`,
+		"cgroup_parent":       `"/"`,
+		"extra_hosts":         `["proxy=10.0.0.1"]`,
+		"sysctls":             `{"net.ipv4.ip_forward": "1"}`,
+		"group_add":           `["0"]`,
+		"gpus":                `[{"count": -1}]`,
+		"deploy":              `{"resources": {"reservations": {"devices": [{"capabilities": ["gpu"]}]}}}`,
+		"use_api_socket":      `true`,
+		"post_start":          `[{"command": ["true"], "privileged": true}]`,
+		"container_name":      `"cinderline-CSR-CSR-31-proxy"`,
+		"logging":             `{"driver": "syslog"}`,
+		"dns":                 `["10.0.0.1"]`,
+		"links":               `["db"]`,
+		"labels":              `{"cinderline.project": "OTHER"}`,
+		"storage_opt":         `{"size": "1G"}`,
+		"a_key_of_tomorrow":   `1`,
+	} {
+		t.Run(key, func(t *testing.T) {
+			cfg := goodConfig()
+			var s composeService
+			if err := json.Unmarshal([]byte(`{"image": "postgres:17", "`+key+`": `+value+`}`), &s); err != nil {
+				t.Fatal(err)
+			}
+			cfg.Services["db"] = s
+			err := cfg.check(src, "agent")
+			if want := "service db sets " + key + ", which the runner does not allow"; err == nil || err.Error() != want {
+				t.Errorf("check = %v, want %q", err, want)
+			}
+		})
+	}
+}
+
+// What compose's normalised config holds for an ordinary file passes.
+func TestComposeCheckAcceptsServiceKeys(t *testing.T) {
+	cfg := goodConfig()
+	var s composeService
+	if err := json.Unmarshal([]byte(`{"image": "mysql:8.0", "command": null, "entrypoint": null, "environment": {"MYSQL_DATABASE": "x"},
+		"healthcheck": {"test": ["CMD", "mysqladmin", "ping"]}, "depends_on": {"agent": {"condition": "service_started"}},
+		"networks": {"default": null}, "tmpfs": ["/tmp"], "user": "mysql", "restart": "no"}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Services["db"] = s
+	if err := cfg.check(src, "agent"); err != nil {
+		t.Error(err)
 	}
 }
 
@@ -176,7 +243,7 @@ func composeRunner(t *testing.T, config string) (*Docker, func() []execCall, *st
 }
 
 // A project with environment docker runs its turn in its own compose file's
-// agent service: no MySQL, the other services started on the run's internal
+// agent service: the other services started on the run's internal
 // network, the agent hardened as ever in the service's image with its
 // environment, and everything removed after.
 func TestRunInCompose(t *testing.T) {
@@ -185,8 +252,9 @@ func TestRunInCompose(t *testing.T) {
 			"agent": {"build": {"context": "SRC"}, "environment": {"DB_HOST": "db", "UNSET": null}},
 			"db": {"image": "postgres:17", "volumes": [{"type": "volume", "source": "data"}]}
 		},
+		"name": "cinderline-csr-csr-31",
 		"networks": {"default": {"name": "x"}},
-		"volumes": {"data": {}}
+		"volumes": {"data": {"name": "cinderline-csr-csr-31_data"}}
 	}`)
 	// The build context must lie in the runner's temporary folder: SRC
 	// becomes that folder when the config is asked for.
@@ -224,10 +292,6 @@ func TestRunInCompose(t *testing.T) {
 			}
 		}
 		switch {
-		case strings.Contains(a, "mysql"):
-			if strings.Contains(a, "--network-alias mysql") {
-				t.Errorf("MySQL started: %q", c.Argv)
-			}
 		case strings.Contains(a, "<stdin:"):
 			agent = c.Argv
 		case strings.Contains(a, " up --detach --wait"):
@@ -262,8 +326,8 @@ func TestRunInCompose(t *testing.T) {
 			t.Errorf("agent %q lacks %s %s", agent, flag[0], flag[1])
 		}
 	}
-	if hasPair(agent, "-e", "DB_HOST=mysql") || slices.ContainsFunc(agent, func(a string) bool { return strings.HasPrefix(a, "UNSET") }) {
-		t.Errorf("agent %q has the default database or an unset variable", agent)
+	if slices.ContainsFunc(agent, func(a string) bool { return strings.HasPrefix(a, "UNSET") }) {
+		t.Errorf("agent %q has an unset variable", agent)
 	}
 	if i := slices.Index(agent, "claude"); i < 1 || agent[i-1] != "cinderline-csr-agent" {
 		t.Errorf("agent %q, want the built agent image before the command", agent)
@@ -297,7 +361,7 @@ func TestRunInCompose(t *testing.T) {
 func TestRunInComposeRefused(t *testing.T) {
 	d, calls, _ := composeRunner(t, `{"services": {"agent": {"image": "php:8.4", "ports": [{"target": 80, "published": "8080"}]}}}`)
 	_, err := d.Run(context.Background(), turn)
-	if err == nil || !strings.Contains(err.Error(), "service agent publishes ports") {
+	if err == nil || !strings.Contains(err.Error(), "service agent sets ports") {
 		t.Fatalf("Run = %v, want the ports refused", err)
 	}
 	got := calls()

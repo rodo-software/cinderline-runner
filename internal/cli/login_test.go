@@ -38,7 +38,7 @@ func TestLoginUsage(t *testing.T) {
 
 func TestLoginUnknownProject(t *testing.T) {
 	c, _, errb := newCLI(t, "")
-	saveConfig(t, c, config.Project{URL: "https://cinderline.test", Key: "WEB", Repository: "https://git.test/o/r.git"})
+	saveConfig(t, c, config.Project{Workspace: "default", URL: "https://cinderline.test", Key: "WEB", Repository: "https://git.test/o/r.git"})
 	if code := c.Run([]string{"login", "claude", "--project", "NOPE"}); code != 1 {
 		t.Errorf("code %d, want 1", code)
 	}
@@ -50,7 +50,7 @@ func TestLoginUnknownProject(t *testing.T) {
 func TestLoginClientWithoutLogin(t *testing.T) {
 	for client, want := range map[string]string{"opencode": "OpenRouter", "cursor": "cursor"} {
 		c, _, errb := newCLI(t, "")
-		saveConfig(t, c, config.Project{URL: "https://cinderline.test", Key: "WEB", Repository: "https://git.test/o/r.git"})
+		saveConfig(t, c, config.Project{Workspace: "default", URL: "https://cinderline.test", Key: "WEB", Repository: "https://git.test/o/r.git"})
 		if code := c.Run([]string{"login", client, "--project", "WEB"}); code != 1 {
 			t.Errorf("%s: code %d, want 1", client, code)
 		}
@@ -72,7 +72,7 @@ func TestLoginFirstTimeLines(t *testing.T) {
 	}{{"present", false, false}, {"image missing", true, false}, {"tools missing", false, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, out, _ := newCLI(t, "")
-			saveConfig(t, c, config.Project{URL: "https://cinderline.test", Key: "WEB", Repository: "https://git.test/o/r.git"})
+			saveConfig(t, c, config.Project{Workspace: "default", URL: "https://cinderline.test", Key: "WEB", Repository: "https://git.test/o/r.git"})
 			var fetched, downloaded bool
 			c.exec = func(_ context.Context, _ []string, argv ...string) (string, error) {
 				cmd := strings.Join(argv, " ")

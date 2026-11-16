@@ -1,3 +1,5 @@
+Superseded by decision 2026-11-16-runner-protocol-v2
+
 # In progress issues no run holds go to Blocked with a note
 
 - **Status:** Accepted

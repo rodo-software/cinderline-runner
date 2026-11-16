@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/daemon"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
-	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
@@ -97,8 +97,8 @@ func TestRunRefusesHeldSocket(t *testing.T) {
 func TestStatusPrintsEachProject(t *testing.T) {
 	c, out, errb := daemonCLI(t, "")
 	at := time.Date(2026, 11, 6, 14, 30, 0, 0, time.Local)
-	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []scheduler.ProjectStatus {
-		return []scheduler.ProjectStatus{
+	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []localapi.ProjectStatus {
+		return []localapi.ProjectStatus{
 			{Project: "WEB", Connected: true, LastPoll: at, Issue: "WEB-7"},
 			{Project: "API", LastError: "token not found", LastErrorAt: at},
 		}
@@ -130,7 +130,7 @@ func TestStatusPrintsEachProject(t *testing.T) {
 
 func TestStatusNoProjects(t *testing.T) {
 	c, out, _ := daemonCLI(t, "")
-	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []scheduler.ProjectStatus { return nil }})
+	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []localapi.ProjectStatus { return nil }})
 	if code := c.Run([]string{"status"}); code != 0 || !strings.Contains(out.String(), "no projects") {
 		t.Errorf("code %d, stdout %q", code, out.String())
 	}
@@ -199,18 +199,18 @@ func TestNotRunning(t *testing.T) {
 }
 
 // app is a fake Cinderline for the M2 check: it knows goodToken's project
-// WEB, has no work, and counts the reports and heartbeats it gets.
+// WEB, has no work, and counts the polls it gets.
 type app struct {
-	url                 string
-	mu                  sync.Mutex
-	reports, heartbeats int
-	report              string
+	url    string
+	mu     sync.Mutex
+	polls  int
+	report string
 }
 
-func (a *app) counts() (reports, heartbeats int) {
+func (a *app) count() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.reports, a.heartbeats
+	return a.polls
 }
 
 func newApp(t *testing.T) *app {
@@ -220,33 +220,19 @@ func newApp(t *testing.T) *app {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		switch r.Method + " " + strings.TrimPrefix(r.URL.Path, "/api/runner/v1") {
-		case "GET /project":
-			io.WriteString(w, `{"key":"WEB","name":"Web shop","repository_url":"`+repoURL+`","forge":"forgejo","base_branch":"main","environment":"laravel"}`)
-		case "GET /work":
-			if r.Header.Get("If-None-Match") != "" {
-				<-r.Context().Done() // nothing changed: hold the long-poll
-				return
-			}
-			w.Header().Set("ETag", `"none"`)
-			io.WriteString(w, `{"issue":null}`)
-		case "GET /issues":
-			io.WriteString(w, `{"issues":[]}`)
-		case "PUT /report":
-			body, _ := io.ReadAll(r.Body)
-			a.mu.Lock()
-			a.reports++
-			a.report = string(body)
-			a.mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-		case "POST /heartbeat":
-			a.mu.Lock()
-			a.heartbeats++
-			a.mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-		default:
+		if r.Method+" "+r.URL.Path != "POST /api/runner/v2/poll" {
 			http.NotFound(w, r)
+			return
 		}
+		var req struct {
+			Report json.RawMessage `json:"report"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		a.mu.Lock()
+		a.polls++
+		a.report = string(req.Report)
+		a.mu.Unlock()
+		io.WriteString(w, `{"poll_after":30,"review_after":300,"project":{"key":"WEB","name":"Web shop","repository_url":"`+repoURL+`","forge":"forgejo","base_branch":"main","environment":"default","idle_minutes":20,"linked_projects":[]},"job":null,"stop":[]}`)
 	}))
 	t.Cleanup(srv.Close)
 	a.url = srv.URL
@@ -254,7 +240,7 @@ func newApp(t *testing.T) *app {
 }
 
 // TestM2AddRunStatus is the M2 check against fakes: add a project, run the
-// daemon, see it report, heartbeat and find no work, and see that in status.
+// daemon, see it poll with its report and find no work, and see that in status.
 func TestM2AddRunStatus(t *testing.T) {
 	// daemon startup cleanup shells out to docker; empty PATH keeps it off the host's real Docker
 	t.Setenv("PATH", t.TempDir())
@@ -271,7 +257,7 @@ func TestM2AddRunStatus(t *testing.T) {
 		s, err := sc.Status(context.Background())
 		return err == nil && len(s.Projects) == 1 && s.Projects[0].Connected
 	})
-	waitFor(t, "a report and a heartbeat", func() bool { r, h := a.counts(); return r > 0 && h > 0 })
+	waitFor(t, "a poll", func() bool { return a.count() > 0 })
 	a.mu.Lock()
 	if !strings.Contains(a.report, `"runner_version":"1.2.3"`) {
 		t.Errorf("report %s lacks the runner version", a.report)
@@ -340,13 +326,13 @@ func TestStopDrainNamesIssuesInFlight(t *testing.T) {
 	srv := &http.Server{}
 	srv.Handler = localapi.Handler(localapi.Handlers{
 		Drain: func() { mu.Lock(); drained = true; mu.Unlock() },
-		Status: func() []scheduler.ProjectStatus {
+		Status: func() []localapi.ProjectStatus {
 			mu.Lock()
 			defer mu.Unlock()
 			if polls++; drained && polls > 2 {
 				go srv.Close() // the run finished and the daemon exits
 			}
-			return []scheduler.ProjectStatus{{Project: "CSR", Connected: true, Issue: "CSR-7"}}
+			return []localapi.ProjectStatus{{Project: "CSR", Connected: true, Issue: "CSR-7"}}
 		},
 	})
 	go srv.Serve(ln)
@@ -402,9 +388,10 @@ func TestRunVerbose(t *testing.T) {
 			if verbose {
 				args = append(args, "-v")
 			}
+			added := a.count() // add's own poll
 			ran := make(chan int, 1)
 			go func() { ran <- c.Run(args) }()
-			waitFor(t, "a report and a heartbeat", func() bool { r, h := a.counts(); return r > 0 && h > 0 })
+			waitFor(t, "a poll", func() bool { return a.count() > added })
 			if code := c.Run([]string{"stop"}); code != 0 {
 				t.Fatalf("stop: code %d", code)
 			}

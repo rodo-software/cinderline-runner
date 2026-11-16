@@ -1,3 +1,5 @@
+Superseded 2026-11-16: manage was removed; key covers it
+
 # Interactive management screen: github.com/charmbracelet/huh
 
 - **Status:** Accepted

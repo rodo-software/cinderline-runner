@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // releaseArchive is this OS's release archive (as GoReleaser names it) holding
@@ -82,9 +82,10 @@ func releaseServer(t *testing.T, bin []byte, sum string) {
 	t.Setenv(strings.ToUpper(name.Name)+"_DOWNLOAD_URL", srv.URL)
 }
 
-// updateCLI is a CLI whose binary is a file with content "old" and whose
-// commands for the new binary go to a fake that answers version with
-// newVersion and update --refresh with refreshErr.
+// updateCLI is a CLI whose binary is a file with content "old". The install
+// script runs for real against releaseServer's release; the commands for the
+// binary it installs go to a fake that answers version with newVersion and
+// update --refresh with refreshErr.
 func updateCLI(t *testing.T, newVersion string, refreshErr error) (c *CLI, exe string, calls func() [][]string) {
 	t.Helper()
 	c, _, _ = daemonCLI(t, "")
@@ -99,11 +100,14 @@ func updateCLI(t *testing.T, newVersion string, refreshErr error) (c *CLI, exe s
 	c.startService = func(string) (bool, error) { return false, nil } // no service: never touch the real one
 	var mu sync.Mutex
 	var got [][]string
-	c.exec = func(_ context.Context, _ []string, argv ...string) (string, error) {
+	c.exec = func(ctx context.Context, env []string, argv ...string) (string, error) {
+		if argv[0] != exe {
+			return workspace.RunCommand(ctx, env, argv...) // the install script
+		}
 		mu.Lock()
 		got = append(got, argv)
 		mu.Unlock()
-		if argv[0] == exe {
+		if content(t, exe) == "old" {
 			return "", fmt.Errorf("ran the old binary: %q", argv)
 		}
 		switch strings.Join(argv[1:], " ") {
@@ -146,10 +150,12 @@ func TestUpdateChecksumMismatchKeepsOldBinary(t *testing.T) {
 	}
 }
 
-// CSR-44: a failed refresh of the tools volume and image keeps the old binary.
-func TestUpdateRefreshFailureKeepsOldBinary(t *testing.T) {
+// A failed refresh of the tools volume and image fails the update and says
+// why, before the running runner is drained.
+func TestUpdateRefreshFailure(t *testing.T) {
 	releaseServer(t, []byte("new"), "")
-	c, exe, _ := updateCLI(t, "9.9.9", errors.New("docker build failed"))
+	c, _, _ := updateCLI(t, "9.9.9", errors.New("docker build failed"))
+	c.startService = func(string) (bool, error) { t.Error("started the service"); return true, nil }
 	errb := c.Stderr.(*bytes.Buffer)
 	if code := c.Run([]string{"update"}); code != 1 {
 		t.Fatalf("code %d, want 1; stderr %q", code, errb.String())
@@ -157,16 +163,15 @@ func TestUpdateRefreshFailureKeepsOldBinary(t *testing.T) {
 	if !strings.Contains(errb.String(), "docker build failed") {
 		t.Errorf("stderr %q, want it to say what failed", errb.String())
 	}
-	if got := content(t, exe); got != "old" {
-		t.Errorf("binary = %q, want the old one kept", got)
-	}
 }
 
-// CSR-44: a verified download is refreshed with the new binary itself (its
-// pins and image), then replaces the old binary; no daemon runs, so nothing
-// is drained.
+// CSR-44: the install script replaces the binary where it is, leaving the
+// PATH alone, and the new binary itself (its pins and image) refreshes the
+// tools and image; no daemon runs, so nothing is drained.
 func TestUpdateReplacesBinary(t *testing.T) {
 	releaseServer(t, []byte("new"), "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	c, exe, calls := updateCLI(t, "9.9.9", nil)
 	out, errb := c.Stdout.(*bytes.Buffer), c.Stderr.(*bytes.Buffer)
 	if code := c.Run([]string{"update"}); code != 0 {
@@ -189,18 +194,18 @@ func TestUpdateReplacesBinary(t *testing.T) {
 	if len(entries) > 2 { // the binary and, on Windows, the renamed old one
 		t.Errorf("left behind in the binary's folder: %v", entries)
 	}
+	if entries, _ := os.ReadDir(home); len(entries) > 0 {
+		t.Errorf("the update wrote in the home folder: %v", entries)
+	}
 }
 
 // CSR-44: when the latest release is the running version, nothing changes.
 func TestUpdateAlreadyCurrent(t *testing.T) {
 	releaseServer(t, []byte("new"), "")
-	c, exe, calls := updateCLI(t, "1.2.3", nil) // newCLI's version
+	c, _, calls := updateCLI(t, "1.2.3", nil) // newCLI's version
 	errb := c.Stderr.(*bytes.Buffer)
 	if code := c.Run([]string{"update"}); code != 0 {
 		t.Fatalf("code %d; stderr %q", code, errb.String())
-	}
-	if got := content(t, exe); got != "old" {
-		t.Errorf("binary = %q, want it untouched", got)
 	}
 	for _, argv := range calls() {
 		if strings.Join(argv[1:], " ") == "update --refresh" {
@@ -232,59 +237,6 @@ func TestUpdateDrainsRunningDaemon(t *testing.T) {
 	}
 	if got := content(t, exe); got != "new" {
 		t.Errorf("binary = %q, want the new one", got)
-	}
-}
-
-// TestHelperSleep is not a test: TestReplaceRunningExecutable starts a copy of
-// the test binary with this env var set to keep a running executable.
-func TestHelperSleep(t *testing.T) {
-	if os.Getenv("CSR44_HELPER_SLEEP") == "" {
-		t.Skip("helper process only")
-	}
-	time.Sleep(30 * time.Second)
-}
-
-// CSR-44: replacing a binary that is running works on this OS (CI runs it on
-// Linux, macOS and Windows; Windows needs the running exe renamed first).
-func TestReplaceRunningExecutable(t *testing.T) {
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	exe := filepath.Join(dir, name.Name)
-	if runtime.GOOS == "windows" {
-		exe += ".exe"
-	}
-	bin, err := os.ReadFile(self)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(exe, bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(exe, "-test.run=^TestHelperSleep$")
-	cmd.Env = append(os.Environ(), "CSR44_HELPER_SLEEP=1")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-	time.Sleep(200 * time.Millisecond) // let the OS map it
-
-	next := filepath.Join(dir, "next")
-	if err := os.WriteFile(next, []byte("new"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := replaceExe(exe, next); err != nil {
-		t.Fatalf("replaceExe: %v", err)
-	}
-	if got := content(t, exe); got != "new" {
-		t.Errorf("binary = %q, want the new one", got)
-	}
-	if runtime.GOOS != "windows" {
-		if fi, err := os.Stat(exe); err != nil || fi.Mode()&0o100 == 0 {
-			t.Errorf("new binary not executable: %v %v", fi.Mode(), err)
-		}
 	}
 }
 

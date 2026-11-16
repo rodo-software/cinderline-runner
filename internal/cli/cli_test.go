@@ -16,7 +16,6 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
-	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
@@ -29,8 +28,8 @@ const (
 	repoURL   = "https://git.example.com/owner/Repo"
 )
 
-// instance serves /api/runner/v1/project for goodToken and answers 401 to
-// any other token, as a Cinderline from before workspaces.
+// instance answers a poll with goodToken's project and 401 to any other
+// token, with no workspace.
 func instance(t *testing.T, key, repo string) string {
 	t.Helper()
 	return instanceIn(t, key, repo, "")
@@ -41,10 +40,10 @@ func instanceIn(t *testing.T, key, repo, workspace string) string {
 	t.Helper()
 	ws := ""
 	if workspace != "" {
-		ws = `,"workspace":{"id":7,"slug":"` + workspace + `"}`
+		ws = `,"workspace":"` + workspace + `"`
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/runner/v1/project" {
+		if r.Method != "POST" || r.URL.Path != "/api/runner/v2/poll" {
 			http.NotFound(w, r)
 			return
 		}
@@ -54,7 +53,7 @@ func instanceIn(t *testing.T, key, repo, workspace string) string {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"key":"` + key + `","name":"Web shop","repository_url":"` + repo + `","forge":"forgejo","base_branch":"main","environment":"laravel"` + ws + `}`))
+		w.Write([]byte(`{"poll_after":30,"project":{"key":"` + key + `","name":"Web shop","repository_url":"` + repo + `","forge":"forgejo","base_branch":"main","environment":"default"` + ws + `}}`))
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
@@ -86,9 +85,6 @@ func newCLI(t *testing.T, stdin string) (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		Stdout:  &out,
 		Stderr:  &errb,
 		exec:    healthyDocker,
-		Forge: func(string, string, string) (forge.Forge, error) {
-			return &forge.Fake{CISecretsReplies: []forge.CISecretsReply{{}}}, nil
-		},
 	}, &out, &errb
 }
 
@@ -190,7 +186,7 @@ func TestAddHappyPath(t *testing.T) {
 	if v := secret(t, c, want, secrets.GitToken); v != "git-tok" {
 		t.Errorf("git token %q", v)
 	}
-	for _, s := range []string{"WEB", "Web shop", "Stored runner token in the keychain", "Stored git token in the keychain", "Added WEB at " + u + "\n"} {
+	for _, s := range []string{"WEB", "Web shop", "Stored runner token in the keychain", "Stored git token in the keychain", `see "CI secrets" in the README`, "Added WEB at " + u + "\n"} {
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("stdout lacks %q:\n%s", s, out.String())
 		}
@@ -223,7 +219,7 @@ func TestAddReasksRejectedToken(t *testing.T) {
 	if n := strings.Count(out.String(), "Runner token"); n != 3 {
 		t.Errorf("asked the token %d times, want 3", n)
 	}
-	p := config.Project{URL: u, Key: "WEB"}
+	p := config.Project{Workspace: "default", URL: u, Key: "WEB"}
 	if v := secret(t, c, p, secrets.RunnerToken); v != goodToken {
 		t.Errorf("runner token %q, want the good one", v)
 	}
@@ -286,7 +282,7 @@ func TestAddEOFStoresNothing(t *testing.T) {
 		if got := projects(t, c); got != nil {
 			t.Errorf("%q: config written: %+v", in, got)
 		}
-		if v := secret(t, c, config.Project{URL: u, Key: "WEB"}, secrets.RunnerToken); v != "" {
+		if v := secret(t, c, config.Project{Workspace: "default", URL: u, Key: "WEB"}, secrets.RunnerToken); v != "" {
 			t.Errorf("%q: runner token stored", in)
 		}
 	}
@@ -313,10 +309,9 @@ func TestAddSameKeyInAnotherWorkspace(t *testing.T) {
 	}
 }
 
-// CSR-97: the same URL, workspace and key is refused, pointing at the entry;
-// so is one made before workspaces that the daemon has not filled in yet.
+// CSR-97: the same URL, workspace and key is refused, pointing at the entry.
 func TestAddRefusesSameTriple(t *testing.T) {
-	for _, existing := range []string{"acme", ""} {
+	for _, existing := range []string{"acme"} {
 		u := instanceIn(t, "WEB", repoURL, "acme")
 		c, _, errb := newCLI(t, lines(u, goodToken, "", "git-tok"))
 		saveConfig(t, c, config.Project{URL: u, Key: "WEB", Repository: repoURL, Workspace: existing})
@@ -336,7 +331,7 @@ func TestAddRefusesSameTriple(t *testing.T) {
 func TestAddRefusesSameKeyOnAnotherInstance(t *testing.T) {
 	u := instance(t, "WEB", repoURL)
 	c, _, errb := newCLI(t, lines(u, goodToken, "", "git-tok"))
-	saveConfig(t, c, config.Project{URL: "https://other.example.com", Key: "WEB", Repository: repoURL})
+	saveConfig(t, c, config.Project{Workspace: "default", URL: "https://other.example.com", Key: "WEB", Repository: repoURL})
 	if code := c.Run([]string{"add"}); code != 1 {
 		t.Fatalf("code %d, want 1", code)
 	}
@@ -351,7 +346,7 @@ func TestAddRefusesSameKeyOnAnotherInstance(t *testing.T) {
 func TestAddRefusesExistingProject(t *testing.T) {
 	u := instance(t, "WEB", repoURL)
 	c, _, errb := newCLI(t, lines(u, goodToken, "", "git-tok"))
-	existing := config.Project{URL: u, Key: "WEB", Repository: repoURL}
+	existing := config.Project{Workspace: "default", URL: u, Key: "WEB", Repository: repoURL}
 	saveConfig(t, c, existing)
 	if code := c.Run([]string{"add"}); code != 1 {
 		t.Fatalf("code %d, want 1", code)
@@ -366,8 +361,8 @@ func TestAddRefusesExistingProject(t *testing.T) {
 
 func TestAddCopiesModelCredentials(t *testing.T) {
 	u := instance(t, "WEB", repoURL)
-	other := config.Project{URL: "https://other.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
-	empty := config.Project{URL: "https://other.example.com", Key: "DOCS", Repository: "https://git.example.com/o/docs"}
+	other := config.Project{Workspace: "default", URL: "https://other.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
+	empty := config.Project{Workspace: "default", URL: "https://other.example.com", Key: "DOCS", Repository: "https://git.example.com/o/docs"}
 
 	c, out, errb := newCLI(t, lines(u, goodToken, "", "git-tok", "7", "x", "1"))
 	saveConfig(t, c, other, empty)
@@ -385,7 +380,7 @@ func TestAddCopiesModelCredentials(t *testing.T) {
 	if n := strings.Count(out.String(), "Copy model credentials"); n != 3 {
 		t.Errorf("asked %d times, want 3", n)
 	}
-	if v := secret(t, c, config.Project{URL: u, Key: "WEB"}, secrets.AnthropicCredential); v != "sk-ant" {
+	if v := secret(t, c, config.Project{Workspace: "default", URL: u, Key: "WEB"}, secrets.AnthropicCredential); v != "sk-ant" {
 		t.Errorf("anthropic credential %q", v)
 	}
 
@@ -410,9 +405,9 @@ func TestAddCopiesModelCredentials(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
-	a := config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
-	b := config.Project{URL: "https://b.example.com", Key: "WEB", Repository: "https://git.example.com/o/b"}
-	api := config.Project{URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
+	a := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
+	b := config.Project{Workspace: "default", URL: "https://b.example.com", Key: "WEB", Repository: "https://git.example.com/o/b"}
+	api := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
 	kinds := []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey, secrets.GeminiKey}
 	setup := func() (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		c, out, errb := newCLI(t, "")

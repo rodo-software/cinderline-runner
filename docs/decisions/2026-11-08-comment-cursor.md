@@ -1,3 +1,5 @@
+Superseded by decision 2026-11-16-runner-protocol-v2
+
 # Comment cursor under the 200-row cap
 
 - **Status:** Accepted

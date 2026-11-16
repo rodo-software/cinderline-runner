@@ -13,9 +13,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
-// The GitHub cases of the app repository's runner/lib.forge.test.mjs at
-// commit ecde51a (decision 2026-11-05-legacy-reference, amendments), run
-// against recorded answers instead of a network.
+// The GitHub forge against recorded answers instead of a network.
 
 const testToken = "secret-token"
 
@@ -31,7 +29,7 @@ type request struct {
 }
 
 // recorded returns a GitHub Forge for repository whose requests are recorded
-// and answered with replies in order, as legacy fakeFetch.
+// and answered with replies in order.
 func recorded(t *testing.T, repository string, replies ...reply) (*GitHub, *[]request) {
 	t.Helper()
 	g, err := NewGitHub(repository, testToken)
@@ -98,8 +96,8 @@ func wantURLs(t *testing.T, reqs []request, want ...string) {
 
 var input = PullRequestInput{Branch: "cinderline/EMB-3", Base: "main", Title: "T", Body: "B"}
 
-// Ported from "parseRepository treats github.com as GitHub, in every URL
-// form" and "parseRepository keeps an https port for the clone, the push and
+// parseRepository treats github.com as GitHub, in every URL
+// form and "parseRepository keeps an https port for the clone, the push and
 // the API" (its GitHub Enterprise side). Telling GitHub from other forges by
 // host is the forge choice's, not this file's.
 func TestGitHubRepositoryForms(t *testing.T) {
@@ -139,8 +137,7 @@ func TestGitHubDefaultBranch(t *testing.T) {
 	}
 }
 
-// Ported from "openPullRequest opens a GitHub pull request with a bearer
-// header", with the rest of legacy forgeRequest's GitHub headers.
+// A GitHub pull request is opened with a bearer header and GitHub's API headers.
 func TestGitHubOpenPullRequest(t *testing.T) {
 	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{201, `{"number":7,"html_url":"u","node_id":"PR_1"}`})
@@ -170,8 +167,8 @@ func TestGitHubOpenPullRequest(t *testing.T) {
 	}
 }
 
-// Ported from the GitHub half of "openPullRequest finds the pull request an
-// earlier run opened": GitHub answers 422 when one is open.
+// The GitHub half of openPullRequest finds the pull request an
+// earlier run opened: GitHub answers 422 when one is open.
 func TestGitHubOpenPullRequestFindsEarlier(t *testing.T) {
 	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{422, `{"message":"exists"}`},
@@ -186,7 +183,7 @@ func TestGitHubOpenPullRequestFindsEarlier(t *testing.T) {
 		"GET https://api.github.com/repos/willem/cinderline/pulls?state=open&head=willem%3Acinderline%2FEMB-3")
 }
 
-// Ported from "openPullRequest reports a refusal with the forge's answer".
+// OpenPullRequest reports a refusal with the forge's answer.
 func TestGitHubOpenPullRequestRefused(t *testing.T) {
 	g, _ := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{422, `{"message":"No commits between main and cinderline/EMB-3"}`},
@@ -221,7 +218,7 @@ func TestGitHubFindPullRequest(t *testing.T) {
 	}
 }
 
-// Ported from "requestMerge enables GitHub auto-merge over GraphQL". The
+// RequestMerge enables GitHub auto-merge over GraphQL. The
 // pull request's node ID is read first: the Forge's PullRequest carries only
 // its number.
 func TestGitHubRequestMerge(t *testing.T) {
@@ -248,8 +245,8 @@ func TestGitHubRequestMerge(t *testing.T) {
 	}
 }
 
-// Ported from "GitHub Enterprise opens the pull request under /api/v3 and
-// auto-merges over /api/graphql".
+// GitHub Enterprise opens the pull request under /api/v3 and
+// auto-merges over /api/graphql.
 func TestGitHubEnterprise(t *testing.T) {
 	g, reqs := recorded(t, "git@ghe.example.com:team/app.git",
 		reply{201, `{"number":7,"html_url":"u","node_id":"PR_1"}`},
@@ -278,8 +275,8 @@ func TestGitHubEnterprise(t *testing.T) {
 	}
 }
 
-// Ported from "requestMerge reports a refusal, also as GraphQL errors in a
-// 200" and "requestMerge does not retry a 405 on GitHub".
+// RequestMerge reports a refusal, also as GraphQL errors in a
+// 200 and "requestMerge does not retry a 405 on GitHub".
 func TestGitHubRequestMergeRefused(t *testing.T) {
 	pr := reply{200, `{"number":7,"node_id":"x"}`}
 	for _, tt := range []struct {
@@ -308,7 +305,7 @@ func TestGitHubRequestMergeRefused(t *testing.T) {
 	}
 }
 
-// Ported from "pullRequestOutcome on GitHub" and "awaitMerge reads GitHub
+// pullRequestOutcome on GitHub and "awaitMerge reads GitHub
 // pull requests" (the merge wait reads MergeState by branch, decision 0091).
 func TestGitHubMergeState(t *testing.T) {
 	const list = "GET https://api.github.com/repos/willem/cinderline/pulls?state=all&head=willem%3Acinderline%2FEMBER-1"
@@ -346,7 +343,7 @@ func TestGitHubMergeState(t *testing.T) {
 	}
 }
 
-// Ported from "pullRequestOutcome throws on an error answer" (GitHub).
+// pullRequestOutcome throws on an error answer (GitHub).
 func TestGitHubMergeStateError(t *testing.T) {
 	g, _ := recorded(t, "https://github.com/willem/cinderline.git", reply{401, `{"message":"no"}`})
 	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401") {

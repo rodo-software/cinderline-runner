@@ -83,7 +83,6 @@ func New(stateDir string) *Secrets {
 
 // entry is the keychain user and the file key. A project ID has no
 // whitespace and a kind no space, so the URL last keeps it unambiguous.
-// The ID keeps an entry made before workspaces where it was (CSR-97).
 func entry(p config.Project, k Kind) string {
 	return string(k) + " " + p.ID() + " " + p.URL
 }
@@ -198,8 +197,8 @@ func (s *Secrets) readFile() (map[string]string, error) {
 }
 
 // updateFile applies change to the fallback file and writes it back when change
-// reports a change, atomically like config.Save. Callers hold mu.
-func (s *Secrets) updateFile(change func(map[string]string) bool) (err error) {
+// reports a change. Callers hold mu.
+func (s *Secrets) updateFile(change func(map[string]string) bool) error {
 	m, err := s.readFile()
 	if err != nil || !change(m) {
 		return err
@@ -208,28 +207,5 @@ func (s *Secrets) updateFile(change func(map[string]string) bool) (err error) {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(s.file)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, ".secrets-*.json") // created 0600
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			f.Close()
-			os.Remove(f.Name())
-		}
-	}()
-	if _, err = f.Write(append(data, '\n')); err != nil {
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), s.file)
+	return config.WriteFile(s.file, append(data, '\n'))
 }

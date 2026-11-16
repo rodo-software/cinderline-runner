@@ -1,12 +1,10 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
@@ -14,16 +12,20 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
+// projectUsage is the flags repoFlags parses, for a command's usage.
+const projectUsage = "--project KEY [-url URL] [-workspace SLUG]"
+
 // repoFlags parses --project, -url and -workspace and returns the config and the index
 // of the project in it; code is non-zero when the command must stop.
 func (c *CLI) repoFlags(cmd, usage string, args []string, nargs int) (cfg *config.Config, i int, rest []string, code int) {
 	f := c.flags(cmd, usage)
 	project := f.String("project", "", "project key")
 	instance, ws := projectFlags(f)
-	if err := f.Parse(args); err != nil || *project == "" || f.NArg() != nargs {
-		if err == nil {
-			f.Usage()
-		}
+	if !c.parsed(f, args, nargs) {
+		return nil, 0, nil, 2
+	}
+	if *project == "" {
+		f.Usage()
 		return nil, 0, nil, 2
 	}
 	cfg, err := c.loadConfig()
@@ -42,7 +44,7 @@ func (c *CLI) repoFlags(cmd, usage string, args []string, nargs int) (cfg *confi
 // (CSR-160). It asks for the URL, an optional ref and a git token, and checks
 // with git ls-remote that the token can read the ref before storing anything.
 func (c *CLI) addRepo(args []string) int {
-	cfg, i, _, code := c.repoFlags("add-repo", "--project KEY [-url URL] [-workspace SLUG]", args, 0)
+	cfg, i, _, code := c.repoFlags("add-repo", projectUsage, args, 0)
 	if code != 0 {
 		return code
 	}
@@ -50,17 +52,7 @@ func (c *CLI) addRepo(args []string) int {
 	if err := c.checkDocker(context.Background(), false); err != nil {
 		return c.fail(err)
 	}
-	in := bufio.NewScanner(c.Stdin)
-	ask := func(prompt string) (string, error) {
-		fmt.Fprint(c.Stdout, prompt)
-		if !in.Scan() {
-			if err := in.Err(); err != nil {
-				return "", err
-			}
-			return "", errEOF
-		}
-		return strings.TrimSpace(in.Text()), nil
-	}
+	ask := c.lineAsk()
 	say := func(format string, a ...any) { fmt.Fprintf(c.Stdout, format+"\n", a...) }
 
 	var r config.ExtraRepository
@@ -114,13 +106,13 @@ func (c *CLI) addRepo(args []string) int {
 
 	// The config first, so a failed save stores no secret.
 	cfg.Projects[i].ExtraRepositories = append(slices.Clone(p.ExtraRepositories), r)
-	if err := c.saveConfig(cfg); err != nil {
+	if err := cfg.Save(c.Paths.File); err != nil {
 		return c.fail(err)
 	}
 	store, err := c.Secrets.Set(p, secrets.ExtraGitToken(r.URL), token)
 	if err != nil {
 		cfg.Projects[i] = p
-		if serr := c.saveConfig(cfg); serr != nil {
+		if serr := cfg.Save(c.Paths.File); serr != nil {
 			fmt.Fprintln(c.Stderr, "error:", serr)
 		}
 		return c.fail(err)
@@ -133,7 +125,7 @@ func (c *CLI) addRepo(args []string) int {
 
 // listRepos prints the project's extra repositories, one per line.
 func (c *CLI) listRepos(args []string) int {
-	cfg, i, _, code := c.repoFlags("list-repos", "--project KEY [-url URL] [-workspace SLUG]", args, 0)
+	cfg, i, _, code := c.repoFlags("list-repos", projectUsage, args, 0)
 	if code != 0 {
 		return code
 	}
@@ -146,7 +138,7 @@ func (c *CLI) listRepos(args []string) int {
 // removeRepo removes an extra repository, named by its URL or name, and its
 // token. The next run deletes its copy.
 func (c *CLI) removeRepo(args []string) int {
-	cfg, i, rest, code := c.repoFlags("remove-repo", "--project KEY [-url URL] [-workspace SLUG] URL|NAME", args, 1)
+	cfg, i, rest, code := c.repoFlags("remove-repo", projectUsage+" URL|NAME", args, 1)
 	if code != 0 {
 		return code
 	}
@@ -157,7 +149,7 @@ func (c *CLI) removeRepo(args []string) int {
 	}
 	r := p.ExtraRepositories[j]
 	cfg.Projects[i].ExtraRepositories = slices.Delete(slices.Clone(p.ExtraRepositories), j, j+1)
-	if err := c.saveConfig(cfg); err != nil {
+	if err := cfg.Save(c.Paths.File); err != nil {
 		return c.fail(err)
 	}
 	if err := c.Secrets.Delete(p, secrets.ExtraGitToken(r.URL)); err != nil {

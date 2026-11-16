@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -22,63 +20,46 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
-	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
-// app is a fake Cinderline: the first /work answers an issue, a repeated one is
-// held until the client goes away. polls counts the first ones, one per client.
+// app is a fake Cinderline: it answers every poll with the token's project
+// and a job its runner cannot start (an agent on a client nobody runs), so
+// each loop logs one line about it. polls are the polls' tokens and
+// reports, in order.
 type app struct {
-	url                 string
-	mu                  sync.Mutex
-	polls               int
-	reports, heartbeats []string // bodies and project tokens, in order
-	workspace           string   // the slug /project names; "" names none, as before EMBER-159
+	url   string
+	mu    sync.Mutex
+	polls []string
 }
 
 func (a *app) count() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.polls
+	return len(a.polls)
 }
 
 func newApp(t *testing.T) *app {
 	a := &app{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch path := strings.TrimPrefix(r.URL.Path, "/api/runner/v1"); {
-		case path == "/work" && r.Header.Get("If-None-Match") != "":
-			<-r.Context().Done()
-		case path == "/work":
-			a.mu.Lock()
-			a.polls++
-			a.mu.Unlock()
-			w.Header().Set("ETag", `"v1"`)
-			io.WriteString(w, `{"issue":{"ref":"A-1","title":"T","status":{"value":"todo","label":"To do"}}}`)
-		case path == "/project": // the pin before a claim; the polled issue has no team, so Check skips it
-			key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer tok-")
-			a.mu.Lock()
-			ws := a.workspace
-			a.mu.Unlock()
-			if ws != "" {
-				ws = `,"workspace":{"id":7,"slug":"` + ws + `"}`
-			}
-			io.WriteString(w, `{"key":"`+key+`","repository_url":"https://git.example.com/`+key+`","forge":"forgejo"`+ws+`}`)
-		case path == "/issues": // recovery's list of In progress issues
-			io.WriteString(w, `{"issues":[]}`)
-		case path == "/report":
-			body, _ := io.ReadAll(r.Body)
-			a.mu.Lock()
-			a.reports = append(a.reports, r.Header.Get("Authorization")+" "+string(body))
-			a.mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-		case path == "/heartbeat":
-			a.mu.Lock()
-			a.heartbeats = append(a.heartbeats, r.Header.Get("Authorization"))
-			a.mu.Unlock()
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			w.WriteHeader(http.StatusNoContent)
+		if r.Method+" "+r.URL.Path != "POST /api/runner/v2/poll" {
+			http.NotFound(w, r)
+			return
 		}
+		var req struct {
+			Report json.RawMessage `json:"report"`
+			Idle   bool            `json:"idle"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		key := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer tok-")
+		a.mu.Lock()
+		a.polls = append(a.polls, r.Header.Get("Authorization")+" "+string(req.Report))
+		a.mu.Unlock()
+		job := "null"
+		if req.Idle {
+			job = `{"issue":{"ref":"` + key + `-1","title":"T","body":""},"team":{"name":"Dev","max_minutes":10,"max_turns":50,"agents":[{"name":"X","client":"nope"}]}}`
+		}
+		io.WriteString(w, `{"poll_after":30,"review_after":300,"project":{"key":"`+key+`","repository_url":"https://git.example.com/`+key+`","forge":"forgejo","base_branch":"main","environment":"default","idle_minutes":20,"linked_projects":[]},"job":`+job+`,"stop":[]}`)
 	}))
 	t.Cleanup(srv.Close)
 	a.url = srv.URL
@@ -102,7 +83,7 @@ func paths(t *testing.T) config.Paths {
 }
 
 func project(url, key string) config.Project {
-	return config.Project{URL: url, Key: key, Repository: "https://git.example.com/" + key}
+	return config.Project{URL: url, Key: key, Workspace: config.DefaultWorkspace, Repository: "https://git.example.com/" + key}
 }
 
 func writeConfig(t *testing.T, p config.Paths, projects ...config.Project) {
@@ -149,7 +130,7 @@ func ctxT(t *testing.T) context.Context {
 
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	// Generous: a slot's Recover shells out to the real docker before its first poll, which takes seconds on CI's Windows runners (CSR-154).
+	// Generous: a loop shells out to the real docker before its first poll, which takes seconds on CI's Windows runners (CSR-154).
 	deadline := time.Now().Add(20 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
@@ -159,7 +140,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 }
 
-func status(t *testing.T, c localapi.Client) map[string]scheduler.ProjectStatus {
+func status(t *testing.T, c localapi.Client) map[string]localapi.ProjectStatus {
 	t.Helper()
 	s, err := c.Status(ctxT(t))
 	if err != nil {
@@ -168,7 +149,7 @@ func status(t *testing.T, c localapi.Client) map[string]scheduler.ProjectStatus 
 	if s.Version != "1.2.3" {
 		t.Errorf("version = %q", s.Version)
 	}
-	m := map[string]scheduler.ProjectStatus{}
+	m := map[string]localapi.ProjectStatus{}
 	for _, p := range s.Projects {
 		m[p.Project] = p
 	}
@@ -200,7 +181,7 @@ func TestStatus(t *testing.T) {
 }
 
 // Two projects with one key would share their Docker volumes, so only the
-// first gets a slot (decision 2026-11-11-audit-fixes).
+// first runs (decision 2026-11-11-audit-fixes).
 func TestSecondProjectWithTheSameKeyDoesNotRun(t *testing.T) {
 	keyring.MockInit()
 	a, b := newApp(t), newApp(t)
@@ -238,27 +219,8 @@ func TestSameKeyInTwoWorkspacesRuns(t *testing.T) {
 	waitFor(t, "both to poll", func() bool { m := status(t, c); return m["acme-A"].Connected && m["beta-A"].Connected })
 }
 
-// CSR-97: an entry made before workspaces gets its slug on the first
-// handshake, keeping the names its volumes and secrets already have.
-func TestFillsInWorkspaceOnUpgrade(t *testing.T) {
-	keyring.MockInit()
-	a := newApp(t)
-	a.workspace = "acme"
-	p := paths(t)
-	old := project(a.url, "A")
-	writeConfig(t, p, old)
-	setToken(t, p, old)
-	start(t, p)
-	want := old
-	want.Workspace, want.NamesByKey = "acme", true
-	waitFor(t, "the slug in config.json", func() bool {
-		cfg, err := config.Load(p.File)
-		return err == nil && len(cfg.Projects) == 1 && reflect.DeepEqual(cfg.Projects[0], want)
-	})
-}
-
-// Decision on CSR-74 (option A): each slot reports and heartbeats at start, not only after the first 60 s tick.
-func TestReportAndHeartbeatAtStart(t *testing.T) {
+// Each project polls at start with its whole report.
+func TestPollAtStart(t *testing.T) {
 	keyring.MockInit()
 	a := newApp(t)
 	p := paths(t)
@@ -266,26 +228,19 @@ func TestReportAndHeartbeatAtStart(t *testing.T) {
 	writeConfig(t, p, pa)
 	setToken(t, p, pa)
 	start(t, p)
-	waitFor(t, "a report and a heartbeat", func() bool {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		return len(a.reports) == 1 && len(a.heartbeats) == 1
-	})
+	waitFor(t, "a poll", func() bool { return a.count() > 0 })
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// clients is left out: detection runs alongside the first report and may land before it.
-	auth, body, _ := strings.Cut(strings.TrimSpace(a.reports[0]), " {")
+	// clients is left out: detection runs alongside the first poll and may land before it.
+	auth, body, _ := strings.Cut(strings.TrimSpace(a.polls[0]), " {")
 	var r map[string]json.RawMessage
 	if err := json.Unmarshal([]byte("{"+body), &r); err != nil {
-		t.Fatalf("report %s: %v", a.reports[0], err)
+		t.Fatalf("report %s: %v", a.polls[0], err)
 	}
 	delete(r, "clients")
 	got, _ := json.Marshal(r)
-	if want := `{"environments":["default","docker"],"errors":[],"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
-		t.Errorf("report = %s, want Bearer tok-A with %s", a.reports[0], want)
-	}
-	if a.heartbeats[0] != "Bearer tok-A" {
-		t.Errorf("heartbeat sent with %q", a.heartbeats[0])
+	if want := `{"environments":["default","docker"],"errors":[],"refused_connections":0,"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
+		t.Errorf("report = %s, want Bearer tok-A with %s", a.polls[0], want)
 	}
 }
 
@@ -297,7 +252,8 @@ func TestLogStream(t *testing.T) {
 	writeConfig(t, p, pa)
 	setToken(t, p, pa)
 	c, _ := start(t, p)
-	waitFor(t, "the first poll", func() bool { return a.count() == 1 })
+	waitFor(t, "the first poll", func() bool { return a.count() >= 1 })
+	const line = "run did not start"
 
 	pr, pw := io.Pipe()
 	defer pr.Close()
@@ -318,22 +274,22 @@ func TestLogStream(t *testing.T) {
 		got = append(got, m)
 		return m
 	}
-	// The tail: up to the first skip line (A-1 has no team, so Check skips it), which the scheduler logged before we connected.
-	for m := next(); m["msg"] != "skipped before the claim"; m = next() {
+	// The tail: up to the first line about A-1, which the loop logged before we connected.
+	for m := next(); m["msg"] != line; m = next() {
 	}
 	if err := c.Reload(ctxT(t)); err != nil {
 		t.Fatal(err)
 	}
-	// Followed: the new scheduler's skip line, logged after the stream was opened.
-	for m := next(); m["msg"] != "skipped before the claim"; m = next() {
+	// Followed: the new loop's line, logged after the stream was opened.
+	for m := next(); m["msg"] != line; m = next() {
 	}
 	reloads := 0
 	for _, m := range got {
 		if m["msg"] == "reloading" {
 			reloads++
 		}
-		if m["msg"] == "skipped before the claim" && (m["project"] != "A" || m["issue"] != "A-1") {
-			t.Errorf("scheduler line without project and issue: %v", m)
+		if m["msg"] == line && (m["project"] != "A" || m["issue"] != "A-1") {
+			t.Errorf("loop line without project and issue: %v", m)
 		}
 	}
 	if reloads != 1 {
@@ -370,14 +326,12 @@ func TestReload(t *testing.T) {
 	a := newApp(t)
 	p := paths(t)
 	pa, pb := project(a.url, "A"), project(a.url, "B")
-	// With the workspace the app names, fillWorkspace has nothing to save: a
-	// save racing the test's own writes could undo them (CSR-188).
-	pa.Workspace, pb.Workspace = config.DefaultWorkspace, config.DefaultWorkspace
 	writeConfig(t, p, pa)
 	setToken(t, p, pa)
 	setToken(t, p, pb)
 	c, _ := start(t, p)
-	waitFor(t, "A to poll", func() bool { return a.count() == 1 })
+	// Twice: the job it cannot start, and at once after that run.
+	waitFor(t, "A to poll", func() bool { return a.count() == 2 })
 
 	writeConfig(t, p, pa, pb)
 	if err := c.Reload(ctxT(t)); err != nil {
@@ -386,11 +340,11 @@ func TestReload(t *testing.T) {
 	if _, ok := status(t, c)["B"]; !ok {
 		t.Fatal("status does not list B after reload")
 	}
-	// A's new client polls without an ETag, B's for the first time.
-	waitFor(t, "both slots to poll", func() bool { return a.count() == 3 })
+	// A's new loop polls again, B's for the first time.
+	waitFor(t, "both loops to poll", func() bool { return a.count() == 6 })
 	raw, _ := os.ReadFile(p.Log)
-	if n, m := strings.Count(string(raw), `"msg":"scheduler started"`), strings.Count(string(raw), `"msg":"scheduler stopped"`); n != 2 || m != 1 {
-		t.Errorf("scheduler started %d and stopped %d times, want 2 and 1:\n%s", n, m, raw)
+	if n, m := strings.Count(string(raw), `"msg":"projects started"`), strings.Count(string(raw), `"msg":"projects stopped"`); n != 2 || m != 1 {
+		t.Errorf("projects started %d and stopped %d times, want 2 and 1:\n%s", n, m, raw)
 	}
 
 	if err := os.WriteFile(p.File, []byte("{"), 0o600); err != nil {
@@ -455,40 +409,8 @@ func TestNotRunning(t *testing.T) {
 	}
 }
 
-// CSR-79: the daemon builds a configured project's dependencies and registers
-// all seven hooks, so a started daemon claims and runs issues.
-func TestSlotsRegisterAllHooks(t *testing.T) {
-	keyring.MockInit()
-	a, p := newApp(t), paths(t)
-	pr := project(a.url, "A")
-	setToken(t, p, pr)
-	sec := secrets.New(p.State)
-	for _, k := range []secrets.Kind{secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey} {
-		if _, err := sec.Set(pr, k, "secret-"+string(k)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	var wg sync.WaitGroup
-	t.Cleanup(func() { cancel(); wg.Wait() })
-	d := &daemon{}
-	slots := d.slots(ctx, &wg, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Paths: p, Version: "1.2.3"}, &config.Config{Projects: []config.Project{pr}})
-	if len(slots) != 1 {
-		t.Fatalf("slots = %d, want 1", len(slots))
-	}
-	h := slots[0].Hooks
-	for name, set := range map[string]bool{
-		"Recover": h.Recover != nil, "Pin": h.Pin != nil, "Check": h.Check != nil, "Run": h.Run != nil,
-		"Publish": h.Publish != nil, "ReviewBranches": h.ReviewBranches != nil, "MergeCheck": h.MergeCheck != nil,
-	} {
-		if !set {
-			t.Errorf("hook %s is nil", name)
-		}
-	}
-}
-
 // CSR-44: POST /drain makes an idle daemon exit cleanly, like stop, once its
-// slots have finished (the scheduler tests cover a run in flight).
+// loops have finished (the run package's tests cover a run in flight).
 func TestDrain(t *testing.T) {
 	keyring.MockInit()
 	p := paths(t)

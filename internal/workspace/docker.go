@@ -535,11 +535,11 @@ func (d *Docker) Free(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return parseDF(out)
+	return ParseDF(out)
 }
 
-// parseDF reads the available KiB from df -Pk's last line, in bytes.
-func parseDF(out string) (int64, error) {
+// ParseDF reads the available KiB from df -Pk's last line, in bytes.
+func ParseDF(out string) (int64, error) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	f := strings.Fields(lines[len(lines)-1])
 	if len(lines) < 2 || len(f) < 4 {

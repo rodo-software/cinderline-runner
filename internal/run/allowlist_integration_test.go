@@ -25,8 +25,8 @@ import (
 )
 
 // allowlistScript prints "<check>: reached" or "<check>: refused" per line.
-// MySQL stays reachable by name on the internal network; the proxy lets
-// example.com through and nothing else; a process that ignores the proxy
+// The default environment starts no service beside the proxy, so mysql has
+// no name; the proxy lets example.com through and nothing else; a process that ignores the proxy
 // variables has no route and no DNS; host.docker.internal is gone (Willem's
 // decision on CSR-63, option C); unshare -Urm is refused by the default
 // seccomp profile without capabilities (the Cohere case in CSR-63).
@@ -94,7 +94,7 @@ func TestIntegrationAllowlist(t *testing.T) {
 		t.Fatalf("Run = %v\n%s", err, out)
 	}
 	for _, want := range []string{
-		"mysql: reached",
+		"mysql: refused",
 		"allowed: reached",
 		"blocked: refused",
 		"direct: refused",

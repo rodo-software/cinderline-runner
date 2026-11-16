@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,8 +18,8 @@ var dockerRetry = 10 * time.Second
 
 var errNoDocker = errors.New("docker is not installed or not on PATH: install Docker from https://docs.docker.com/get-docker/ and try again")
 
-// minFreeKiB is the free disk Docker needs: 5 GiB, as df -k reports it.
-const minFreeKiB = 5 << 20
+// minFree is the free disk Docker needs: 5 GiB.
+const minFree = 5 << 30
 
 func dockerHint(goos string) string {
 	switch goos {
@@ -86,17 +85,12 @@ func (c *CLI) checkDocker(ctx context.Context, wait bool) error {
 	if err != nil {
 		return fmt.Errorf("measuring Docker's free disk: %w", err)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	fields := strings.Fields(lines[len(lines)-1])
-	if len(fields) < 4 {
-		return fmt.Errorf("cannot read free disk from df output: %q", out)
-	}
-	freeKiB, err := strconv.Atoi(fields[3])
+	free, err := workspace.ParseDF(out)
 	if err != nil {
-		return fmt.Errorf("cannot read free disk from df output: %q", out)
+		return err
 	}
-	if freeKiB < minFreeKiB {
-		return fmt.Errorf("only %.1f GB free for Docker's data, %s needs at least 5 GB: free space with \"docker system prune\" or give Docker more disk", float64(freeKiB)/(1<<20), name.Name)
+	if free < minFree {
+		return fmt.Errorf("only %.1f GB free for Docker's data, %s needs at least 5 GB: free space with \"docker system prune\" or give Docker more disk", float64(free)/(1<<30), name.Name)
 	}
 	return nil
 }

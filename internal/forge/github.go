@@ -1,19 +1,14 @@
 package forge
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
 var _ Forge = (*GitHub)(nil)
@@ -35,24 +30,15 @@ type GitHub struct {
 // ssh://git@host[:port]/o/r or git@host:o/r, with or without .git. On
 // github.com the API is api.github.com; on any other host it is GitHub
 // Enterprise Server's https://<host>/api/v3, with GraphQL beside it at
-// /api/graphql. An https port is kept for the API, an ssh one dropped, as
-// legacy parseRepository.
+// /api/graphql. An https port is kept for the API, an ssh one dropped.
 func NewGitHub(repository, token string) (*GitHub, error) {
-	s := repository
-	if host, path, ok := strings.Cut(s, ":"); ok && strings.HasPrefix(s, "git@") && !strings.Contains(s, "://") {
-		s = "ssh://" + host + "/" + path // scp form: git@host:o/r
+	host, path, err := parseRepository(repository)
+	if err != nil {
+		return nil, err
 	}
-	u, err := url.Parse(s)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "ssh") || u.Hostname() == "" {
-		return nil, fmt.Errorf("unsupported repository URL %q", repository)
-	}
-	owner, repo, ok := strings.Cut(strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git"), "/")
+	owner, repo, ok := strings.Cut(path, "/")
 	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
 		return nil, fmt.Errorf("repository URL %q does not name a GitHub owner/repository", repository)
-	}
-	host := strings.ToLower(u.Hostname())
-	if p := u.Port(); u.Scheme == "https" && p != "" && p != "443" {
-		host += ":" + p
 	}
 	api, graphql := "https://"+host+"/api/v3", "https://"+host+"/api/graphql"
 	if host == "github.com" {
@@ -80,17 +66,6 @@ type githubPull struct {
 	} `json:"head"`
 }
 
-// githubError is a non-2xx answer, or GraphQL errors in a 200.
-type githubError struct {
-	method, url string
-	status      int
-	message     string
-}
-
-func (e *githubError) Error() string {
-	return fmt.Sprintf("GitHub answered %s %s with %d: %s", e.method, e.url, e.status, e.message)
-}
-
 func (g *GitHub) DefaultBranch(ctx context.Context) (string, error) {
 	var r struct {
 		DefaultBranch string `json:"default_branch"`
@@ -105,8 +80,7 @@ func (g *GitHub) OpenPullRequest(ctx context.Context, in PullRequestInput) (Pull
 		"head": in.Branch, "base": in.Base, "title": in.Title, "body": in.Body,
 	}, &pr)
 	// GitHub answers 422 when the branch already has an open pull request; other 422s, such as no commits, find none.
-	var e *githubError
-	if errors.As(err, &e) && e.status == http.StatusUnprocessableEntity {
+	if status(err) == http.StatusUnprocessableEntity {
 		if found, ok, ferr := g.FindPullRequest(ctx, in.Branch); ferr == nil && ok {
 			return found, nil
 		}
@@ -160,7 +134,7 @@ func (g *GitHub) RequestMerge(ctx context.Context, pr PullRequest) error {
 		for i, e := range r.Errors {
 			msgs[i] = e.Message
 		}
-		return &githubError{http.MethodPost, g.graphql, http.StatusOK, strings.Join(msgs, "; ")}
+		return &apiError{"GitHub", http.MethodPost, g.graphql, http.StatusOK, strings.Join(msgs, "; ")}
 	}
 	return nil
 }
@@ -197,79 +171,6 @@ func (g *GitHub) MergeState(ctx context.Context, branch string) (MergeState, err
 	return MergePending, nil
 }
 
-func (g *GitHub) CISecrets(ctx context.Context) ([]string, error) {
-	var exposed []string
-
-	var repoSecrets struct {
-		Secrets []struct {
-			Name string `json:"name"`
-		} `json:"secrets"`
-	}
-	err := g.do(ctx, http.MethodGet, g.repo+"/actions/secrets?per_page=100", nil, &repoSecrets)
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range repoSecrets.Secrets {
-		exposed = append(exposed, "repository secret "+s.Name)
-	}
-
-	var orgSecrets struct {
-		Secrets []struct {
-			Name string `json:"name"`
-		} `json:"secrets"`
-	}
-	err = g.do(ctx, http.MethodGet, g.repo+"/actions/organization-secrets?per_page=100", nil, &orgSecrets)
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range orgSecrets.Secrets {
-		exposed = append(exposed, "organization secret "+s.Name)
-	}
-
-	var envs struct {
-		Environments []struct {
-			Name                   string    `json:"name"`
-			DeploymentBranchPolicy *struct{} `json:"deployment_branch_policy"` // nil: any branch may deploy
-			ProtectionRules        []struct {
-				Type string `json:"type"`
-			} `json:"protection_rules"`
-		} `json:"environments"`
-	}
-	err = g.do(ctx, http.MethodGet, g.repo+"/environments?per_page=100", nil, &envs)
-	if err != nil {
-		return nil, err
-	}
-	for _, env := range envs.Environments {
-		if env.DeploymentBranchPolicy != nil {
-			continue
-		}
-		hasReviewer := false
-		for _, rule := range env.ProtectionRules {
-			if rule.Type == "required_reviewers" {
-				hasReviewer = true
-				break
-			}
-		}
-		if hasReviewer {
-			continue
-		}
-		var envSecrets struct {
-			Secrets []struct {
-				Name string `json:"name"`
-			} `json:"secrets"`
-		}
-		err = g.do(ctx, http.MethodGet, g.repo+"/environments/"+url.PathEscape(env.Name)+"/secrets?per_page=100", nil, &envSecrets)
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range envSecrets.Secrets {
-			exposed = append(exposed, "environment "+env.Name+" secret "+s.Name)
-		}
-	}
-	// shortcut: first page only (100 entries), upgrade when a repository has more
-	return exposed, nil
-}
-
 // pulls is the list of the branch's pull requests in state, by head
 // owner:branch, which only matches branches in the repository itself.
 func (g *GitHub) pulls(state, branch string) string {
@@ -279,44 +180,14 @@ func (g *GitHub) pulls(state, branch string) string {
 // do sends one API request with in as its JSON body, when not nil, and
 // decodes a 2xx answer into out.
 func (g *GitHub) do(ctx context.Context, method, u string, in, out any) error {
-	var body io.Reader
-	if in != nil {
-		data, err := json.Marshal(in)
-		if err != nil {
-			return err
-		}
-		body = bytes.NewReader(data)
-	}
-	req, err := http.NewRequestWithContext(ctx, method, u, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("Authorization", "Bearer "+g.token)
-	req.Header.Set("User-Agent", name.Name+"-runner")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if in != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := send(g.HTTP, req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return &githubError{method, u, resp.StatusCode, githubMessage(data)}
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("GitHub answered %s %s with %d and unreadable JSON: %w", method, u, resp.StatusCode, err)
-	}
-	return nil
+	return do(ctx, g.HTTP, "GitHub", method, u, map[string]string{
+		"Accept":               "application/vnd.github+json",
+		"Authorization":        "Bearer " + g.token,
+		"X-GitHub-Api-Version": "2022-11-28",
+	}, githubMessage, in, out)
 }
 
-// githubMessage is the message of an error answer: its JSON message, else
+// githubMessage is the message of an error answer, GitHub's or Forgejo's: its JSON message, else
 // the start of its text.
 func githubMessage(data []byte) string {
 	var r struct {
@@ -325,9 +196,5 @@ func githubMessage(data []byte) string {
 	if json.Unmarshal(data, &r) == nil && r.Message != "" {
 		return r.Message
 	}
-	s := strings.TrimSpace(string(data))
-	if len(s) > 200 {
-		s = s[:200] + "…"
-	}
-	return s
+	return textStart(string(data))
 }

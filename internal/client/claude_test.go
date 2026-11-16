@@ -12,10 +12,9 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
-	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// Ported from lib.test.mjs "claudeArgs gives a worker no MCP server at all".
+// claudeArgs gives a worker no MCP server at all.
 func TestClaudeArgsWorkerHasNoMCPServer(t *testing.T) {
 	orch := claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, "s", "https://cs.example/mcp")
 	want := []string{
@@ -47,7 +46,7 @@ func TestClaudeArgsWorkerHasNoMCPServer(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "claudeArgs loads a plugin only when pluginDir is set".
+// claudeArgs loads a plugin only when pluginDir is set.
 func TestClaudeArgsPluginOnlyForPonytailTeams(t *testing.T) {
 	if a := claudeArgs(Turn{Model: "m", MaxTurns: 5}, "s", "u"); slices.Contains(a, "--plugin-dir") {
 		t.Errorf("args %q load a plugin", a)
@@ -64,7 +63,7 @@ func TestClaudeArgsDefaultModel(t *testing.T) {
 	}
 }
 
-// Ported from legacy claudeArgs: the slot's effort as --effort (EMBER-132).
+// The slot's effort goes in as --effort (EMBER-132).
 func TestClaudeArgsEffort(t *testing.T) {
 	a := claudeArgs(Turn{Model: "m", Effort: "xhigh", MaxTurns: 5}, "s", "u")
 	if i := slices.Index(a, "--effort"); i < 0 || i+1 >= len(a) || a[i+1] != "xhigh" {
@@ -72,8 +71,8 @@ func TestClaudeArgsEffort(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "agentEnv without project files skips CLAUDE.md
-// and AGENTS.md" (Claude Code half) and "agentEnv gives the OpenRouter key
+// agentEnv without project files skips CLAUDE.md
+// and AGENTS.md (Claude Code half) and "agentEnv gives the OpenRouter key
 // only to OpenCode, and no Anthropic login" (Claude Code half: only the
 // Anthropic credential, no other secret).
 func TestClaudeEnv(t *testing.T) {
@@ -102,7 +101,7 @@ func TestClaudeEnv(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "parseRun reads the turn limit from the last JSON line".
+// parseRun reads the turn limit from the last JSON line.
 func TestParseClaudeTurnLimit(t *testing.T) {
 	result := func(subtype string) string {
 		return "noise\n" + `{"type":"result","is_error":true,"subtype":"` + subtype + `"}`
@@ -119,7 +118,7 @@ func TestParseClaudeTurnLimit(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "parseRun reads the result of Claude Code JSON output".
+// parseRun reads the result of Claude Code JSON output.
 func TestParseClaudeResult(t *testing.T) {
 	out := "noise\n" + `{"type":"result","subtype":"success","result":" Report. ","session_id":"u-1"}`
 	if got, want := parseClaude(out), (Result{SessionID: "u-1", Report: "Report."}); got != want {
@@ -130,7 +129,7 @@ func TestParseClaudeResult(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "parseRun reads the usage of a Claude Code run from its result".
+// parseRun reads the usage of a Claude Code run from its result.
 func TestParseClaudeUsage(t *testing.T) {
 	got := parseClaude(`{"type":"result","subtype":"success","total_cost_usd":0.25,"usage":{"input_tokens":10,"output_tokens":20,"cache_creation_input_tokens":30,"cache_read_input_tokens":40}}`).Usage
 	cost := 0.25
@@ -168,8 +167,8 @@ func TestClaudeRunFresh(t *testing.T) {
 	out := "noise\n" + `{"type":"result","subtype":"success","result":"Done.","session_id":"ignored","usage":{"output_tokens":5}}`
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: out}}}
 	var docker [][]string
-	c := &Claude{
-		Project: "CSR", Env: env, Credential: "sk-ant-api03-k", MCPURL: "https://cs.example/mcp",
+	c := &CLI{
+		Name: "claude", Project: "CSR", Env: env, Credential: "sk-ant-api03-k", MCPURL: "https://cs.example/mcp",
 		Tools: tools.Mount{Args: []string{"-v", "tools:/opt/cinderline:ro"}, Env: []string{"DISABLE_AUTOUPDATER=1"}},
 		Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
 			docker = append(docker, argv)
@@ -234,7 +233,7 @@ func TestClaudeRunErrors(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			env := &environment.Fake{Runs: []environment.RunReply{tt.reply}}
-			c := &Claude{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+			c := &CLI{Name: "claude", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
 			res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", SessionID: "s1", MaxTurns: 5})
 			if !tt.check(res, err) {
 				t.Errorf("Run = %+v, %v", res, err)
@@ -249,43 +248,12 @@ func TestClaudeRunErrors(t *testing.T) {
 func TestClaudeRunStateVolumeFails(t *testing.T) {
 	env := &environment.Fake{}
 	boom := errors.New("docker broke")
-	c := &Claude{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
+	c := &CLI{Name: "claude", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
 	if _, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"}); !errors.Is(err, boom) {
 		t.Errorf("Run err = %v, want %v", err, boom)
 	}
 	if len(env.Calls()) != 0 {
 		t.Error("the turn ran without its state volume")
-	}
-}
-
-func TestDeleteSession(t *testing.T) {
-	var got [][]string
-	x := func(_ context.Context, _ []string, argv ...string) (string, error) {
-		got = append(got, argv)
-		return "", nil
-	}
-	if err := DeleteSession(context.Background(), x, "CSR", "CSR-7", "abcd1234-uuid"); err != nil {
-		t.Fatal(err)
-	}
-	if err := DeleteSession(context.Background(), x, "CSR", "CSR-7", ""); err != nil {
-		t.Fatal(err)
-	}
-	prefix := []string{"docker", "run", "--rm", "--network", "none", "-v", "cinderline-CSR-state:/s", "--entrypoint", "sh", workspace.GitImage, "-c"}
-	want := [][]string{
-		append(append([]string(nil), prefix...), `find /s -mindepth 1 \( -name "-runs-$1" -o -name "*$2*" \) -prune -exec rm -rf -- {} +`, "sh", "CSR-7", "abcd1234-uuid"),
-		append(append([]string(nil), prefix...), `find /s -mindepth 1 -name "-runs-$1" -prune -exec rm -rf -- {} +`, "sh", "CSR-7", ""),
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("argv =\n%q\nwant\n%q", got, want)
-	}
-	// Nothing that could widen the pattern reaches find.
-	for _, bad := range [][2]string{{"CSR-7", "*"}, {"CSR-7", "short"}, {"../x", "abcd1234"}, {"CSR-7", "abcd/1234"}, {"", "abcd1234"}} {
-		if err := DeleteSession(context.Background(), x, "CSR", bad[0], bad[1]); err == nil {
-			t.Errorf("DeleteSession(%q, %q) succeeded", bad[0], bad[1])
-		}
-	}
-	if len(got) != 2 {
-		t.Fatalf("%d docker runs, want 2", len(got))
 	}
 }
 

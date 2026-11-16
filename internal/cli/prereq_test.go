@@ -132,8 +132,8 @@ func TestPrereqLowDisk(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "1.0 GB") || !strings.Contains(err.Error(), "5 GB") {
 		t.Fatalf("err = %v, want 1.0 GB free against the 5 GB needed", err)
 	}
-	if minFreeKiB != 5<<20 {
-		t.Fatalf("minFreeKiB = %d, want 5 GiB in KiB", minFreeKiB)
+	if minFree != 5<<30 {
+		t.Fatalf("minFree = %d, want 5 GiB", minFree)
 	}
 }
 

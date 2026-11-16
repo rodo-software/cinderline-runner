@@ -1,12 +1,9 @@
 package cli
 
 import (
-	"archive/zip"
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,139 +13,50 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/name"
-	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
+	"github.com/rodo-software/cinderline-runner/scripts"
 )
 
+// update runs the install script over this binary, has the new binary
+// refresh the tools volume and default image, which only it has the pins
+// for, and restarts a running runner once its runs have finished.
 func (c *CLI) update(args []string) int {
 	f := c.flags("update", "[--refresh]")
-	refresh := f.Bool("refresh", false, "refresh the tools volume and default image")
-	if err := f.Parse(args); err != nil || f.NArg() > 0 {
-		if err == nil {
-			f.Usage()
-		}
+	refresh := f.Bool("refresh", false, "only refresh the tools volume and default image; update runs the new binary with it")
+	if !c.parsed(f, args, 0) {
 		return 2
 	}
+	if c.pathsErr != nil {
+		return c.fail(c.pathsErr)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	if *refresh {
-		return c.updateRefresh()
-	}
-	return c.updateMain()
-}
-
-func (c *CLI) updateRefresh() int {
-	if c.pathsErr != nil {
-		return c.fail(c.pathsErr)
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	cfg, err := c.loadConfig()
-	if err != nil {
-		return c.fail(err)
+		if _, _, err := c.agentImage(ctx, ""); err != nil {
+			return c.fail(err)
+		}
+		fmt.Fprintln(c.Stdout, "Refreshed the tools volume and the default image")
+		return 0
 	}
 
-	if _, _, err := c.agentImage(ctx, "", cfg.BuildImage); err != nil {
-		return c.fail(err)
-	}
-	fmt.Fprintln(c.Stdout, "Refreshed the tools volume and the default image")
-	return 0
-}
-
-func (c *CLI) updateMain() int {
-	if c.pathsErr != nil {
-		return c.fail(c.pathsErr)
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	exePath := c.exe
-	if exePath == "" {
+	exe := c.exe
+	if exe == "" {
 		var err error
-		exePath, err = os.Executable()
+		if exe, err = os.Executable(); err == nil {
+			exe, err = filepath.EvalSymlinks(exe)
+		}
 		if err != nil {
 			return c.fail(fmt.Errorf("resolve exe: %w", err))
 		}
-		exePath, err = filepath.EvalSymlinks(exePath)
-		if err != nil {
-			return c.fail(fmt.Errorf("resolve exe: %w", err))
-		}
 	}
-
-	if runtime.GOOS == "windows" {
-		os.Remove(exePath + ".old")
-	}
-
-	base := os.Getenv(strings.ToUpper(name.Name) + "_DOWNLOAD_URL")
-	if base == "" {
-		base = "https://github.com/rodo-software/" + name.Name + "-runner/releases/latest/download"
-	}
-
-	asset := name.Name + "_" + runtime.GOOS + "_" + runtime.GOARCH
-	if runtime.GOOS == "windows" {
-		asset += ".zip"
-	} else {
-		asset += ".tar.gz"
-	}
-
-	dlDir, err := os.MkdirTemp("", name.Name+"-download-")
-	if err != nil {
-		return c.fail(fmt.Errorf("download: %w", err))
-	}
-	defer os.RemoveAll(dlDir)
-
-	checksums, err := fetch(ctx, base+"/checksums.txt")
-	if err != nil {
-		return c.fail(fmt.Errorf("download: %w", err))
-	}
-	var expectedSum string
-	for _, line := range strings.Split(strings.TrimSpace(string(checksums)), "\n") {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 && parts[1] == asset {
-			expectedSum = parts[0]
-			break
-		}
-	}
-	if expectedSum == "" {
-		return c.fail(fmt.Errorf("checksum: no checksum found for %s", asset))
-	}
-	// Kept only when its SHA-256 is the one checksums.txt names.
-	archivePath := filepath.Join(dlDir, asset)
-	if err := tools.Download(ctx, http.DefaultClient, base+"/"+asset, archivePath, expectedSum); err != nil {
-		return c.fail(fmt.Errorf("download, checked against checksums.txt: %w", err))
-	}
-
-	binaryName := name.Name
-	if runtime.GOOS == "windows" {
-		binaryName += ".exe"
-	}
-
-	tmpDir, err := os.MkdirTemp(filepath.Dir(exePath), "."+name.Name+"-update-")
-	if err != nil {
-		return c.fail(fmt.Errorf("extract: %w", err))
-	}
-	defer os.RemoveAll(tmpDir)
-
-	nextPath := filepath.Join(tmpDir, binaryName)
-
-	if runtime.GOOS == "windows" {
-		if err := extractFromZip(archivePath, binaryName, nextPath); err != nil {
-			return c.fail(fmt.Errorf("extract: %w", err))
-		}
-	} else {
-		if err := tools.Extract(archivePath, binaryName, nextPath); err != nil {
-			return c.fail(fmt.Errorf("extract: %w", err))
-		}
-	}
-	if err := os.Chmod(nextPath, 0o755); err != nil {
-		return c.fail(fmt.Errorf("extract: %w", err))
-	}
-
 	x := c.exec
 	if x == nil {
 		x = workspace.RunCommand
 	}
-
-	out, err := x(ctx, nil, nextPath, "version")
+	if err := install(ctx, x, filepath.Dir(exe)); err != nil {
+		return c.fail(err)
+	}
+	out, err := x(ctx, nil, exe, "version")
 	if err != nil {
 		return c.fail(fmt.Errorf("version: %w", err))
 	}
@@ -161,87 +69,56 @@ func (c *CLI) updateMain() int {
 		fmt.Fprintf(c.Stdout, "Already at %s\n", c.Version)
 		return 0
 	}
-
-	if _, err := x(ctx, nil, nextPath, "update", "--refresh"); err != nil {
+	fmt.Fprintf(c.Stdout, "Updated %s from %s to %s\n", name.Name, c.Version, newVersion)
+	if _, err := x(ctx, nil, exe, "update", "--refresh"); err != nil {
 		return c.fail(fmt.Errorf("update --refresh: %w", err))
 	}
 
-	oldVersion := c.Version
-	if err := replaceExe(exePath, nextPath); err != nil {
-		return c.fail(fmt.Errorf("replace: %w", err))
+	err = c.drainAndWait(ctx)
+	if errors.Is(err, localapi.ErrNotRunning) {
+		return 0 // a runner someone stopped stays stopped
 	}
-
-	drainErr := c.drainAndWait(ctx)
-	if drainErr != nil && !errors.Is(drainErr, localapi.ErrNotRunning) {
-		fmt.Fprintf(c.Stderr, "Updated to %s, but the drain failed: %v\n", newVersion, drainErr)
-		return 1
+	if err != nil {
+		return c.fail(fmt.Errorf("the drain failed: %w", err))
 	}
-
-	fmt.Fprintf(c.Stdout, "Updated %s from %s to %s\n", name.Name, oldVersion, newVersion)
-	if drainErr == nil {
-		start := c.startService
-		if start == nil {
-			start = startService
-		}
-		installed, err := start(exePath)
-		if err != nil {
-			fmt.Fprintf(c.Stderr, "error: updated to %s, but starting the service failed: %v\n", newVersion, err)
-			return 1
-		}
-		if installed {
-			fmt.Fprintf(c.Stdout, "Started the %s service with %s\n", name.Name, newVersion)
-		} else {
-			fmt.Fprintf(c.Stdout, "The running %s finished its runs and stopped; start it again with `%s run`\n", name.Name, name.Name)
-		}
+	start := c.startService
+	if start == nil {
+		start = startService
+	}
+	installed, err := start(exe)
+	if err != nil {
+		return c.fail(fmt.Errorf("starting the service failed: %w", err))
+	}
+	if installed {
+		fmt.Fprintf(c.Stdout, "Started the %s service with %s\n", name.Name, newVersion)
+	} else {
+		fmt.Fprintf(c.Stdout, "The running %s finished its runs and stopped; start it again with `%s run`\n", name.Name, name.Name)
 	}
 	return 0
 }
 
-// fetch returns the body of url, at most 1 MiB: checksums.txt, the one
-// download no hash can check.
-func fetch(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
+// install runs this OS's install script, which downloads the latest
+// release, checks it against checksums.txt and replaces the binary in dir.
+func install(ctx context.Context, x workspace.Exec, dir string) error {
+	script, argv := scripts.InstallSh, []string{"sh"}
+	env := []string{strings.ToUpper(name.Name) + "_INSTALL_DIR=" + dir}
+	if runtime.GOOS == "windows" {
+		script, argv = scripts.InstallPs1, []string{"powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"}
+		env = append(env, "PSModulePath=") // inherited from PowerShell 7, it hides Get-FileHash from Windows PowerShell
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: %s", url, resp.Status)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-}
-
-func extractFromZip(archivePath, entry, dst string) error {
-	zr, err := zip.OpenReader(archivePath)
+	// A file: PowerShell runs only one named .ps1, and trips over a piped script's blocks.
+	f, err := os.CreateTemp("", name.Name+"-install-*.ps1")
 	if err != nil {
 		return err
 	}
-	defer zr.Close()
-	for _, zf := range zr.File {
-		if zf.Name != entry {
-			continue
-		}
-		in, err := zf.Open()
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(out, in)
-		if cerr := out.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			os.Remove(dst)
-		}
+	defer os.Remove(f.Name())
+	_, err = f.Write(script)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return err
 	}
-	return fmt.Errorf("no %s in archive", entry)
+	_, err = x(ctx, env, append(argv, f.Name())...)
+	return err
 }

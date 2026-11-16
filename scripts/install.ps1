@@ -38,12 +38,23 @@ try {
 
     Expand-Archive -Path (Join-Path $tmp $file) -DestinationPath $tmp
 
-    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\cinderline'
+    # cinderline update sets the folder: the one of the binary it replaces.
+    $installDir = if ($env:CINDERLINE_INSTALL_DIR) { $env:CINDERLINE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\cinderline' }
     New-Item -ItemType Directory -Path $installDir -Force | Out-Null
-    Copy-Item (Join-Path $tmp 'cinderline.exe') $installDir -Force
-
     $installed = Join-Path $installDir 'cinderline.exe'
+    Copy-Item (Join-Path $tmp 'cinderline.exe') "$installed.new" -Force
+    # Windows cannot overwrite a running .exe but can rename it, and an
+    # update runs this from the one it replaces.
+    if (Test-Path $installed) {
+        Remove-Item "$installed.old" -Force -ErrorAction SilentlyContinue
+        Move-Item $installed "$installed.old" -Force
+    }
+    Move-Item "$installed.new" $installed
+
     Write-Output "Installed cinderline to $installed"
+
+    # An update leaves the PATH as it is.
+    if ($env:CINDERLINE_INSTALL_DIR) { return }
 
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     if ($userPath -split ';' -notcontains $installDir) {

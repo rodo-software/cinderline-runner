@@ -1,3 +1,5 @@
+Superseded in part (its long-poll and Review requests) by decision 2026-11-16-runner-protocol-v2
+
 # The runner rewrite plan's open points, settled before M0
 
 - **Status:** Accepted

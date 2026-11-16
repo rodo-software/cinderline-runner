@@ -15,7 +15,7 @@ func TestAddStoresModelKeys(t *testing.T) {
 	if code := c.Run([]string{"add"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
-	p := config.Project{URL: u, Key: "WEB"}
+	p := config.Project{Workspace: "default", URL: u, Key: "WEB"}
 	for k, want := range map[secrets.Kind]string{
 		secrets.AnthropicCredential: "sk-ant-1", secrets.OpenRouterKey: "", secrets.OpenAIKey: "sk-oai-1", secrets.GeminiKey: "gem-1",
 	} {
@@ -39,8 +39,8 @@ func TestAddStoresModelKeys(t *testing.T) {
 }
 
 func TestKeySet(t *testing.T) {
-	web := config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/web"}
-	api := config.Project{URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
+	web := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/web"}
+	api := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
 
 	c, out, errb := newCLI(t, "sk-or-new\n")
 	saveConfig(t, c, web, api)
@@ -102,7 +102,7 @@ func TestKeySet(t *testing.T) {
 	}
 
 	// Two instances with key WEB: -url picks one.
-	other := config.Project{URL: "https://b.example.com", Key: "WEB", Repository: "https://git.example.com/o/web2"}
+	other := config.Project{Workspace: "default", URL: "https://b.example.com", Key: "WEB", Repository: "https://git.example.com/o/web2"}
 	c, _, errb = newCLI(t, "k\n")
 	saveConfig(t, c, web, other)
 	if code := c.Run([]string{"key", "set", "claude", "--project", "WEB"}); code != 1 || !strings.Contains(errb.String(), "-url") {
@@ -115,5 +115,73 @@ func TestKeySet(t *testing.T) {
 	}
 	if secret(t, c, other, secrets.AnthropicCredential) != "k" || secret(t, c, web, secrets.AnthropicCredential) != "" {
 		t.Error("stored on the wrong project")
+	}
+}
+
+// key covers what the removed manage screen did: replace or delete a
+// project's runner token, git token or model key. Only a runner token is
+// checked, against the instance, and it must be this project's.
+func TestKeyRunnerAndGitToken(t *testing.T) {
+	u := instanceIn(t, "WEB", repoURL, "acme")
+	web := config.Project{Workspace: "acme", URL: u, Key: "WEB", Repository: repoURL}
+	run := func(stdin string, args ...string) (int, string) {
+		c, out, errb := newCLI(t, stdin)
+		saveConfig(t, c, web)
+		code := c.Run(args)
+		return code, out.String() + errb.String() + "|" + secret(t, c, web, secrets.RunnerToken) + "|" + secret(t, c, web, secrets.GitToken)
+	}
+	if code, got := run(goodToken+"\n", "key", "set", "runner-token", "--project", "WEB"); code != 0 || !strings.HasSuffix(got, "|"+goodToken+"|") {
+		t.Errorf("good runner token: code %d, %q", code, got)
+	}
+	if code, got := run("wrong\n", "key", "set", "runner-token", "--project", "WEB"); code != 1 || !strings.Contains(got, "rejected") || !strings.HasSuffix(got, "||") {
+		t.Errorf("rejected runner token: code %d, %q", code, got)
+	}
+	if code, got := run("git-new\n", "key", "set", "git-token", "--project", "WEB"); code != 0 || !strings.HasSuffix(got, "||git-new") || strings.Contains(strings.TrimSuffix(got, "git-new"), "git-new") {
+		t.Errorf("git token: code %d, %q", code, got)
+	}
+
+	// A token of the same key in another workspace is not this project's.
+	beta := web
+	beta.Workspace = "beta"
+	c, _, errb := newCLI(t, goodToken+"\n")
+	saveConfig(t, c, beta)
+	if code := c.Run([]string{"key", "set", "runner-token", "--project", "WEB"}); code != 1 || !strings.Contains(errb.String(), "workspace acme") {
+		t.Errorf("another workspace's token: code %d, stderr %q", code, errb.String())
+	}
+
+	c, out, errb := newCLI(t, "")
+	saveConfig(t, c, web)
+	for _, k := range []secrets.Kind{secrets.GitToken, secrets.OpenRouterKey} {
+		if _, err := c.Secrets.Set(web, k, "v"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range []string{"git-token", "opencode"} {
+		if code := c.Run([]string{"key", "delete", n, "--project", "WEB"}); code != 0 {
+			t.Fatalf("delete %s: code %d, stderr %q", n, code, errb.String())
+		}
+	}
+	if secret(t, c, web, secrets.GitToken) != "" || secret(t, c, web, secrets.OpenRouterKey) != "" || !strings.Contains(out.String(), "Deleted git-token of WEB") {
+		t.Errorf("delete left a secret or said nothing: %q", out.String())
+	}
+}
+
+func TestKeyList(t *testing.T) {
+	web := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/web"}
+	c, out, errb := newCLI(t, "")
+	saveConfig(t, c, web)
+	if _, err := c.Secrets.Set(web, secrets.GitToken, "git-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if code := c.Run([]string{"key", "list", "--project", "WEB"}); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	for _, s := range []string{"git-token     set, in the keychain", "runner-token  not set", "claude        not set"} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("stdout lacks %q:\n%s", s, out.String())
+		}
+	}
+	if strings.Contains(out.String()+errb.String(), "git-secret") {
+		t.Error("output shows a secret's value")
 	}
 }

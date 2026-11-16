@@ -11,7 +11,6 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
-	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -26,15 +25,14 @@ type CLI struct {
 	Stdout  io.Writer
 	Stderr  io.Writer
 
-	exec          workspace.Exec                                            // nil means workspace.RunCommand
-	http          *http.Client                                              // the tools downloads; nil means http.DefaultClient
-	removeService func(exe string) error                                    // nil means uninstallService
-	startService  func(exe string) (bool, error)                            // nil means startService; update restarts the service with it
-	processGone   func(pid int) bool                                        // nil means processGone; drainAndWait waits with it until the daemon's process has exited
-	Forge         func(kind, repository, token string) (forge.Forge, error) // nil: forge.New
-	pathsErr      error                                                     // from config.DefaultPaths; only commands that need the paths fail on it
-	WindowsBuild  uint32                                                    // OS build on Windows, 0 elsewhere; Main sets it
-	exe           string                                                    // the binary update replaces; "" means os.Executable()
+	exec          workspace.Exec                 // nil means workspace.RunCommand
+	http          *http.Client                   // the tools downloads; nil means http.DefaultClient
+	removeService func(exe string) error         // nil means uninstallService
+	startService  func(exe string) (bool, error) // nil means startService; update restarts the service with it
+	processGone   func(pid int) bool             // nil means processGone; drainAndWait waits with it until the daemon's process has exited
+	pathsErr      error                          // from config.DefaultPaths; only commands that need the paths fail on it
+	WindowsBuild  uint32                         // OS build on Windows, 0 elsewhere; Main sets it
+	exe           string                         // the binary update replaces; "" means os.Executable()
 }
 
 // command is one subcommand. A new command is one function and one entry in commands.
@@ -47,20 +45,19 @@ type command struct {
 func commands() []command {
 	return []command{
 		{"add", "", "add a project, asking for its details", (*CLI).add},
-		{"manage", "", "browse projects in an interactive screen: see, replace or delete their tokens, or add a project", (*CLI).manage},
 		{"remove", "[-url URL] [-workspace SLUG] KEY", "remove a project and its secrets", (*CLI).remove},
 		{"run", "[-v]", "run in the foreground until Ctrl-C; -v also logs to stderr, with Debug lines", (*CLI).run},
 		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
 		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
 		{"stop", "[--drain]", "stop the running " + name.Name + " at once, or with --drain once its runs have finished", (*CLI).stopDaemon},
-		{"update", "[--refresh]", "update to the latest release, then stop the running " + name.Name + " once its runs have finished", (*CLI).update},
+		{"update", "", "update to the latest release, then restart the running " + name.Name + " once its runs have finished", (*CLI).update},
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
-		{"login", "CLIENT --project KEY [-url URL] [-workspace SLUG]", "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
-		{"key", "set CLIENT --project KEY [-url URL] [-workspace SLUG]", "set or replace a project's model key for a client (claude, opencode, codex, gemini), read from stdin; it wins over a login", (*CLI).key},
-		{"add-repo", "--project KEY [-url URL] [-workspace SLUG]", "add a repository the project's runs can read, read-only, asking for its URL, ref and git token", (*CLI).addRepo},
-		{"list-repos", "--project KEY [-url URL] [-workspace SLUG]", "list the project's extra repositories", (*CLI).listRepos},
-		{"remove-repo", "--project KEY [-url URL] [-workspace SLUG] URL|NAME", "remove an extra repository and its git token", (*CLI).removeRepo},
+		{"login", "CLIENT " + projectUsage, "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
+		{"key", keyUsage, "list which secrets a project has, or set (read from stdin, hidden on a terminal) or delete its runner-token, git-token or the model key of a client (claude, opencode, codex, gemini), which wins over a login", (*CLI).key},
+		{"add-repo", projectUsage, "add a repository the project's runs can read, read-only, asking for its URL, ref and git token", (*CLI).addRepo},
+		{"list-repos", projectUsage, "list the project's extra repositories", (*CLI).listRepos},
+		{"remove-repo", projectUsage + " URL|NAME", "remove an extra repository and its git token", (*CLI).removeRepo},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }
@@ -114,6 +111,19 @@ func (c *CLI) flags(cmd, args string) *flag.FlagSet {
 	return f
 }
 
+// parsed parses args into f and reports whether they are valid, with nargs
+// arguments after the flags; when not, the usage is on stderr.
+func (c *CLI) parsed(f *flag.FlagSet, args []string, nargs int) bool {
+	if err := f.Parse(args); err != nil {
+		return false // Parse printed the usage
+	}
+	if f.NArg() != nargs {
+		f.Usage()
+		return false
+	}
+	return true
+}
+
 // fail prints err on stderr and returns exit code 1.
 func (c *CLI) fail(err error) int {
 	fmt.Fprintln(c.Stderr, "error:", err)
@@ -132,20 +142,8 @@ func (c *CLI) loadConfig() (*config.Config, error) {
 	return cfg, err
 }
 
-// saveConfig saves cfg under the config lock, so a workspace the daemon fills
-// in at that instant cannot write over it (CSR-189).
-func (c *CLI) saveConfig(cfg *config.Config) error {
-	unlock, err := config.Lock(c.Paths.File)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	return cfg.Save(c.Paths.File)
-}
-
 func (c *CLI) version(args []string) int {
-	if len(args) > 0 {
-		c.usage()
+	if !c.parsed(c.flags("version", ""), args, 0) {
 		return 2
 	}
 	fmt.Fprintln(c.Stdout, name.Name+" "+c.Version)
@@ -171,10 +169,10 @@ func without(ps []config.Project, p config.Project) []config.Project {
 	return out
 }
 
-// where is p's URL and, when it has a real one, its workspace: what tells
+// where is p's URL and, outside the default one, its workspace: what tells
 // apart two projects with one key (CSR-97).
 func where(p config.Project) string {
-	if p.Workspace == "" || p.Workspace == config.DefaultWorkspace {
+	if p.Workspace == config.DefaultWorkspace {
 		return p.URL
 	}
 	return p.URL + " (workspace " + p.Workspace + ")"

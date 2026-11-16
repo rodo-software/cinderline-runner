@@ -116,7 +116,7 @@ var issueLabels = []string{"--label", "cinderline.project=CSR", "--label", "cind
 // run's allowlist as its arguments.
 func TestUp(t *testing.T) {
 	d, calls := scripted(nil, nil)
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}, true); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []execCall{
@@ -126,31 +126,16 @@ func TestUp(t *testing.T) {
 			"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
 			"cinderline-proxy:abc", "cs.example:443", "api.anthropic.com:443")},
 		{nil, []string{"docker", "network", "connect", "bridge", "cinderline-CSR-CSR-31-proxy"}},
-		{nil, append(append([]string{"docker", "run", "--detach"}, issueLabels...),
-			"--name", "cinderline-CSR-CSR-31-mysql", "--network", "cinderline-CSR-CSR-31", "--network-alias", "mysql",
-			"-e", "MYSQL_DATABASE=laravel_testing", "-e", "MYSQL_USER=laravel", "-e", "MYSQL_PASSWORD=laravel", "-e", "MYSQL_ROOT_PASSWORD=root",
-			MySQLImage)},
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
-	}
-	if !strings.Contains(MySQLImage, "mysql:8.0") || !strings.Contains(MySQLImage, "@sha256:") {
-		t.Errorf("MySQLImage %q is not MySQL 8 pinned by digest", MySQLImage)
-	}
-}
-
-// The variables today's compose file sets, so Laravel's tests reach the run's MySQL.
-func TestDBEnv(t *testing.T) {
-	want := []string{"DB_HOST=mysql", "DB_PORT=3306", "DB_DATABASE=laravel_testing", "DB_USERNAME=laravel", "DB_PASSWORD=laravel"}
-	if !reflect.DeepEqual(DBEnv, want) {
-		t.Errorf("DBEnv = %q, want %q", DBEnv, want)
 	}
 }
 
 func TestUpFailureLeavesNothing(t *testing.T) {
 	boom := errors.New("boom")
 	d, calls := scripted(nil, map[int]error{1: boom})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, true); !errors.Is(err, boom) {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil); !errors.Is(err, boom) {
 		t.Errorf("up = %v, want boom", err)
 	}
 	if got := (*calls)[len(*calls)-1].Argv; !reflect.DeepEqual(got, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}) {
@@ -162,14 +147,14 @@ func TestUpFailureLeavesNothing(t *testing.T) {
 // issue's later turns still run (decision 2026-11-11-audit-fixes).
 func TestUpRemovesALeftoverNetwork(t *testing.T) {
 	d, calls := scripted(nil, map[int]error{0: errors.New("network already exists")})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, true); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil); err != nil {
 		t.Fatalf("up = %v", err)
 	}
 	var got []string
 	for _, c := range *calls {
 		got = append(got, strings.Join(c.Argv[1:3], " "))
 	}
-	if want := []string{"network create", "rm --force", "network rm", "network create", "run --detach", "network connect", "run --detach"}; !reflect.DeepEqual(got, want) {
+	if want := []string{"network create", "rm --force", "network rm", "network create", "run --detach", "network connect"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("calls = %q, want %q", got, want)
 	}
 }
@@ -181,8 +166,7 @@ func TestDownRemovesAllEvenAfterAFailure(t *testing.T) {
 		t.Errorf("down = %v, want boom", err)
 	}
 	want := []execCall{
-		// -v removes MySQL's anonymous data volume with it.
-		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderline-CSR-CSR-31-agent", "cinderline-CSR-CSR-31-mysql", "cinderline-CSR-CSR-31-proxy"}},
+		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderline-CSR-CSR-31-agent", "cinderline-CSR-CSR-31-proxy"}},
 		{nil, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}},
 	}
 	if !reflect.DeepEqual(*calls, want) {
@@ -230,7 +214,7 @@ func TestCleanupReportsAFailedList(t *testing.T) {
 	}
 }
 
-// Ported from lib.test.mjs "tail keeps the last lines and caps the length".
+// Tail keeps the last lines and caps the length.
 func TestTail(t *testing.T) {
 	if got := tail("a\nb\nc\n", 2, 4000); got != "b\nc" {
 		t.Errorf("tail = %q", got)
@@ -309,19 +293,18 @@ func TestRun(t *testing.T) {
 		"--name", "cinderline-CSR-CSR-31-agent", "--network", "cinderline-CSR-CSR-31",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--user", "1000:1000", "--workdir", "/runs/CSR-31",
-		"-e", "DB_HOST=mysql", "-e", "DB_PORT=3306", "-e", "DB_DATABASE=laravel_testing", "-e", "DB_USERNAME=laravel", "-e", "DB_PASSWORD=laravel",
 		"-e", "HTTPS_PROXY=http://proxy:3128", "-e", "HTTP_PROXY=http://proxy:3128",
 		"-e", "https_proxy=http://proxy:3128", "-e", "http_proxy=http://proxy:3128",
-		"-e", "NO_PROXY=mysql,localhost,127.0.0.1", "-e", "no_proxy=mysql,localhost,127.0.0.1",
+		"-e", "NO_PROXY=localhost,127.0.0.1", "-e", "no_proxy=localhost,127.0.0.1",
 		// Secrets by name only: their values travel in the docker command's environment.
 		"-e", "ANTHROPIC_API_KEY", "-e", "CINDERLINE_TOKEN",
 		"-v", "cinderline-CSR-runs:/runs", image, "claude", "-p", "<stdin:the prompt>")
 	got := calls()
-	if len(got) != 10 {
+	if len(got) != 9 {
 		t.Fatalf("calls =\n%q", got)
 	}
-	if want := (execCall{turn.Env, agent}); !reflect.DeepEqual(got[6], want) {
-		t.Errorf("agent call =\n%q\nwant\n%q", got[6], want)
+	if want := (execCall{turn.Env, agent}); !reflect.DeepEqual(got[5], want) {
+		t.Errorf("agent call =\n%q\nwant\n%q", got[5], want)
 	}
 	// The project's hosts first, then the client's.
 	if want := []string{proxyTag(), "cs.example:443", "api.anthropic.com:443"}; !reflect.DeepEqual(got[3].Argv[len(got[3].Argv)-3:], want) {
@@ -329,15 +312,15 @@ func TestRun(t *testing.T) {
 	}
 	wantAfter := []execCall{
 		{nil, []string{"docker", "logs", "cinderline-CSR-CSR-31-proxy"}},
-		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderline-CSR-CSR-31-agent", "cinderline-CSR-CSR-31-mysql", "cinderline-CSR-CSR-31-proxy"}},
+		{nil, []string{"docker", "rm", "--force", "--volumes", "cinderline-CSR-CSR-31-agent", "cinderline-CSR-CSR-31-proxy"}},
 		{nil, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}},
 	}
 	if !reflect.DeepEqual(got[0].Argv[:3], []string{"docker", "image", "inspect"}) || !reflect.DeepEqual(got[1].Argv[:3], []string{"docker", "image", "inspect"}) ||
-		got[2].Argv[1] != "network" || got[3].Argv[1] != "run" || got[4].Argv[2] != "connect" || got[5].Argv[1] != "run" {
-		t.Errorf("before the agent: %q, want image, proxy image, network, proxy, its egress, MySQL", got[:6])
+		got[2].Argv[1] != "network" || got[3].Argv[1] != "run" || got[4].Argv[2] != "connect" {
+		t.Errorf("before the agent: %q, want image, proxy image, network, proxy, its egress", got[:5])
 	}
-	if !reflect.DeepEqual(got[7:10], wantAfter) {
-		t.Errorf("after the agent:\n%q\nwant\n%q", got[7:10], wantAfter)
+	if !reflect.DeepEqual(got[6:9], wantAfter) {
+		t.Errorf("after the agent:\n%q\nwant\n%q", got[6:9], wantAfter)
 	}
 	for _, c := range got {
 		if strings.Contains(strings.Join(c.Argv, " "), secret) {
@@ -424,7 +407,7 @@ func TestProxyEnv(t *testing.T) {
 	want := []string{
 		"HTTPS_PROXY=http://proxy:3128", "HTTP_PROXY=http://proxy:3128",
 		"https_proxy=http://proxy:3128", "http_proxy=http://proxy:3128",
-		"NO_PROXY=mysql,localhost,127.0.0.1", "no_proxy=mysql,localhost,127.0.0.1",
+		"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
 	}
 	if !reflect.DeepEqual(ProxyEnv, want) {
 		t.Errorf("ProxyEnv = %q, want %q", ProxyEnv, want)
@@ -570,7 +553,7 @@ func TestRunFailedCommandStillTearsDown(t *testing.T) {
 	if !errors.As(err, &exit) || exit.ExitCode() != 2 || errors.Is(err, ErrTimeout) {
 		t.Errorf("Run = %v, want exit code 2", err)
 	}
-	if got := calls(); len(got) != 10 || got[9].Argv[1] != "network" {
+	if got := calls(); len(got) != 9 || got[8].Argv[1] != "network" {
 		t.Errorf("calls = %q, want the teardown", got)
 	}
 }
@@ -587,7 +570,7 @@ func TestRunCancelledStillTearsDown(t *testing.T) {
 		t.Errorf("Run = %v, want Canceled", err)
 	}
 	got := calls()
-	if len(got) != 10 || !reflect.DeepEqual(got[8].Argv[:2], []string{"docker", "rm"}) {
+	if len(got) != 9 || !reflect.DeepEqual(got[7].Argv[:2], []string{"docker", "rm"}) {
 		t.Errorf("calls = %q, want the teardown", got)
 	}
 }

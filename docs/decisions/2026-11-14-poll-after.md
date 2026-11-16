@@ -1,3 +1,5 @@
+Superseded by decision 2026-11-16-runner-protocol-v2
+
 # The app sets the runner's polling intervals with a Cinderline-Poll-After header
 
 - **Status:** Accepted

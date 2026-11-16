@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,29 +12,12 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
-	"github.com/rodo-software/cinderline-runner/internal/forge"
-	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 // errEOF is stdin ending before an answer.
 var errEOF = errors.New("input ended before setup was complete; nothing was stored")
-
-// add asks for a project's details on stdin, one line per answer. Tokens are
-// read in plain text like every other answer, so add works from a script;
-// manage asks the same with hidden token input (decision 2026-11-12-manage-cli).
-func (c *CLI) add(args []string) int {
-	f := c.flags("add", "")
-	if err := f.Parse(args); err != nil || f.NArg() > 0 {
-		if err == nil {
-			f.Usage()
-		}
-		return 2
-	}
-	ask := c.lineAsk()
-	return c.addProject(ask, ask)
-}
 
 // lineAsk returns an ask that prints prompt and reads one trimmed line from stdin.
 func (c *CLI) lineAsk() func(prompt string) (string, error) {
@@ -52,10 +34,14 @@ func (c *CLI) lineAsk() func(prompt string) (string, error) {
 	}
 }
 
-// addProject asks for a project's details, checking each answer as it comes
-// (EMBER-26). askSecret asks for tokens and keys; both return errEOF when the
-// person gives up.
-func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int {
+// add asks for a project's details on stdin, one line per answer, checking
+// each as it comes (EMBER-26). Tokens are read in plain text like every
+// other answer, so add works from a script.
+func (c *CLI) add(args []string) int {
+	if !c.parsed(c.flags("add", ""), args, 0) {
+		return 2
+	}
+	ask := c.lineAsk()
 	if err := c.checkDocker(context.Background(), false); err != nil {
 		return c.fail(err)
 	}
@@ -81,11 +67,11 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 			instance = strings.TrimRight(v, "/")
 		}
 		for token == "" {
-			if token, err = askSecret("Runner token: "); err != nil {
+			if token, err = ask("Runner token: "); err != nil {
 				return c.fail(err)
 			}
 		}
-		proj, err = cinderline.New(instance, token, c.Version).GetProject(context.Background())
+		proj, err = cinderline.New(instance, token, c.Version).Project(context.Background())
 		var apiErr *cinderline.APIError
 		if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
 			say("The instance rejected this runner token.")
@@ -102,13 +88,8 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 	say("Project %s: %s", proj.Key, proj.Name)
 	p := config.Project{URL: instance, Key: proj.Key, Workspace: proj.WorkspaceSlug()}
 	for _, q := range cfg.Projects {
-		// An entry the daemon has not filled in yet may be this workspace's.
-		if q.URL == p.URL && q.Key == p.Key && (q.Workspace == p.Workspace || q.Workspace == "") {
-			sel := ""
-			if q.Workspace != "" {
-				sel = " -workspace " + q.Workspace
-			}
-			return c.fail(fmt.Errorf("%s at %s is already added, in workspace %s; run `%s remove -url %s%s %s` first", p.Key, p.URL, cmp.Or(q.Workspace, "unknown"), name.Name, q.URL, sel, q.Key))
+		if q.URL == p.URL && q.Key == p.Key && q.Workspace == p.Workspace {
+			return c.fail(fmt.Errorf("%s at %s is already added, in workspace %s; run `%s remove -url %s -workspace %s %s` first", p.Key, p.URL, q.Workspace, name.Name, q.URL, q.Workspace, q.Key))
 		}
 		// Docker volumes are named by the ID (decision 2026-11-11-audit-fixes, CSR-97).
 		if q.ID() == p.ID() {
@@ -143,7 +124,7 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 	// Stored, not validated against the forge.
 	var gitToken string
 	for gitToken == "" {
-		if gitToken, err = askSecret("Git token: "); err != nil {
+		if gitToken, err = ask("Git token: "); err != nil {
 			return c.fail(err)
 		}
 	}
@@ -151,7 +132,7 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 	// The config first, so a failed save stores no secrets.
 	others := cfg.Projects
 	cfg.Projects = append(append([]config.Project(nil), others...), p)
-	if err := c.saveConfig(cfg); err != nil {
+	if err := cfg.Save(c.Paths.File); err != nil {
 		return c.fail(err)
 	}
 	for _, s := range []struct {
@@ -175,7 +156,7 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 	// Optional; EOF ends them like the copy offer, as the project is already added.
 	for i := 0; i < len(modelKeys); {
 		m := modelKeys[i]
-		v, err := askSecret(m.label + " for " + m.client + " [empty to skip]: ")
+		v, err := ask(m.label + " for " + m.client + " [empty to skip]: ")
 		if errors.Is(err, errEOF) {
 			break
 		}
@@ -183,7 +164,7 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 			return c.fail(err)
 		}
 		if v != "" {
-			if err := c.storeKey(p, m.client, m.label, v); err != nil {
+			if err := c.storeKey(p, secrets.ClientKeys[m.client], m.label+" for "+m.client, v); err != nil {
 				say("Not stored: %v.", err) // re-asks, e.g. after a key over the size limit
 				continue
 			}
@@ -191,34 +172,14 @@ func (c *CLI) addProject(ask, askSecret func(prompt string) (string, error)) int
 		i++
 	}
 
-	build := c.Forge
-	if build == nil {
-		build = forge.New
-	}
-	// CI secrets check (EMBER-56): a warning, never fatal.
-	var exposed []string
-	fg, err := build(proj.Forge, p.Repository, gitToken)
-	if err == nil {
-		exposed, err = fg.CISecrets(context.Background())
-	}
-	if len(exposed) > 0 { // with an error too on a partial check
-		say("Warning: CI on any branch, including the runner's %s/ branches, can read: %s.", name.Name, strings.Join(exposed, ", "))
-	}
-	if err != nil {
-		say("Warning: could not check whether CI on the runner's branches can read secrets: %v.", err)
-	}
-	if err != nil || len(exposed) > 0 {
-		say(`Move them to a protected environment or protected branches: see "CI secrets" in the README.`)
-	}
+	say(`Check that the repository's CI cannot read secrets from %s/ branches: see "CI secrets" in the README.`, name.Name)
 
 	if p.Workspace == config.DefaultWorkspace {
 		say("Added %s at %s", p.Key, p.URL)
 	} else {
 		say("Added %s in workspace %s at %s", p.Key, p.Workspace, p.URL)
 	}
-	if err := (localapi.Client{Socket: c.Paths.Socket}).Reload(context.Background()); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
-		say("Warning: daemon reload failed: %v.", err)
-	}
+	c.reload()
 	return 0
 }
 
@@ -230,7 +191,7 @@ func (c *CLI) undoAdd(cfg *config.Config, p config.Project) {
 		}
 	}
 	cfg.Projects = without(cfg.Projects, p)
-	if err := c.saveConfig(cfg); err != nil {
+	if err := cfg.Save(c.Paths.File); err != nil {
 		fmt.Fprintln(c.Stderr, "error:", err)
 	}
 }

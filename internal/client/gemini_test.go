@@ -176,8 +176,8 @@ func TestGeminiRunFresh(t *testing.T) {
 		`{"type":"result","status":"success","stats":{"total_tokens":6,"input_tokens":5,"output_tokens":1,"cached":0,"input":5}}`
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: out}}}
 	var docker [][]string
-	c := &Gemini{
-		Project: "CSR", Env: env, Key: "AIza-key", MCPURL: "https://cs.example/mcp", Tools: geminiTools(),
+	c := &CLI{
+		Name: "gemini", Project: "CSR", Env: env, Credential: "AIza-key", MCPURL: "https://cs.example/mcp", Tools: geminiTools(),
 		Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
 			docker = append(docker, argv)
 			return "", nil
@@ -221,7 +221,7 @@ func TestGeminiRunFresh(t *testing.T) {
 // Attempts continues the session.
 func TestGeminiRunTurnLimit(t *testing.T) {
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: geminiTurnLimitOutput, Err: errors.New("exit status 53")}}}
-	c := &Gemini{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	c := &CLI{Name: "gemini", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
 	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", MaxTurns: 1})
 	if err == nil || !res.HitTurnLimit || res.SessionID != "739e1123-0386-4683-911a-96ff5f72dcf2" {
 		t.Errorf("Run = %+v, %v", res, err)
@@ -232,7 +232,7 @@ func TestGeminiRunTurnLimit(t *testing.T) {
 // fails before Gemini printed one; the failure is returned with the result.
 func TestGeminiRunResumeFails(t *testing.T) {
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: "crash", Err: environment.ErrTimeout}}}
-	c := &Gemini{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	c := &CLI{Name: "gemini", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
 	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", SessionID: "s-1"})
 	if !errors.Is(err, environment.ErrTimeout) || res.SessionID != "s-1" || res.Tail != "crash" {
 		t.Errorf("Run = %+v, %v", res, err)
@@ -245,7 +245,7 @@ func TestGeminiRunResumeFails(t *testing.T) {
 func TestGeminiRunStateVolumeFails(t *testing.T) {
 	env := &environment.Fake{}
 	boom := errors.New("docker broke")
-	c := &Gemini{Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
+	c := &CLI{Name: "gemini", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
 	if _, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"}); !errors.Is(err, boom) {
 		t.Errorf("Run err = %v, want %v", err, boom)
 	}

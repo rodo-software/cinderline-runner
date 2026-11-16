@@ -1,3 +1,5 @@
+Superseded by decision 2026-11-16-runner-protocol-v2
+
 # Token use and budget over the runner API: one usage call per run, budget stops push first
 
 - **Status:** Accepted

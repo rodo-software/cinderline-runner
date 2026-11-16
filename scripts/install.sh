@@ -47,13 +47,19 @@ if [ "$ACTUAL" != "$EXPECTED" ]; then
 	exit 1
 fi
 
-tar -xzf "$TMPDIR/$FILE" -C "$TMPDIR"
-mkdir -p "$HOME/.local/bin"
-cp "$TMPDIR/cinderline" "$HOME/.local/bin/.cinderline.tmp"
-chmod 755 "$HOME/.local/bin/.cinderline.tmp"
-mv "$HOME/.local/bin/.cinderline.tmp" "$HOME/.local/bin/cinderline"
+# cinderline update sets the folder: the one of the binary it replaces.
+DIR="${CINDERLINE_INSTALL_DIR:-$HOME/.local/bin}"
 
-echo "Installed cinderline to $HOME/.local/bin/cinderline"
+tar -xzf "$TMPDIR/$FILE" -C "$TMPDIR"
+mkdir -p "$DIR"
+cp "$TMPDIR/cinderline" "$DIR/.cinderline.tmp"
+chmod 755 "$DIR/.cinderline.tmp"
+mv "$DIR/.cinderline.tmp" "$DIR/cinderline"
+
+echo "Installed cinderline to $DIR/cinderline"
+
+# An update leaves the PATH as it is.
+[ -n "${CINDERLINE_INSTALL_DIR:-}" ] && exit 0
 
 LINE='export PATH="$HOME/.local/bin:$PATH"'
 

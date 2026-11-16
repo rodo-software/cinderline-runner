@@ -1,48 +1,24 @@
 package run
 
-// Acceptance tests for CSR-79: NewProject builds a configured project's
-// dependencies, and the seven hooks run an issue end to end through the
-// scheduler against the fakes.
+// NewProject builds a configured project's dependencies.
 
 import (
-	"context"
 	"fmt"
-	"io"
-	"log/slog"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
-	"github.com/rodo-software/cinderline-runner/internal/scheduler"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 	"github.com/zalando/go-keyring"
 )
 
-func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
-
-func hooksSet(h scheduler.Hooks) []string {
-	var missing []string
-	for name, set := range map[string]bool{
-		"Recover": h.Recover != nil, "Pin": h.Pin != nil, "Check": h.Check != nil, "Run": h.Run != nil,
-		"Publish": h.Publish != nil, "ReviewBranches": h.ReviewBranches != nil, "MergeCheck": h.MergeCheck != nil,
-	} {
-		if !set {
-			missing = append(missing, name)
-		}
-	}
-	return missing
-}
-
 // A client is built only when its model credential is in the keychain
 // (decision 0122), except Claude Code, Codex and Gemini CLI: without a key
-// they use the login on the state volume (CSR-58, decisions A and B). All
-// seven hooks are set either way.
+// they use the login on the state volume (CSR-58, decisions A and B).
 func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -85,9 +61,6 @@ func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 			if p.Workspace == nil || p.Forge == nil {
 				t.Errorf("Workspace %v, Forge set %v; want both", p.Workspace, p.Forge != nil)
 			}
-			if missing := hooksSet(p.Hooks()); len(missing) > 0 {
-				t.Errorf("nil hooks: %v", missing)
-			}
 		})
 	}
 }
@@ -109,11 +82,11 @@ func TestNewProjectCodexFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProject: %v", err)
 	}
-	c, ok := p.Clients["codex"].(*client.Codex)
+	c, ok := p.Clients["codex"].(*client.CLI)
 	if !ok {
 		t.Fatalf("codex client = %T", p.Clients["codex"])
 	}
-	if c.Key != "secret-openai" || c.BaseURL != pc.OpenAIBaseURL || c.Project != pc.Key || !strings.HasSuffix(c.MCPURL, "/mcp") {
+	if c.Name != "codex" || c.Credential != "secret-openai" || c.BaseURL != pc.OpenAIBaseURL || c.Project != pc.Key || !strings.HasSuffix(c.MCPURL, "/mcp") {
 		t.Errorf("codex client = %+v", c)
 	}
 }
@@ -135,11 +108,11 @@ func TestNewProjectGeminiFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewProject: %v", err)
 	}
-	c, ok := p.Clients["gemini"].(*client.Gemini)
+	c, ok := p.Clients["gemini"].(*client.CLI)
 	if !ok {
 		t.Fatalf("gemini client = %T", p.Clients["gemini"])
 	}
-	if c.Key != "secret-gemini" || !c.Vertex || c.Project != pc.Key || !strings.HasSuffix(c.MCPURL, "/mcp") {
+	if c.Name != "gemini" || c.Credential != "secret-gemini" || !c.Vertex || c.Project != pc.Key || !strings.HasSuffix(c.MCPURL, "/mcp") {
 		t.Errorf("gemini client = %+v", c)
 	}
 }
@@ -158,7 +131,8 @@ func TestNewProjectNeedsGitToken(t *testing.T) {
 	}
 }
 
-// The forge is the one GET project names, on the configured repository.
+// The forge is the one the project names, on the configured repository; none
+// named is told from the host.
 func TestNewProjectForgeByKind(t *testing.T) {
 	for _, tc := range []struct {
 		kind, repository string
@@ -168,6 +142,8 @@ func TestNewProjectForgeByKind(t *testing.T) {
 		{"gitlab", "https://gitlab.com/o/r", &forge.GitLab{}},
 		{"forgejo", "https://git.example/o/r", &forge.Forgejo{}},
 		{"bitbucket", "https://bitbucket.org/o/r", &forge.Bitbucket{}}, // Bitbucket Cloud only (decision 2026-11-04-bitbucket-cloud)
+		{"", "https://github.com/o/r", &forge.GitHub{}},                // none named: by host
+		{"", "https://git.example/o/r", &forge.Forgejo{}},
 	} {
 		keyring.MockInit()
 		state := t.TempDir()
@@ -199,153 +175,6 @@ func TestNewProjectForgeByKind(t *testing.T) {
 
 func typeName(v any) string { return fmt.Sprintf("%T", v) }
 
-// End to end against the fakes, driven only through the scheduler's hooks: a
-// To do issue of a solo team is claimed, run, published as a pull request
-// and reaches Review. The team's max_turns reaches the turn; without it the
-// turn gets 50 (decision 2026-11-07-team-max-turns).
-func TestHooksRunIssueToReview(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		maxTurns string
-		want     int
-	}{
-		{"team max_turns", `,"max_turns":12`, 12},
-		{"no max_turns falls back to 50", ``, 50},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			ref := "CSR-7"
-			team := `{"id":1,"name":"Dev","max_minutes":30,"trusted":false,"max_sub_issues":5,"ponytail":false` + tc.maxTurns +
-				`,"agents":[{"name":"Coder","role":"coder","client":"claude","model":null,"instructions":null,"description":null,"price":null}]}`
-			issue := func(status string) string {
-				return `{"ref":"` + ref + `","title":"Add hello","body":"Add a file.","status":{"value":"` + status + `","label":"x"},"team":{"id":1,"name":"Dev"},"sub_issues":[]}`
-			}
-
-			var mu sync.Mutex
-			status := "todo"
-			cur := func() string { mu.Lock(); defer mu.Unlock(); return status }
-			app := simpleNext("Coder")
-			api := &fakeAPI{handle: func(key, body string) (reply, bool) {
-				if r, ok := app(key, body); ok {
-					return r, true
-				}
-				switch {
-				case strings.HasPrefix(key, "GET /work"):
-					if cur() != "todo" {
-						return reply{200, `{"issue":null}`}, true
-					}
-					return reply{200, `{"issue":` + issue("todo") + `}`}, true
-				case strings.HasPrefix(key, "GET /issues?"):
-					return reply{200, `{"issues":[]}`}, true
-				case key == "GET /project":
-					return reply{200, `{"key":"CSR","name":"CSR","repository_url":"` + cfg.Repository + `","forge":"forgejo","base_branch":"main","environment":"default"}`}, true
-				case key == "GET /teams/1":
-					return reply{200, team}, true
-				case key == "POST /issues/"+ref+"/claim":
-					mu.Lock()
-					status = "in_progress"
-					mu.Unlock()
-					return reply{200, issue("in_progress")}, true
-				case key == "GET /issues/"+ref:
-					return reply{200, issue(cur())}, true
-				case key == "PATCH /issues/"+ref:
-					if strings.Contains(body, `"status":"review"`) {
-						mu.Lock()
-						status = "review"
-						mu.Unlock()
-					}
-					return reply{200, issue(cur())}, true
-				case key == "GET /issues/"+ref+"/comments":
-					return reply{200, `{"comments":[]}`}, true
-				case key == "POST /issues/"+ref+"/comments":
-					return reply{201, `{"id":1,"body":"x","author":{"name":"runner"}}`}, true
-				case key == "POST /issues/"+ref+"/progress":
-					return reply{204, ""}, true
-				case key == "POST /runs/"+ref+"/agent-token":
-					return reply{201, `{"token":"scoped","expires_at":"2030-01-01T00:00:00Z"}`}, true
-				case key == "DELETE /runs/"+ref+"/agent-token":
-					return reply{204, ""}, true
-				case key == "POST /runs/"+ref+"/usage":
-					return reply{204, ""}, true
-				}
-				return reply{}, false
-			}}
-			c := api.client(t)
-
-			p := project(t)
-			if _, err := p.Secrets.Set(cfg, secrets.AnthropicCredential, "sk-ant"); err != nil {
-				t.Fatal(err)
-			}
-			cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: "Added hello.", Usage: cost(0.5)}}}}
-			ws := &workspace.Fake{
-				Prepares:   []workspace.PrepareReply{{Dir: "/clone"}},
-				Strandeds:  []workspace.StrandedReply{{}, {}}, // the start's and the run's
-				Commits:    []workspace.CommitReply{{Committed: true}, {Committed: true}, {Committed: true}},
-				MergeBases: []workspace.MergeBaseReply{{}, {}, {}},
-				Ancestors:  []workspace.IsAncestorReply{{Yes: false}, {Yes: false}, {Yes: false}},
-				Pushes:     []error{nil, nil},
-			}
-			fg := &forge.Fake{PullRequests: []forge.PullRequestReply{{PullRequest: forge.PullRequest{Number: 3, URL: "https://git.example/o/r/pulls/3"}}}}
-			p.Clients = map[string]client.Client{"claude": cl}
-			p.Workspace = ws
-			p.Forge = func(kind string) (forge.Forge, error) {
-				if kind != "forgejo" {
-					t.Errorf("Forge(%q), want the project's forgejo", kind)
-				}
-				return fg, nil
-			}
-
-			done := make(chan struct{})
-			go func() {
-				(&scheduler.Scheduler{Log: discard(), ReviewInterval: time.Hour, MergeInterval: time.Hour}).Run(ctx, []scheduler.Slot{{Project: cfg.Key, Client: c, Hooks: p.Hooks()}})
-				close(done)
-			}()
-			for cur() != "review" && ctx.Err() == nil {
-				time.Sleep(10 * time.Millisecond)
-			}
-			cancel()
-			<-done
-			if s := cur(); s != "review" {
-				t.Fatalf("status = %q, want review; requests:\n%s", s, strings.Join(api.writes(), "\n"))
-			}
-
-			runs := cl.Calls()
-			if len(runs) != 1 {
-				t.Fatalf("client runs = %d, want 1", len(runs))
-			}
-			turn := runs[0].Args[0].(client.Turn)
-			if turn.Dir != "/clone" || turn.MaxTurns != tc.want || turn.MaxMinutes != 30 || turn.Token != "scoped" {
-				t.Errorf("turn = %+v; want Dir /clone, MaxTurns %d, MaxMinutes 30, Token scoped", turn, tc.want)
-			}
-			if turn.Prompt != "Do CSR-7." {
-				t.Errorf("prompt = %q, want the step's", turn.Prompt)
-			}
-			var opened bool
-			for _, call := range fg.Calls() {
-				opened = opened || call.Method == "OpenPullRequest"
-			}
-			if !opened {
-				t.Errorf("no pull request opened; forge calls %+v", fg.Calls())
-			}
-			// The turn's usage travels in next, so no usage call (decision 2026-11-15-server-decides-steps point 6).
-			if got := usageReports(api, ref); len(got) != 0 {
-				t.Errorf("usage reports = %q, want none", got)
-			}
-			if reqs := nextRequests(t, api); len(reqs) != 2 || reqs[1].Last == nil || reqs[1].Last.Usage == nil || *reqs[1].Last.Usage.CostUSD != 0.5 {
-				t.Errorf("next requests = %+v, want the turn's usage in the second", reqs)
-			}
-			var reported bool
-			for _, w := range api.writes() {
-				reported = reported || (strings.HasPrefix(w, "POST /issues/"+ref+"/comments") && strings.Contains(w, "pulls/3"))
-			}
-			if !reported {
-				t.Errorf("no finish report naming the pull request; writes:\n%s", strings.Join(api.writes(), "\n"))
-			}
-		})
-	}
-}
-
 // CSR-97: a project in a workspace names its volumes, containers and labels
 // by workspace and key, so its namesake in another workspace on the same URL
 // does not share them.
@@ -366,7 +195,7 @@ func TestNewProjectNamesByWorkspace(t *testing.T) {
 	if ws := p.Workspace.(*workspace.Docker); ws.Project != id {
 		t.Errorf("workspace project %q, want %q", ws.Project, id)
 	}
-	if c := p.Clients["claude"].(*client.Claude); c.Project != id {
+	if c := p.Clients["claude"].(*client.CLI); c.Project != id {
 		t.Errorf("claude project %q, want %q", c.Project, id)
 	}
 	if got, want := workspace.Volume(pc.ID(), "repo"), "cinderline-"+id+"-repo"; got != want {

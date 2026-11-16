@@ -1,496 +1,445 @@
 package run
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/zalando/go-keyring"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
-	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
-	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// fakeAPI answers "METHOD path" with handle, when it is set and answers, or
-// with queues[...] in order, the last reply repeating, or else with
-// routes[...]; a missing route is a 404. It records every request with its
-// JSON body.
-type fakeAPI struct {
-	handle func(key, body string) (reply, bool)
-	routes map[string]reply
-	queues map[string][]reply
-	mu     sync.Mutex
-	calls  []string
-}
+const runNew = `{"kind":"run","issue":{"ref":"CSR-1","title":"Fix it"},"agent":"Coder","session":"new","token":"agent-token-1234567890","prompt":"Do it."}`
 
-type reply struct {
-	status int
-	body   string
-}
-
-func (f *fakeAPI) client(t *testing.T) *cinderline.Client {
+func (f *fixture) run(t *testing.T, app *fakeApp) (bool, error) {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Method + " " + strings.TrimPrefix(r.URL.Path, "/api/runner/v1")
-		if r.URL.RawQuery != "" {
-			key += "?" + r.URL.RawQuery
-		}
-		in, _ := io.ReadAll(r.Body)
-		f.mu.Lock()
-		f.calls = append(f.calls, strings.TrimSpace(key+" "+string(in)))
-		rep, ok := f.routes[key]
-		if q := f.queues[key]; len(q) > 0 {
-			rep, ok = q[0], true
-			if len(q) > 1 {
-				f.queues[key] = q[1:]
-			}
-		}
-		if f.handle != nil {
-			if r, handled := f.handle(key, string(in)); handled {
-				rep, ok = r, true
-			}
-		}
-		f.mu.Unlock()
-		if !ok {
-			rep = reply{404, `{"message":"Not found."}`}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(rep.status)
-		_, _ = io.WriteString(w, rep.body)
-	}))
-	t.Cleanup(srv.Close)
-	c := cinderline.New(srv.URL, "tok", "0.0.0")
-	c.HTTP, c.SendWaits = srv.Client(), []time.Duration{}
-	c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
-	return c
+	return f.p.run(context.Background(), app.client(t), proj, soloJob())
 }
 
-func (f *fakeAPI) writes() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []string
-	for _, c := range f.calls {
-		if !strings.HasPrefix(c, "GET ") {
-			out = append(out, c)
-		}
-	}
-	return out
-}
+// A solo run: the first request carries the run's facts and nothing else;
+// each later one the state echoed, a new id and the step just done; the
+// run ends with the lead's session kept as the done step says.
+func TestARunFollowsNextToDone(t *testing.T) {
+	f := newFixture(t)
+	f.cl.Runs = []client.RunReply{ok("sess-1", "Done.")}
+	f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+	f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{Number: 4, URL: "https://git.example/o/r/pulls/4"}}}
+	app := &fakeApp{onNext: stepsOf(runNew, `{"kind":"publish"}`)}
 
-var cfg = config.Project{URL: "https://cs.example.com", Key: "CSR", Repository: "https://git.example/o/r"}
-
-func project(t *testing.T) Project {
-	t.Helper()
-	keyring.MockInit()
-	state := t.TempDir()
-	return Project{Config: cfg, Secrets: secrets.New(state), State: state, Env: &environment.Fake{Cleanups: []error{nil}}, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-}
-
-func issueJSON(ref, status string) string {
-	return `{"ref":"` + ref + `","title":"T","status":{"value":"` + status + `","label":"x"},"team":{"id":1,"name":"Dev"}}`
-}
-
-// Ported from legacy runner.test.mjs "a restart puts team issues left In
-// progress back in To do", changed by decision 2026-11-16-unheld-in-progress:
-// they go to Blocked with a note naming the branch, not back to To do, so
-// nothing reruns unseen (EMBER-143 D). Its team-less issue is the API's job
-// here: the runner API lists only issues with a team. An issue someone moved
-// meanwhile (409) is left alone, without a note.
-func TestRecoverBlocksInProgressWithANote(t *testing.T) {
-	p := project(t)
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /issues?status=in_progress": {200, `{"issues":[` + issueJSON("CSR-1", "in_progress") + `,` + issueJSON("CSR-2", "in_progress") + `]}`},
-		"PATCH /issues/CSR-1":            {200, issueJSON("CSR-1", "blocked")},
-		"PATCH /issues/CSR-2":            {409, `{"message":"Status changed.","status":"review"}`},
-		"POST /issues/CSR-1/comments":    {201, `{"id":1}`},
-	}}
-	if err := p.Recover(context.Background(), api.client(t)); err != nil {
-		t.Fatal(err)
+	if started, err := f.run(t, app); !started || err != nil {
+		t.Fatalf("run = %v, %v; want started", started, err)
 	}
-	got := api.writes()
-	want := []string{
-		`PATCH /issues/CSR-1 {"status":"blocked","expected_status":"in_progress"}`,
-		`POST /issues/CSR-1/comments`,
-		`PATCH /issues/CSR-2 {"status":"blocked","expected_status":"in_progress"}`,
+	reqs := app.requests()
+	if len(reqs) != 3 {
+		t.Fatalf("%d next requests, want 3", len(reqs))
 	}
-	if len(got) != len(want) || got[0] != want[0] || !strings.HasPrefix(got[1], want[1]) || got[2] != want[2] {
-		t.Fatalf("writes = %q, want %q", got, want)
+	first := reqs[0]
+	if first.State != nil || first.Last != nil || len(first.Sessions) != 0 || first.Workspace.Branch != "cinderline/CSR-1" || first.Workspace.Base != "main" || first.ID == "" {
+		t.Errorf("first request = %+v", first)
 	}
-	if !strings.Contains(got[1], "`cinderline/CSR-1`") || !strings.Contains(got[1], "Blocked") {
-		t.Errorf("note = %s, want the branch named", got[1])
+	if reqs[1].ID == first.ID || deref(reqs[1].State) != "s1" || deref(reqs[2].State) != "s2" {
+		t.Errorf("ids %q %q, states %v %v", first.ID, reqs[1].ID, reqs[1].State, reqs[2].State)
+	}
+	run := reqs[1].Last
+	if run.Step != "run" || run.Outcome != "finished" || deref(run.Report) != "Done." || run.Usage == nil || run.Usage.InputTokens != 3 || run.Usage.Issue != "CSR-1" {
+		t.Errorf("run facts = %+v", run)
+	}
+	if s := reqs[2].Sessions; len(s) != 1 || s[0] != (cinderline.Session{Issue: "CSR-1", Agent: "Coder", Origin: "turn"}) {
+		t.Errorf("sessions after the turn = %+v", s)
+	}
+	pub := reqs[2].Last
+	if pub.Step != "publish" || pub.Outcome != "published" || deref(pub.PullRequest) != "https://git.example/o/r/pulls/4" || deref(pub.Commit) != "abc123" || pub.Merge != nil {
+		t.Errorf("publish facts = %+v", pub)
+	}
+	turn := turns(f.cl)[0]
+	if turn.Token != "agent-token-1234567890" || turn.Prompt != "Do it." || turn.Author != "Dev / Coder" || turn.MaxTurns != 50 || turn.Idle.Minutes() != 20 {
+		t.Errorf("turn = %+v", turn)
+	}
+	n, okNote := f.p.readNote("CSR-1")
+	if !okNote || n.Origin != "kept" || n.Session != "sess-1" || n.Dir != "/runs/CSR-1" || n.Client != "claude" {
+		t.Errorf("note = %+v, %v; want the kept session", n, okNote)
 	}
 }
 
-// When this machine still has the issue's clone, the note names its last
-// commit too; the clone is only read.
-func TestUnheldNamesTheClonesLastCommit(t *testing.T) {
-	p := project(t)
-	ws := &workspace.Fake{Clones: []string{"/runs/CSR-1"}, Heads: []workspace.HeadReply{{Commit: "abc123"}}}
-	p.Workspace = ws
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /issues?status=in_progress": {200, `{"issues":[` + issueJSON("CSR-1", "in_progress") + `]}`},
-		"PATCH /issues/CSR-1":            {200, issueJSON("CSR-1", "blocked")},
-		"POST /issues/CSR-1/comments":    {201, `{"id":1}`},
-	}}
-	if err := p.Unheld(context.Background(), api.client(t)); err != nil {
-		t.Fatal(err)
-	}
-	got := api.writes()
-	if len(got) != 2 || !strings.Contains(got[1], "`cinderline/CSR-1`") || !strings.Contains(got[1], "`abc123`") {
-		t.Fatalf("writes = %q, want a note with branch and commit", got)
-	}
-	var methods []string
-	for _, c := range ws.Calls() {
-		methods = append(methods, c.Method)
-	}
-	if want := []string{"Exists", "Head"}; !slices.Equal(methods, want) {
-		t.Errorf("workspace calls = %q, want %q", methods, want)
-	}
-}
-
-// Review item 9: what a previous process left in Docker is removed first,
-// so its networks do not use up Docker's address pools. A failure there
-// only logs: it must not keep the project from working.
-func TestRecoverCleansUpStaleResources(t *testing.T) {
-	for _, cleanupErr := range []error{nil, errors.New("docker is not running")} {
-		p := project(t)
-		var logs bytes.Buffer
-		p.Log = slog.New(slog.NewTextHandler(&logs, nil))
-		env := &environment.Fake{Cleanups: []error{cleanupErr}}
-		p.Env = env
-		api := &fakeAPI{routes: map[string]reply{"GET /issues?status=in_progress": {200, `{"issues":[]}`}}}
-		if err := p.Recover(context.Background(), api.client(t)); err != nil {
-			t.Fatal(err)
-		}
-		if c := env.Calls(); len(c) != 1 || c[0].Method != "Cleanup" {
-			t.Errorf("environment calls = %v, want Cleanup", c)
-		}
-		if cleanupErr != nil && !strings.Contains(logs.String(), "docker is not running") {
-			t.Errorf("log lacks the cleanup failure:\n%s", logs.String())
-		}
-	}
-}
-
-func TestRecoverFailsWhenTheListFails(t *testing.T) {
-	p := project(t)
-	api := &fakeAPI{routes: map[string]reply{"GET /issues?status=in_progress": {500, `{"message":"Server error."}`}}}
-	if err := p.Recover(context.Background(), api.client(t)); err == nil {
-		t.Fatal("Recover succeeded without the list of In progress issues")
-	}
-}
-
-// Ported from legacy runner.test.mjs "at startup a paused issue a person has
-// closed loses its note", with the statuses legacy keeps a note for (blocked,
-// todo, in_progress) and a note it cannot check, which stays.
-func TestRecoverDropsNotesOfClosedIssues(t *testing.T) {
-	p := project(t)
-	dir := PausedDir(p.State, p.Config)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	routes := map[string]reply{"GET /issues?status=in_progress": {200, `{"issues":[]}`}}
-	for ref, status := range map[string]string{
-		"CSR-1": "done", "CSR-2": "blocked", "CSR-3": "todo", "CSR-4": "in_progress", "CSR-5": "review", "CSR-6": "",
-	} {
-		if err := os.WriteFile(filepath.Join(dir, ref+".json"), []byte(`{}`), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if status != "" {
-			routes["GET /issues/"+ref] = reply{200, issueJSON(ref, status)}
-		}
-	}
-	api := &fakeAPI{routes: routes}
-	if err := p.Recover(context.Background(), api.client(t)); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var kept []string
-	for _, e := range entries {
-		kept = append(kept, e.Name())
-	}
-	if want := []string{"CSR-2.json", "CSR-3.json", "CSR-4.json", "CSR-6.json"}; !slices.Equal(kept, want) {
-		t.Fatalf("kept %q, want %q", kept, want)
-	}
-}
-
-func TestRecoverWithoutNotes(t *testing.T) {
-	p := project(t)
-	api := &fakeAPI{routes: map[string]reply{"GET /issues?status=in_progress": {200, `{"issues":[]}`}}}
-	if err := p.Recover(context.Background(), api.client(t)); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPausedDirIsPerProject(t *testing.T) {
-	a := PausedDir("/s", config.Project{URL: "https://a.example.com", Key: "WEB"})
-	b := PausedDir("/s", config.Project{URL: "https://b.example.com", Key: "WEB"})
-	if a == b || filepath.Dir(filepath.Dir(a)) != filepath.Clean("/s") {
-		t.Fatalf("PausedDir = %q and %q, want two folders under /s/paused", a, b)
-	}
-	// CSR-97: one key in two workspaces on one URL; an entry made before
-	// workspaces keeps its folder and outbox when filled in.
-	old := config.Project{URL: "https://a.example.com", Key: "WEB"}
-	acme, filled := old, old
-	acme.Workspace = "acme"
-	filled.FillWorkspace("acme")
-	if PausedDir("/s", acme) == a || OutboxFile("/s", acme) == OutboxFile("/s", old) || attachmentsDir("/s", acme) == attachmentsDir("/s", old) {
-		t.Error("a project in a workspace shares the state files of its namesake made before workspaces")
-	}
-	if PausedDir("/s", filled) != a || OutboxFile("/s", filled) != OutboxFile("/s", old) || attachmentsDir("/s", filled) != attachmentsDir("/s", old) {
-		t.Error("filling in the workspace moved the state files")
-	}
-}
-
-// Ported from legacy runner.test.mjs "<x> is skipped before the claim", the
-// repository cases, and lib.test.mjs "assertRepository accepts only the
-// configured repository".
-// CSR-60: a mismatch or a missing repository is a repository_mismatch
-// error for the report, its text without the credentials of either URL; a
-// project that cannot be read is a plain error (a failed poll).
-func TestPin(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		rep  reply
-		err  string
-		kind string
+// Each step kind reports its facts.
+func TestStepFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		step  string
+		setup func(*fixture)
+		want  cinderline.LastStep
 	}{
-		{"the configured repository", reply{200, `{"key":"CSR","repository_url":"git@git.example:o/r.git"}`}, "", ""},
-		{"a repository other than the configured one", reply{200, `{"key":"CSR","repository_url":"https://evil.example/o/r.git"}`}, "evil.example", cinderline.KindRepositoryMismatch},
-		{"another repository with credentials in its URL", reply{200, `{"key":"CSR","repository_url":"https://bob:s3cr3t-value@evil.example/o/r.git"}`}, "evil.example", cinderline.KindRepositoryMismatch},
-		{"a project without a repository", reply{200, `{"key":"CSR","repository_url":""}`}, "no repository", cinderline.KindRepositoryMismatch},
-		{"no project", reply{500, `{"message":"Server error."}`}, "500", ""},
+		{"check passed", `{"kind":"check","issue":{"ref":"CSR-1","title":"Fix it"}}`,
+			func(f *fixture) { f.env.Runs = []environment.RunReply{{Output: "ok"}} },
+			cinderline.LastStep{Step: "check", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "passed"}},
+		{"check failed", `{"kind":"check","issue":{"ref":"CSR-1","title":"Fix it"}}`,
+			func(f *fixture) { f.env.Runs = []environment.RunReply{{Output: "boom", Err: exitError(1)}} },
+			cinderline.LastStep{Step: "check", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "failed", Tail: ptr("boom")}},
+		{"stop", `{"kind":"stop"}`, func(*fixture) {},
+			cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "pushed", Commit: ptr("abc123")}},
+		{"stop not pushed", `{"kind":"stop"}`, func(f *fixture) { f.ws.Pushes = []error{errors.New("denied")} },
+			cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "not_pushed", Commit: ptr("abc123"), Error: ptr("denied")}},
+		{"publish unchanged", `{"kind":"publish"}`, func(f *fixture) { f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}} },
+			cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "unchanged", Commit: ptr("abc123")}},
+		{"publish merged", `{"kind":"publish","merge":true}`, func(f *fixture) {
+			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+			f.fg.Merges = []error{nil}
+			f.fg.MergeStates = []forge.MergeStateReply{{State: forge.MergePending}, {State: forge.MergeMerged}}
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("merged"), Commit: ptr("abc123")}},
+		{"publish merge with conflicts", `{"kind":"publish","merge":true}`, func(f *fixture) {
+			f.ws.MergeBases = append([]workspace.MergeBaseReply{{}, {Conflicts: []string{"a.go"}}}, f.ws.MergeBases...)
+			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"), Conflicts: []string{"a.go"}}},
+		{"publish failed", `{"kind":"publish"}`, func(f *fixture) {
+			f.ws.Ancestors = fill(5, workspace.IsAncestorReply{})
+			f.ws.Pushes = fill(5, errors.New("denied"))
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "failed", Error: ptr("denied"), Commit: ptr("abc123")}},
+		{"turn failed", runNew, func(f *fixture) {
+			f.cl.Runs = []client.RunReply{{Result: client.Result{Tail: "oops"}, Err: errors.New("exit 1")}}
+		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "failed", Error: ptr("exit 1"), Tail: ptr("oops")}},
+		{"turn idle", runNew, func(f *fixture) {
+			f.cl.Runs = []client.RunReply{{Err: environment.ErrIdle}}
+		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "idle", Error: ptr(environment.ErrIdle.Error())}},
+		{"turn limit", runNew, func(f *fixture) {
+			f.cl.Runs = []client.RunReply{{Result: client.Result{HitTurnLimit: true}, Err: errors.New("max turns")}}
+		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "turn_limit", Error: ptr("max turns")}},
+		{"agent not on the team", strings.Replace(runNew, `"Coder"`, `"Ghost"`, 1), func(*fixture) {},
+			cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Ghost"), Outcome: "not_started", Error: ptr("agent Ghost is not on team Dev")}},
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			p := project(t)
-			api := &fakeAPI{routes: map[string]reply{"GET /project": tt.rep}}
-			err := p.Pin(context.Background(), api.client(t))
-			if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
-				t.Fatalf("Pin = %v, want an error with %q", err, tt.err)
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			tc.setup(f)
+			app := &fakeApp{onNext: stepsOf(tc.step)}
+			if _, err := f.run(t, app); err != nil {
+				t.Fatal(err)
 			}
-			checkKind(t, err, tt.kind, "")
-			if err != nil && strings.Contains(err.Error(), "s3cr3t-value") {
-				t.Errorf("error %q carries a credential", err)
+			lasts := app.lasts()
+			if len(lasts) != 1 {
+				t.Fatalf("lasts = %+v", lasts)
+			}
+			got := lasts[0]
+			got.Usage, got.Report = nil, nil
+			if !sameLast(got, tc.want) {
+				t.Errorf("last = %s\nwant   %s", show(got), show(tc.want))
 			}
 		})
 	}
 }
 
-// checkKind fails unless err is a *cinderline.ReportError of kind for issue,
-// or, when kind is empty, not a ReportError at all.
-func checkKind(t *testing.T, err error, kind, issue string) {
-	t.Helper()
-	var re *cinderline.ReportError
-	if !errors.As(err, &re) {
-		if kind != "" {
-			t.Errorf("error %v is not a ReportError of kind %s", err, kind)
-		}
-		return
-	}
-	if re.Kind != kind || re.Issue != issue || re.Message != err.Error() {
-		t.Errorf("ReportError = %+v (Error() %q), want kind %q, issue %q and Message equal to Error()", *re, err.Error(), kind, issue)
-	}
+type exitError int
+
+func (e exitError) Error() string { return "exit status 1" }
+func (e exitError) ExitCode() int { return int(e) }
+
+func sameLast(a, b cinderline.LastStep) bool { return show(a) == show(b) }
+
+func show(l cinderline.LastStep) string {
+	s := func(p *string) string { return deref(p) }
+	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ",")}, "|")
 }
 
-// Ported from legacy lib.test.mjs "assertRunnable refuses Codex, and OpenCode
-// without a key" and runner.test.mjs "<x> is skipped before the claim", the
-// team cases, plus "an issue that fails before its claim does not block the
-// next" (a team that cannot be read). A Claude agent needs this project's
-// Anthropic credential, as an OpenCode agent needs its OpenRouter key.
-// CSR-59: skip-before-claim uses the detection result, not the keychain: a
-// login counts as configured, a refused key or a missing binary skips the
-// issue too, and detection runs once when Check finds no result yet.
-func TestCheck(t *testing.T) {
-	agent := func(name, client string) map[string]any {
-		return map[string]any{"name": name, "role": "orchestrator", "client": client, "model": "m", "instructions": nil}
-	}
-	team := func(agents ...map[string]any) reply {
-		b, _ := json.Marshal(map[string]any{"id": 1, "name": "Dev", "max_minutes": 1, "trusted": false, "agents": agents})
-		return reply{200, string(b)}
-	}
-	all := func(state string, except map[string]string) []cinderline.ReportClient {
-		var cs []cinderline.ReportClient
-		for _, n := range []string{"claude", "codex", "gemini", "opencode"} {
-			st := state
-			if s, ok := except[n]; ok {
-				st = s
-			}
-			cs = append(cs, cinderline.ReportClient{Name: n, State: st})
-		}
-		return cs
-	}
-	for _, tt := range []struct {
-		name     string
-		team     reply
-		detected []cinderline.ReportClient
-		err      string
-		kind     string
-	}{
-		{"claude and opencode both ready", team(agent("Boss", "claude"), agent("Qwen", "opencode")), all("ready", nil), "", ""},
-		{"an OpenCode worker without an OpenRouter key", team(agent("Boss", "claude"), agent("Qwen", "opencode")), all("ready", map[string]string{"opencode": "missing_credential"}), "Qwen runs on opencode, which needs this project's openrouter", cinderline.KindMissingKey},
-		{"a Codex agent without an OpenAI key or login", team(agent("C", "codex")), all("ready", map[string]string{"codex": "missing_credential"}), "C runs on codex, which needs this project's openai", cinderline.KindMissingKey},
-		{"a Gemini agent whose key the provider refused", team(agent("G", "gemini")), all("ready", map[string]string{"gemini": "invalid_credential"}), "G runs on gemini, whose gemini key the provider refused", cinderline.KindMissingKey},
-		{"a Claude agent whose binary is missing", team(agent("Boss", "claude")), all("ready", map[string]string{"claude": "missing_binary"}), "Boss runs on claude, which is not in the tools volume", cinderline.KindUnsupportedClient},
-		{"a Claude agent on a login, no keychain key", team(agent("Boss", "claude")), all("ready", nil), "", ""},
-		{"an orchestrator on another client", team(agent("A", "aider")), all("ready", nil), "A runs on aider; this runner supports only claude, codex, gemini and opencode", cinderline.KindUnsupportedClient},
-		{"a team that cannot be read", reply{404, `{"message":"Unknown team."}`}, all("ready", nil), "Unknown team.", ""},
+// A step the runner cannot do, and a failure in its own code, end the run
+// with an unasked stop whose error names the runner's version; the work is
+// pushed first.
+func TestAnUnknownOrMalformedStepIsAnUnaskedStop(t *testing.T) {
+	for _, step := range []string{
+		`{"kind":"dance"}`,
+		`{"kind":"done","session":"forever"}`,
+		strings.Replace(runNew, `"new"`, `"sideways"`, 1),
+		strings.Replace(runNew, `"ref":"CSR-1"`, `"ref":"CSR-10"`, 1),
+		`{"kind":"resolve","agent":"Coder","session":"new","prompt":"x"}`,
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			p := project(t)
-			detections := 0
-			p.detect = func(context.Context) []cinderline.ReportClient {
-				detections++
-				return tt.detected
-			}
-			api := &fakeAPI{routes: map[string]reply{"GET /teams/1": tt.team}}
-			issue := cinderline.Issue{Ref: "CSR-1", Team: &cinderline.IssueTeam{ID: 1, Name: "Dev"}}
-			for range 2 {
-				err := p.Check(context.Background(), api.client(t), issue)
-				if tt.err == "" && err != nil || tt.err != "" && (err == nil || !strings.Contains(err.Error(), tt.err)) {
-					t.Fatalf("Check = %v, want an error with %q", err, tt.err)
-				}
-				if tt.kind != "" {
-					checkKind(t, err, tt.kind, "CSR-1")
-				} else {
-					checkKind(t, err, "", "")
-				}
-			}
-			if tt.team.status == 200 && detections != 1 {
-				t.Errorf("detection ran %d times over two checks, want once (the result is cached)", detections)
-			}
-		})
-	}
-}
-
-// CSR-81 point 3: at start, a clone whose branch has commits the remote
-// lacks is pushed, and if its issue is in Review its pull request is found
-// or opened; one log line per branch. A clone of a closed issue, or one
-// whose pull request is already merged or closed, is left alone; a refused
-// push is logged and skipped, never forced. None of it writes to the issue.
-// A generic team's clone is never pushed (CSR-75).
-func TestRecoverPushesStrandedBranches(t *testing.T) {
-	p := project(t)
-	var log bytes.Buffer
-	p.Log = slog.New(slog.NewTextHandler(&log, nil))
-	ws := &workspace.Fake{
-		Strandeds: []workspace.StrandedReply{{Clones: []workspace.Clone{
-			{Dir: "/runs/CSR-5", Branch: "cinderline/CSR-5"}, // Review, no pull request: push, open
-			{Dir: "/runs/CSR-6", Branch: "cinderline/CSR-6"}, // Done: left alone
-			{Dir: "/runs/CSR-7", Branch: "cinderline/CSR-7"}, // To do, merged: left alone
-			{Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"}, // Review, push refused: no pull request
-			{Dir: "/runs/CSR-9", Branch: "cinderline/CSR-9"}, // a generic team's: left alone (CSR-75)
-		}}},
-		Pushes: []error{nil, errors.New("rejected: non-fast-forward")},
-	}
-	fg := &forge.Fake{
-		MergeStates:  []forge.MergeStateReply{{State: ""}, {State: forge.MergeMerged}, {State: ""}},
-		PullRequests: []forge.PullRequestReply{{PullRequest: forge.PullRequest{Number: 53, URL: "https://git.example/o/r/pulls/53"}}},
-	}
-	p.Workspace = ws
-	p.Forge = func(string) (forge.Forge, error) { return fg, nil }
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /project":                   {200, `{"key":"CSR","forge":"forgejo","base_branch":"main","repository_url":"https://git.example/o/r"}`},
-		"GET /issues?status=in_progress": {200, `{"issues":[]}`},
-		"GET /issues/CSR-5":              {200, issueJSON("CSR-5", "review")},
-		"GET /issues/CSR-6":              {200, issueJSON("CSR-6", "done")},
-		"GET /issues/CSR-7":              {200, issueJSON("CSR-7", "todo")},
-		"GET /issues/CSR-8":              {200, issueJSON("CSR-8", "review")},
-		"GET /issues/CSR-9":              {200, strings.Replace(issueJSON("CSR-9", "review"), `"id":1`, `"id":2`, 1)},
-		"GET /teams/2":                   {200, `{"id":2,"name":"Ops","generic_runs":true,"agents":[]}`},
-	}}
-	if err := p.Recover(context.Background(), api.client(t)); err != nil {
-		t.Fatal(err)
-	}
-	wantWS := []workspace.Call{
-		{Method: "Stranded"},
-		{Method: "Push", Args: []any{"/runs/CSR-5", "cinderline/CSR-5"}},
-		{Method: "Push", Args: []any{"/runs/CSR-8", "cinderline/CSR-8"}},
-	}
-	if got := ws.Calls(); !reflect.DeepEqual(got, wantWS) {
-		t.Errorf("workspace calls =\n%+v, want\n%+v", got, wantWS)
-	}
-	wantForge := []forge.Call{
-		{Method: "MergeState", Args: []any{"cinderline/CSR-5"}},
-		{Method: "OpenPullRequest", Args: []any{forge.PullRequestInput{Branch: "cinderline/CSR-5", Base: "main", Title: "CSR-5: T", Body: "Resolves CSR-5 in Cinderline."}}},
-		{Method: "MergeState", Args: []any{"cinderline/CSR-7"}},
-		{Method: "MergeState", Args: []any{"cinderline/CSR-8"}},
-	}
-	if got := fg.Calls(); !reflect.DeepEqual(got, wantForge) {
-		t.Errorf("forge calls =\n%+v, want\n%+v", got, wantForge)
-	}
-	if w := api.writes(); len(w) != 0 {
-		t.Errorf("writes = %v, want none", w)
-	}
-	for _, want := range []string{"issue=CSR-5", "pulls/53", "issue=CSR-7", "issue=CSR-8", "non-fast-forward"} {
-		if !strings.Contains(log.String(), want) {
-			t.Errorf("log lacks %q:\n%s", want, log.String())
+		f := newFixture(t)
+		// The app answers a stop with stop again while it waits for that report: done again.
+		app := &fakeApp{onNext: stepsOf(step, `{"kind":"stop","reason":"x"}`, `{"kind":"done","session":"paused"}`)}
+		if started, err := f.run(t, app); !started || err != nil {
+			t.Fatalf("%s: run = %v, %v", step, started, err)
+		}
+		lasts := app.lasts()
+		if len(lasts) != 2 || lasts[1].Step != "stop" || lasts[0].Step != "stop" || lasts[0].Outcome != "pushed" || !strings.Contains(deref(lasts[0].Error), "runner 0.0.0-test") {
+			t.Errorf("%s: lasts = %+v", step, lasts)
 		}
 	}
 }
 
-// CSR-81 point 3: a stranded branch the runner cannot push, because the
-// clones cannot be listed, only logs; recovery goes on.
-func TestRecoverStrandedListingFailureOnlyLogs(t *testing.T) {
-	p := project(t)
-	var log bytes.Buffer
-	p.Log = slog.New(slog.NewTextHandler(&log, nil))
-	p.Workspace = &workspace.Fake{Strandeds: []workspace.StrandedReply{{Err: errors.New("docker down")}}}
-	p.Forge = func(string) (forge.Forge, error) { return &forge.Fake{}, nil }
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /project":                   {200, `{"key":"CSR","forge":"forgejo","base_branch":"main"}`},
-		"GET /issues?status=in_progress": {200, `{"issues":[]}`},
-	}}
-	if err := p.Recover(context.Background(), api.client(t)); err != nil {
-		t.Fatal(err)
+// panicky is a client whose turn panics.
+type panicky struct{}
+
+func (panicky) Run(context.Context, client.Turn) (client.Result, error) { panic("bad") }
+
+func TestAPanicIsAnUnaskedStop(t *testing.T) {
+	f := newFixture(t)
+	f.p.Clients["claude"] = panicky{}
+	app := &fakeApp{onNext: stepsOf(runNew, `{"kind":"run"}`)} // anything but done ends the run after the stop
+	if started, err := f.run(t, app); !started || err != nil {
+		t.Fatalf("run = %v, %v", started, err)
 	}
-	if !strings.Contains(log.String(), "docker down") {
-		t.Errorf("log = %s", log.String())
+	lasts := app.lasts()
+	if len(lasts) != 1 || lasts[0].Step != "stop" || !strings.Contains(deref(lasts[0].Error), "panic: bad") {
+		t.Errorf("lasts = %+v", lasts)
+	}
+	if n, _ := f.p.readNote("CSR-1"); n.Origin != "" {
+		t.Errorf("note = %+v; want none, as no session was made", n)
 	}
 }
 
-// An In progress issue whose move waits in the outbox is not blocked: the
-// replay moves it where its run decided (CSR-159).
-func TestRecoverLeavesIssuesWithKeptWrites(t *testing.T) {
-	p := project(t)
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /issues?status=in_progress": {200, `{"issues":[` + issueJSON("CSR-1", "in_progress") + `,` + issueJSON("CSR-2", "in_progress") + `]}`},
-		"PATCH /issues/CSR-1":            {502, `{}`},
-		"POST /issues/CSR-1/comments":    {502, `{}`},
-		"PATCH /issues/CSR-2":            {200, issueJSON("CSR-2", "blocked")},
-		"POST /issues/CSR-2/comments":    {201, `{"id":1}`},
-	}}
-	c := api.client(t)
-	c.Send(context.Background(), cinderline.Write{Ref: "CSR-1", Comment: "The run stopped with an error: boom"})
-	if err := p.Recover(context.Background(), c); err != nil {
+// When next stays unavailable the work is pushed, the session kept as
+// paused and the request queued with its id; a replay delivers it.
+func TestAnUnreachableNextPausesAndQueues(t *testing.T) {
+	f := newFixture(t)
+	f.cl.Runs = []client.RunReply{ok("sess-1", "Done.")}
+	down := true
+	app := &fakeApp{}
+	app.onNext = func(n int, ref string, req cinderline.NextRequest) reply {
+		if n > 0 && down {
+			return reply{503, `{"message":"deploying"}`}
+		}
+		return stepsOf(runNew)(n, ref, req)
+	}
+	c := app.client(t)
+	c.Outbox = filepath.Join(t.TempDir(), "outbox.json")
+	if started, err := f.p.run(context.Background(), c, proj, soloJob()); !started || err != nil {
+		t.Fatalf("run = %v, %v", started, err)
+	}
+	reqs := app.requests()
+	if len(reqs) != 4 || reqs[1].ID != reqs[3].ID {
+		t.Fatalf("%d requests; want the first and three tries of the second with one id", len(reqs))
+	}
+	if n, _ := f.p.readNote("CSR-1"); n.Origin != "paused" || n.Session != "sess-1" {
+		t.Errorf("note = %+v; want the paused session", n)
+	}
+	if !slices.Contains(methods(f.ws), "Push") {
+		t.Errorf("workspace calls %v; want a push", methods(f.ws))
+	}
+	if q := c.Queued(); !slices.Equal(q, []string{"CSR-1"}) {
+		t.Fatalf("queued = %v", q)
+	}
+	if _, err := os.Stat(c.Outbox); err != nil {
+		t.Errorf("outbox file: %v", err)
+	}
+	app.mu.Lock()
+	down = false
+	app.mu.Unlock()
+	c.Replay(context.Background())
+	if reqs := app.requests(); reqs[len(reqs)-1].ID != reqs[1].ID || len(c.Queued()) != 0 {
+		t.Errorf("replay sent %+v, queued %v", reqs[len(reqs)-1], c.Queued())
+	}
+}
+
+// A 409 on the first call drops the job quietly; another refusal is a run
+// that did not start. Either way a resumed note is put back.
+func TestAFirstNextThatIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		status  int
+		wantErr bool
+	}{{409, false}, {422, true}} {
+		f := newFixture(t)
+		f.p.saveNote("CSR-1", Note{Dir: t.TempDir(), Session: "s0", Client: "claude", Origin: "paused"})
+		app := &fakeApp{onNext: func(int, string, cinderline.NextRequest) reply {
+			return reply{tc.status, `{"message":"no","status":"done"}`}
+		}}
+		started, err := f.run(t, app)
+		if started || (err != nil) != tc.wantErr {
+			t.Errorf("%d: run = %v, %v", tc.status, started, err)
+		}
+		if n, ok := f.p.readNote("CSR-1"); !ok || n.Session != "s0" || n.Origin != "paused" {
+			t.Errorf("%d: note = %+v, %v; want it back", tc.status, n, ok)
+		}
+	}
+}
+
+// blocking is a client whose turn runs until its context ends.
+type blocking struct {
+	started chan struct{}
+}
+
+func (b *blocking) Run(ctx context.Context, _ client.Turn) (client.Result, error) {
+	close(b.started)
+	<-ctx.Done()
+	return client.Result{Report: "half"}, errors.New("killed")
+}
+
+// The poll's stop ends the turn in flight; the step reports stopped.
+func TestAStopEndsTheTurnAsStopped(t *testing.T) {
+	f := newFixture(t)
+	b := &blocking{started: make(chan struct{})}
+	f.p.Clients["claude"] = b
+	app := &fakeApp{onNext: stepsOf(runNew)}
+	c := app.client(t)
+	var wg sync.WaitGroup
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob()) })
+	<-b.started
+	f.p.stopTurn("CSR-2") // another run's: nothing
+	f.p.stopTurn("CSR-1")
+	wg.Wait()
+	if lasts := app.lasts(); len(lasts) != 1 || lasts[0].Outcome != "stopped" || deref(lasts[0].Report) != "half" {
+		t.Errorf("lasts = %+v", lasts)
+	}
+}
+
+// A sub-issue's work is committed as "<ref>: <title>" and pushed after its turn.
+func TestASubIssueTurnIsCommittedAndPushed(t *testing.T) {
+	f := newFixture(t)
+	f.cl.Runs = []client.RunReply{ok("w1", "Sub done.")}
+	app := &fakeApp{onNext: stepsOf(`{"kind":"run","issue":{"ref":"CSR-1.2","title":"Part"},"agent":"Coder","session":"new","token":null,"prompt":"Part."}`)}
+	if _, err := f.run(t, app); err != nil {
 		t.Fatal(err)
 	}
-	blocked := false
-	for _, w := range api.writes() {
-		if strings.HasPrefix(w, "PATCH /issues/CSR-1") {
-			t.Fatalf("writes = %q, want CSR-1 left alone", api.writes())
+	var commit workspace.Call
+	for _, c := range f.ws.Calls() {
+		if c.Method == "Commit" {
+			commit = c
 		}
-		blocked = blocked || w == `PATCH /issues/CSR-2 {"status":"blocked","expected_status":"in_progress"}`
 	}
-	if !blocked {
-		t.Fatalf("writes = %q, want CSR-2 blocked", api.writes())
+	if commit.Args[2] != "CSR-1.2: Part" {
+		t.Errorf("last commit = %v", commit.Args)
+	}
+	if got := methods(f.ws); got[len(got)-1] != "Push" {
+		t.Errorf("workspace calls %v; want a push last", got)
+	}
+	if turns(f.cl)[0].Token != "" {
+		t.Error("a null token gave the turn one")
+	}
+}
+
+// A conflicting base merge at publish goes to next as a merge step; the
+// resolve that follows is verified, and undone when it does not hold.
+func TestAPublishConflictIsResolvedAndVerified(t *testing.T) {
+	for _, verified := range []bool{true, false} {
+		f := newFixture(t)
+		f.ws.MergeBases = append([]workspace.MergeBaseReply{{}, {Conflicts: []string{"a.go"}}}, f.ws.MergeBases...)
+		f.ws.Logs = []workspace.LogReply{{Log: "abc fix"}}
+		f.ws.Cleans = []workspace.BoolReply{{Yes: verified}}
+		f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}, {Yes: true}}
+		f.ws.Markers = []workspace.BoolReply{{}}
+		f.ws.Resets = []error{nil}
+		f.cl.Runs = []client.RunReply{ok("r1", "Merged.")}
+		app := &fakeApp{onNext: stepsOf(`{"kind":"publish","resolve_conflicts":true}`, `{"kind":"resolve","agent":"Coder","session":"new","token":null,"prompt":"Resolve."}`)}
+		if _, err := f.run(t, app); err != nil {
+			t.Fatal(err)
+		}
+		lasts := app.lasts()
+		if len(lasts) != 2 || lasts[0].Step != "merge" || lasts[0].Outcome != "conflict" || !slices.Equal(lasts[0].Conflicts, []string{"a.go"}) || deref(lasts[0].Commits) != "abc fix" {
+			t.Fatalf("lasts = %+v", lasts)
+		}
+		want := map[bool]string{true: "finished", false: "not_verified"}[verified]
+		if lasts[1].Step != "resolve" || lasts[1].Outcome != want {
+			t.Errorf("verified %v: resolve = %+v", verified, lasts[1])
+		}
+		if undone := slices.Contains(methods(f.ws), "Reset"); undone == verified {
+			t.Errorf("verified %v: reset %v", verified, undone)
+		}
+	}
+}
+
+// A kept session is fast-forwarded and resumed; the first request names it.
+func TestAKeptSessionIsResumed(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	f.p.saveNote("CSR-1", Note{Dir: dir, Session: "old", Client: "claude", Origin: "kept"})
+	f.ws.FastForwards = []error{nil}
+	f.cl.Runs = []client.RunReply{ok("old", "Again.")}
+	app := &fakeApp{onNext: stepsOf(strings.Replace(runNew, `"new"`, `"resume"`, 1))}
+	if _, err := f.run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	if s := app.requests()[0].Sessions; len(s) != 1 || s[0].Origin != "kept" {
+		t.Errorf("sessions = %+v", s)
+	}
+	if turn := turns(f.cl)[0]; turn.SessionID != "old" || turn.Dir != dir {
+		t.Errorf("turn = %+v", turn)
+	}
+	if slices.Contains(methods(f.ws), "Prepare") {
+		t.Error("a resumed run made a fresh clone")
+	}
+}
+
+// A note whose session tidying deleted becomes a workspace note.
+func TestAPrunedSessionIsANote(t *testing.T) {
+	f := newFixture(t)
+	f.p.saveNote("CSR-1", Note{Pruned: prunedDisk})
+	app := &fakeApp{onNext: stepsOf()}
+	if _, err := f.run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	if notes := app.requests()[0].Workspace.Notes; len(notes) != 1 || !strings.Contains(notes[0], prunedDisk) {
+		t.Errorf("notes = %q", notes)
+	}
+}
+
+// What stops preparation means the run did not start, and nothing is sent.
+func TestARunThatCannotPrepareDoesNotStart(t *testing.T) {
+	f := newFixture(t)
+	f.ws.Prepares = []workspace.PrepareReply{{Err: errors.New("disk full")}}
+	app := &fakeApp{onNext: stepsOf()}
+	if started, err := f.run(t, app); started || err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Errorf("run = %v, %v", started, err)
+	}
+	if len(app.requests()) != 0 {
+		t.Error("a run that did not start called next")
+	}
+}
+
+// Attachments land under their safe names; a name or issue the runner does
+// not accept means the turn does not start.
+func TestStepAttachments(t *testing.T) {
+	for _, tc := range []struct {
+		files, want string
+	}{
+		{`[{"issue":"CSR-1.1","id":7,"name":"spec.pdf"}]`, "finished"},
+		{`[{"issue":"CSR-1","id":7,"name":"../x"}]`, "not_started"},
+		{`[{"issue":"CSR-1","id":7,"name":"a.txt"},{"issue":"CSR-1","id":8,"name":"A.TXT"}]`, "not_started"},
+		{`[{"issue":"CSR-2","id":7,"name":"spec.pdf"}]`, "not_started"},
+	} {
+		f := newFixture(t)
+		f.cl.Runs = []client.RunReply{ok("s", "")}
+		step := strings.Replace(runNew, `"prompt"`, `"attachments":`+tc.files+`,"prompt"`, 1)
+		app := &fakeApp{onNext: stepsOf(step), files: map[string]string{"CSR-1.1/7": "PDF", "CSR-1/7": "x"}}
+		if _, err := f.run(t, app); err != nil {
+			t.Fatal(err)
+		}
+		if got := app.lasts()[0].Outcome; got != tc.want {
+			t.Errorf("%s: outcome %s, want %s", tc.files, got, tc.want)
+		}
+		if tc.want == "finished" {
+			b, err := os.ReadFile(filepath.Join(attachmentsDir(f.p.State, cfg), "spec.pdf"))
+			if string(b) != "PDF" || err != nil {
+				t.Errorf("spec.pdf = %q, %v", b, err)
+			}
+		}
+	}
+}
+
+func TestFileName(t *testing.T) {
+	for in, want := range map[string]string{"a.pdf": "a.pdf", "../etc": ".._etc", "..": "attachment-3", "a`b": "a_b", " x ": "x"} {
+		if got := fileName(3, in); got != want {
+			t.Errorf("fileName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestInTree(t *testing.T) {
+	for issue, want := range map[string]bool{"CSR-1": true, "CSR-1.2": true, "CSR-1.2.3": true, "CSR-10": false, "CSR-1.": false, "CSR-1.x": false, "CSR-2": false} {
+		if got := inTree("CSR-1", issue); got != want {
+			t.Errorf("inTree(CSR-1, %s) = %v", issue, got)
+		}
+	}
+}
+
+func TestReportsBlocked(t *testing.T) {
+	for msg, want := range map[string]bool{"Blocked: no access": true, "**Blocked** by x": true, "- blocked": true, "Not blocked": false, "Done.": false} {
+		if got := reportsBlocked(msg); got != want {
+			t.Errorf("reportsBlocked(%q) = %v", msg, got)
+		}
 	}
 }

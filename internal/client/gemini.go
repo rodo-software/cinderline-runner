@@ -1,36 +1,42 @@
 package client
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"path"
-	"slices"
 	"strings"
-	"time"
 
-	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
-	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// Gemini is the Gemini CLI Client (checked with 0.67.0): one container per turn
-// through the Environment, node and the CLI's bundle from the tools volume.
-type Gemini struct {
-	Project string                  // project key, for its volumes
-	Env     environment.Environment // where the turn runs
-	Exec    workspace.Exec          // prepares the state volume; nil means workspace.RunCommand
-	Key     string                  // the project's Gemini API key
-	Vertex  bool                    // Key is a Vertex AI express-mode key; false: the Gemini API
-	MCPURL  string                  // Cinderline's MCP endpoint, as the agent container reaches it
-	Tools   tools.Mount             // from tools.Tools.Mount for the Environment's image
+// gemini is the Gemini CLI (checked with 0.67.0), run by the tools volume's
+// node. The shell writes the settings file first.
+var gemini = kind{
+	libs: true,
+	env:  func(c *CLI, t Turn) []string { return geminiEnv(c.Credential, c.Vertex, t, c.MCPURL) },
+	cmd: func(_ *CLI, t Turn, _ string) []string {
+		return append([]string{"sh", "-c", geminiShell(`"$` + geminiSettingsVar + `"`), tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js"}, geminiArgs(t)...)
+	},
+	parse: parseGemini,
+	// The Gemini API, or Vertex AI's global endpoint for an express-mode key.
+	hosts: func(c *CLI) []string {
+		switch {
+		case c.Credential == "":
+			return []string{"generativelanguage.googleapis.com:443", "cloudcode-pa.googleapis.com:443", "oauth2.googleapis.com:443"}
+		case c.Vertex:
+			return []string{"aiplatform.googleapis.com:443"}
+		}
+		return []string{"generativelanguage.googleapis.com:443"}
+	},
 }
 
-var _ Client = (*Gemini)(nil)
+// geminiHome puts Gemini CLI's home on the state volume.
+const geminiHome = "GEMINI_CLI_HOME=" + StatePath + "/gemini"
 
-// errGeminiTurnLimit is a turn that stopped at the team's turn limit.
-var errGeminiTurnLimit = errors.New("gemini: stopped at the turn limit")
+// geminiShell writes settings, a shell word, as the user settings file and
+// runs the CLI.
+func geminiShell(settings string) string {
+	return `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' ` + settings + ` > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`
+}
 
 // geminiArgs is Gemini CLI's headless argv for one turn; the prompt goes in
 // on stdin through "-p". Options before a possible --resume.
@@ -89,9 +95,7 @@ var geminiSettingsVar = strings.ToUpper(name.Name) + "_GEMINI_SETTINGS"
 // When key is empty no key variables are set and the auth type is oauth-personal:
 // the stored Google login on the state volume is used instead.
 func geminiEnv(key string, vertex bool, t Turn, mcpURL string) []string {
-	env := []string{
-		"GEMINI_CLI_HOME=" + StatePath + "/gemini",
-	}
+	env := []string{geminiHome}
 	auth := geminiAuthType(vertex)
 	switch {
 	case key == "":
@@ -102,10 +106,7 @@ func geminiEnv(key string, vertex bool, t Turn, mcpURL string) []string {
 		env = append(env, "GEMINI_API_KEY="+key)
 	}
 	env = append(env, geminiSettingsVar+"="+geminiSettingsWithAuth(t, mcpURL, auth))
-	if t.Token != "" {
-		return append(env, tokenVar+"="+t.Token)
-	}
-	return env
+	return withToken(env, t)
 }
 
 // parseGemini reads Gemini CLI's JSON events from mixed stdout/stderr.
@@ -114,10 +115,7 @@ func geminiEnv(key string, vertex bool, t Turn, mcpURL string) []string {
 func parseGemini(out string) Result {
 	var res Result
 	var report []string
-	for _, line := range strings.Split(out, "\n") {
-		if !strings.HasPrefix(line, "{") || !json.Valid([]byte(line)) {
-			continue
-		}
+	for _, line := range jsonLines(out) {
 		var e struct {
 			Type      string `json:"type"`
 			SessionID string `json:"session_id"`
@@ -161,50 +159,4 @@ func parseGemini(out string) Result {
 	}
 	res.Report = strings.TrimSpace(strings.Join(report, ""))
 	return res
-}
-
-// Run runs one turn.
-func (c *Gemini) Run(ctx context.Context, t Turn) (Result, error) {
-	if err := PrepareState(ctx, c.Exec, c.Project, "gemini"); err != nil {
-		return Result{}, err
-	}
-	out, err := c.Env.Run(ctx, environment.Spec{
-		Issue:  path.Base(t.Dir),
-		Dir:    t.Dir,
-		Mounts: agentMounts(c.Project, "gemini", c.Tools),
-		Env:    slices.Concat(c.Tools.Env, c.Tools.OpenCodeEnv, geminiEnv(c.Key, c.Vertex, t, c.MCPURL), workspace.Identity(c.Project, t.Author)),
-		Cmd: append([]string{
-			"sh", "-c", `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' "$` + geminiSettingsVar + `" > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`,
-			tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js",
-		}, geminiArgs(t)...),
-		Stdin:   t.Prompt,
-		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
-		Idle:    t.Idle,
-		Allow:   c.Hosts(),
-	})
-	res := parseGemini(out)
-	if res.SessionID == "" {
-		res.SessionID = t.SessionID
-	}
-	res.Tail = environment.Tail(out)
-	if err == nil && res.HitTurnLimit {
-		err = errGeminiTurnLimit
-	}
-	return res, err
-}
-
-// Hosts returns the provider host:port pairs a run needs, for the run's
-// network allowlist: the Gemini API, or Vertex AI's global endpoint for an
-// express-mode key.
-// Without a key the run uses the stored sign-in (CSR-58), which also needs
-// the provider's sign-in hosts: decision 2026-11-09-network-allowlist point 5,
-// unchecked against the CLI; a missing one shows up as a refused host.
-func (c *Gemini) Hosts() []string {
-	switch {
-	case c.Key == "":
-		return []string{"generativelanguage.googleapis.com:443", "cloudcode-pa.googleapis.com:443", "oauth2.googleapis.com:443"}
-	case c.Vertex:
-		return []string{"aiplatform.googleapis.com:443"}
-	}
-	return []string{"generativelanguage.googleapis.com:443"}
 }

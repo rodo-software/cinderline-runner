@@ -27,8 +27,8 @@ func writeFile(t *testing.T, body string) string {
 
 func twoProjects() *Config {
 	return &Config{Projects: []Project{
-		{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/acme/web.git", AllowExisting: true},
-		{URL: "https://b.example.com", Key: "WEB", Repository: "ssh://git@git.example.com/acme/api.git"},
+		{URL: "https://a.example.com", Key: "WEB", Workspace: "default", Repository: "https://git.example.com/acme/web.git"},
+		{URL: "https://b.example.com", Key: "WEB", Workspace: "acme", Repository: "ssh://git@git.example.com/acme/api.git"},
 	}}
 }
 
@@ -47,9 +47,6 @@ func TestRoundTrip(t *testing.T) {
 	want.Version = 1
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
-	}
-	if !got.Projects[0].AllowExisting || got.Projects[1].AllowExisting {
-		t.Errorf("allow_existing did not survive: %+v", got.Projects)
 	}
 
 	data, err := os.ReadFile(path)
@@ -110,18 +107,8 @@ func TestLoadMissing(t *testing.T) {
 	}
 }
 
-func TestAllowExistingDefault(t *testing.T) {
-	cfg, err := Load(writeFile(t, `{"version": 1, "projects": [{"url": "https://a.example.com", "key": "WEB", "repository": "https://g.example.com/r.git"}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Projects[0].AllowExisting {
-		t.Error("AllowExisting true without the field")
-	}
-}
-
 func TestValidate(t *testing.T) {
-	ok := Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://g.example.com/r.git"}
+	ok := Project{URL: "https://a.example.com", Key: "WEB", Workspace: "default", Repository: "https://g.example.com/r.git"}
 	with := func(f func(*Project)) Project { p := ok; f(&p); return p }
 	tests := []struct {
 		name     string
@@ -139,6 +126,7 @@ func TestValidate(t *testing.T) {
 		{"empty repository", []Project{with(func(p *Project) { p.Repository = "" })}, "project 1 (WEB): repository"},
 		{"relative repository", []Project{with(func(p *Project) { p.Repository = "acme/web.git" })}, "project 1 (WEB): repository"},
 		{"duplicate", []Project{ok, ok}, "project 2 (WEB): "},
+		{"no workspace", []Project{with(func(p *Project) { p.Workspace = "" })}, "project 1 (WEB): workspace"},
 		// CSR-63, Willem's decision (option C): extra allowlist entries come from local config only, as exact host:port.
 		{"allow hosts", []Project{with(func(p *Project) { p.AllowHosts = []string{"mirror.example.com:443", "api.example.com:8443"} })}, ""},
 		{"allow host without port", []Project{with(func(p *Project) { p.AllowHosts = []string{"mirror.example.com"} })}, "project 1 (WEB): allow_hosts"},
@@ -154,28 +142,6 @@ func TestValidate(t *testing.T) {
 		case tt.wantErr != "" && (err == nil || !strings.HasPrefix(err.Error(), tt.wantErr)):
 			t.Errorf("%s: err %v, want prefix %q", tt.name, err, tt.wantErr)
 		}
-	}
-}
-
-// merge_poll_seconds is optional: absent or 0 is legacy's default, 60
-// seconds; a negative value is refused.
-func TestMergePoll(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(path, []byte(`{"version":1,"projects":[]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := Load(path)
-	if err != nil || cfg.MergePoll() != 60*time.Second {
-		t.Fatalf("default = %v; want 60s", err)
-	}
-	if err := os.WriteFile(path, []byte(`{"version":1,"merge_poll_seconds":30,"projects":[]}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if cfg, err = Load(path); err != nil || cfg.MergePoll() != 30*time.Second {
-		t.Fatalf("set = %v; want 30s", err)
-	}
-	if err := (&Config{Version: 1, MergePollSeconds: -1}).Validate(); err == nil || err.Error() != "merge_poll_seconds must not be negative" {
-		t.Errorf("negative: %v", err)
 	}
 }
 
@@ -308,7 +274,7 @@ func TestSameRepository(t *testing.T) {
 		{"https://u:p@h.example.com/o/r/", "http://h.example.com/o/r", true},
 		{"https://h.example.com/o/r", "https://h.example.com/o/r2", false},
 		{"https://h.example.com/o/r", "https://g.example.com/o/r", false},
-		// Ported from legacy lib.test.mjs "assertRepository accepts only the configured repository".
+		// An scp-form URL is the same repository as its https form.
 		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/Willem/cinderline", true},
 		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/willem/cinderline.git", true},
 		{"git@git.rodo.nl:willem/cinderline.git", "https://git.rodo.nl/willem/other", false},
@@ -320,16 +286,6 @@ func TestSameRepository(t *testing.T) {
 		if got := SameRepository(tt.a, tt.b); got != tt.same {
 			t.Errorf("SameRepository(%q, %q) = %v", tt.a, tt.b, got)
 		}
-	}
-}
-
-// CSR-49: build_image is optional and false unless set (decision on CSR-49, option A).
-func TestBuildImage(t *testing.T) {
-	if cfg, err := Load(writeFile(t, `{"version":1,"projects":[]}`)); err != nil || cfg.BuildImage {
-		t.Fatalf("default = %v, %v; want false", cfg, err)
-	}
-	if cfg, err := Load(writeFile(t, `{"version":1,"build_image":true,"projects":[]}`)); err != nil || !cfg.BuildImage {
-		t.Fatalf("set = %v, %v; want true", cfg, err)
 	}
 }
 
@@ -411,7 +367,7 @@ func TestExtraRepositoryValidate(t *testing.T) {
 }
 
 func TestValidateRefusesTwoExtraRepositoriesWithOneName(t *testing.T) {
-	c := Config{Projects: []Project{{URL: "https://cs.example.com", Key: "CSR", Repository: "https://git.example.com/o/r",
+	c := Config{Projects: []Project{{URL: "https://cs.example.com", Key: "CSR", Workspace: "default", Repository: "https://git.example.com/o/r",
 		ExtraRepositories: []ExtraRepository{{URL: "https://git.example.com/a/lib"}, {URL: "https://git.example.com/b/lib"}}}}}
 	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "named lib") {
 		t.Errorf("err = %v", err)
@@ -419,17 +375,14 @@ func TestValidateRefusesTwoExtraRepositoriesWithOneName(t *testing.T) {
 }
 
 // CSR-97: a project is URL, workspace slug and key; Docker names, keychain
-// entries and state files derive from ID, which keeps the key alone for an
-// entry made before workspaces, so no running project loses its state.
+// entries and state files derive from ID.
 func TestProjectID(t *testing.T) {
 	tests := []struct {
 		p    Project
 		want string
 	}{
-		{Project{Key: "APP"}, "APP"},                                      // made before workspaces, not yet filled in
-		{Project{Key: "APP", Workspace: "default"}, "APP"},                // a Cinderline without workspaces: as before
-		{Project{Key: "APP", Workspace: "acme"}, "acme-APP"},              // added with a workspace
-		{Project{Key: "APP", Workspace: "acme", NamesByKey: true}, "APP"}, // filled in on upgrade: names unchanged
+		{Project{Key: "APP", Workspace: "default"}, "APP"},   // a Cinderline without workspaces
+		{Project{Key: "APP", Workspace: "acme"}, "acme-APP"}, // added with a workspace
 	}
 	for _, tt := range tests {
 		if got := tt.p.ID(); got != tt.want {
@@ -462,79 +415,4 @@ func TestValidateWorkspace(t *testing.T) {
 			t.Errorf("workspace %q: %v, want refused", slug, err)
 		}
 	}
-}
-
-func TestFillWorkspace(t *testing.T) {
-	tests := []struct {
-		name    string
-		p       Project
-		slug    string
-		changed bool
-		want    Project
-	}{
-		{"made before workspaces", Project{Key: "APP"}, "acme", true, Project{Key: "APP", Workspace: "acme", NamesByKey: true}},
-		{"server without workspaces", Project{Key: "APP"}, "default", true, Project{Key: "APP", Workspace: "default", NamesByKey: true}},
-		{"default becomes real", Project{Key: "APP", Workspace: "default"}, "acme", true, Project{Key: "APP", Workspace: "acme", NamesByKey: true}},
-		{"already known", Project{Key: "APP", Workspace: "acme"}, "acme", false, Project{Key: "APP", Workspace: "acme"}},
-		{"already filled", Project{Key: "APP", Workspace: "default", NamesByKey: true}, "default", false, Project{Key: "APP", Workspace: "default", NamesByKey: true}},
-		{"a real workspace is never replaced", Project{Key: "APP", Workspace: "acme"}, "beta", false, Project{Key: "APP", Workspace: "acme"}},
-	}
-	for _, tt := range tests {
-		p := tt.p
-		id := p.ID()
-		if changed := p.FillWorkspace(tt.slug); changed != tt.changed || !reflect.DeepEqual(p, tt.want) {
-			t.Errorf("%s: changed %v, %+v; want %v, %+v", tt.name, changed, p, tt.changed, tt.want)
-		}
-		if p.ID() != id {
-			t.Errorf("%s: ID went from %q to %q", tt.name, id, p.ID())
-		}
-	}
-}
-
-func TestLock(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "sub", "config.json") // Lock makes the folder, as Save does
-	unlock, err := Lock(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := make(chan func())
-	go func() {
-		u, err := Lock(path)
-		if err != nil {
-			t.Error(err)
-		}
-		got <- u
-	}()
-	select {
-	case <-got:
-		t.Fatal("a second Lock got the lock while the first held it")
-	case <-time.After(50 * time.Millisecond):
-	}
-	unlock()
-	select {
-	case u := <-got:
-		u()
-	case <-time.After(5 * time.Second):
-		t.Fatal("the second Lock did not get the lock after its release")
-	}
-	if _, err := os.Stat(path + ".lock"); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("lock file after release: %v", err)
-	}
-}
-
-func TestLockBreaksStaleLock(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.json")
-	// As left by a process that died holding it.
-	if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-2 * staleLock)
-	if err := os.Chtimes(path+".lock", old, old); err != nil {
-		t.Fatal(err)
-	}
-	unlock, err := Lock(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unlock()
 }

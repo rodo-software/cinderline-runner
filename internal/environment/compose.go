@@ -201,15 +201,14 @@ func composeLabel(project string) string { return name.Name + ".compose." + proj
 // composeConfig is the part of `docker compose config --format json` the
 // runner checks and uses.
 type composeConfig struct {
+	Name     string                    `json:"name"` // the project name, which starts every volume's name
 	Services map[string]composeService `json:"services"`
 	Networks map[string]struct {
 		External bool `json:"external"`
 	} `json:"networks"`
-	Volumes map[string]struct {
-		External bool `json:"external"`
-	} `json:"volumes"`
-	Secrets map[string]composeSource `json:"secrets"`
-	Configs map[string]composeSource `json:"configs"`
+	Volumes map[string]map[string]any `json:"volumes"`
+	Secrets map[string]composeSource  `json:"secrets"`
+	Configs map[string]composeSource  `json:"configs"`
 }
 
 type composeSource struct {
@@ -218,40 +217,71 @@ type composeSource struct {
 }
 
 type composeService struct {
-	Image string `json:"image"`
-	Build *struct {
-		Context            string            `json:"context"`
-		AdditionalContexts map[string]string `json:"additional_contexts"`
-	} `json:"build"`
+	Image       string             `json:"image"`
+	Build       *composeBuild      `json:"build"`
 	Environment map[string]*string `json:"environment"`
 	EnvFile     []struct {
 		Path string `json:"path"`
 	} `json:"env_file"`
-	Privileged  bool              `json:"privileged"`
-	NetworkMode string            `json:"network_mode"`
-	Networks    map[string]any    `json:"networks"`
-	Pid         string            `json:"pid"`
-	Ipc         string            `json:"ipc"`
-	Uts         string            `json:"uts"`
-	Cgroup      string            `json:"cgroup"`
-	UsernsMode  string            `json:"userns_mode"`
-	CapAdd      []string          `json:"cap_add"`
-	Devices     []json.RawMessage `json:"devices"`
-	Ports       []json.RawMessage `json:"ports"`
-	VolumesFrom []string          `json:"volumes_from"`
-	Volumes     []struct {
+	Networks map[string]any `json:"networks"`
+	Volumes  []struct {
 		Type   string `json:"type"`
 		Source string `json:"source"`
 	} `json:"volumes"`
+
+	keys []string // every key the service sets
+}
+
+type composeBuild struct {
+	Context            string            `json:"context"`
+	Dockerfile         string            `json:"dockerfile"`
+	AdditionalContexts map[string]string `json:"additional_contexts"`
+
+	keys []string // every key the build sets
+}
+
+// serviceKeys and buildKeys are the only keys a service and its build may
+// set: what the runner checks below or knows cannot reach the host or pass
+// the egress proxy. Decoding into a struct drops unknown keys silently, so a
+// list of refused keys misses whatever compose adds next; every other key
+// is refused (security_opt, runtime, devices, privileged, ports, ...).
+var (
+	serviceKeys = []string{
+		"build", "cap_drop", "command", "configs", "cpus", "depends_on", "entrypoint", "env_file", "environment",
+		"expose", "healthcheck", "image", "init", "mem_limit", "networks", "pids_limit", "platform", "pull_policy",
+		"read_only", "restart", "secrets", "shm_size", "stdin_open", "stop_grace_period", "stop_signal", "tmpfs",
+		"tty", "ulimits", "user", "volumes", "working_dir",
+	}
+	buildKeys = []string{"additional_contexts", "args", "context", "dockerfile", "dockerfile_inline", "target"}
+)
+
+func (s *composeService) UnmarshalJSON(b []byte) error {
+	type plain composeService
+	s.keys = objectKeys(b)
+	return json.Unmarshal(b, (*plain)(s))
+}
+
+func (c *composeBuild) UnmarshalJSON(b []byte) error {
+	type plain composeBuild
+	c.keys = objectKeys(b)
+	return json.Unmarshal(b, (*plain)(c))
+}
+
+// objectKeys is the keys of the JSON object b, sorted; none when b is no object.
+func objectKeys(b []byte) []string {
+	var m map[string]json.RawMessage
+	_ = json.Unmarshal(b, &m)
+	return slices.Sorted(maps.Keys(m))
 }
 
 // check refuses what would give a run's containers the host or a way out
 // past the egress proxy (decision 2026-11-08-m6-environments point 1, and
-// the follow-ups of CSR-52 on CSR-168): bind mounts and every host path
-// outside the repository, privileged, host namespaces, cap_add, devices,
-// published ports, volumes_from, network modes, other or external networks
-// and volumes, and secrets taken from the environment. It names every
-// problem, so one fix round is enough.
+// the follow-ups of CSR-52 on CSR-168): every service and build key outside
+// serviceKeys and buildKeys, bind mounts and every host path outside the
+// repository, other or external networks, volumes that are external, have a
+// driver or options or a name of their own, an image name for a built
+// service, and secrets taken from the environment. It names every problem,
+// so one fix round is enough.
 func (cfg composeConfig) check(src, agent string) error {
 	var errs []error
 	bad := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
@@ -269,33 +299,18 @@ func (cfg composeConfig) check(src, agent string) error {
 	}
 	for _, n := range slices.Sorted(maps.Keys(cfg.Services)) {
 		s := cfg.Services[n]
-		if s.Privileged {
-			bad("service %s is privileged", n)
+		for _, k := range s.keys {
+			if !slices.Contains(serviceKeys, k) {
+				bad("service %s sets %s, which the runner does not allow", n, k)
+			}
 		}
-		if s.NetworkMode != "" {
-			bad("service %s sets network_mode %s", n, s.NetworkMode)
-		}
-		for net := range s.Networks {
+		for net, opts := range s.Networks {
 			if net != "default" {
 				bad("service %s joins network %s", n, net)
+			} else if opts != nil {
+				// An alias could answer to the proxy's name.
+				bad("service %s sets options on its network", n)
 			}
-		}
-		for field, v := range map[string]string{"pid": s.Pid, "ipc": s.Ipc, "uts": s.Uts, "cgroup": s.Cgroup, "userns_mode": s.UsernsMode} {
-			if v == "host" || strings.HasPrefix(v, "container:") || strings.HasPrefix(v, "service:") {
-				bad("service %s sets %s: %s", n, field, v)
-			}
-		}
-		if len(s.CapAdd) > 0 {
-			bad("service %s adds capabilities", n)
-		}
-		if len(s.Devices) > 0 {
-			bad("service %s maps devices", n)
-		}
-		if len(s.Ports) > 0 {
-			bad("service %s publishes ports", n)
-		}
-		if len(s.VolumesFrom) > 0 {
-			bad("service %s uses volumes_from", n)
 		}
 		for _, v := range s.Volumes {
 			if v.Type != "volume" && v.Type != "tmpfs" {
@@ -308,6 +323,15 @@ func (cfg composeConfig) check(src, agent string) error {
 			}
 		}
 		if s.Build != nil {
+			for _, k := range s.Build.keys {
+				if !slices.Contains(buildKeys, k) {
+					bad("service %s sets build.%s, which the runner does not allow", n, k)
+				}
+			}
+			if s.Image != "" {
+				// compose tags what it builds with image: it could replace the proxy's or the default image.
+				bad("service %s sets both build and image: the runner names a built image", n)
+			}
 			ctxs := []string{s.Build.Context}
 			for _, c := range s.Build.AdditionalContexts {
 				ctxs = append(ctxs, c)
@@ -318,6 +342,14 @@ func (cfg composeConfig) check(src, agent string) error {
 					bad("service %s builds from %s outside the repository", n, c)
 				}
 			}
+			if f := s.Build.Dockerfile; f != "" {
+				if !filepath.IsAbs(f) {
+					f = filepath.Join(s.Build.Context, f)
+				}
+				if !strings.Contains(s.Build.Context, "://") && outside(f) {
+					bad("service %s builds with dockerfile %s outside the repository", n, s.Build.Dockerfile)
+				}
+			}
 		}
 	}
 	for n, nw := range cfg.Networks {
@@ -326,8 +358,17 @@ func (cfg composeConfig) check(src, agent string) error {
 		}
 	}
 	for n, v := range cfg.Volumes {
-		if v.External {
+		for k := range v {
+			// A driver with driver_opts (type none, o bind) is a bind mount of any host path.
+			if k != "name" && k != "external" {
+				bad("volume %s sets %s: only plain volumes are allowed", n, k)
+			}
+		}
+		if v["external"] == true {
 			bad("volume %s is external", n)
+		} else if want := cfg.Name + "_" + n; v["name"] != want {
+			// Another name could be a volume that exists: the runner's clones, another project's data.
+			bad("volume %s is named %v, not %s", n, v["name"], want)
 		}
 	}
 	for kind, m := range map[string]map[string]composeSource{"secret": cfg.Secrets, "config": cfg.Configs} {

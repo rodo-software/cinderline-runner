@@ -34,7 +34,7 @@ type Spec struct {
 	Issue  string   // the issue's ref, in names and labels
 	Dir    string   // the working directory: the issue's clone
 	Mounts []string // docker run flags that mount the clone, the tools and the state
-	// Env is all the container gets besides the database settings: the
+	// Env is all the container gets besides the proxy settings: the
 	// turn's model credential, its scoped token and the client's settings,
 	// as KEY=value.
 	Env     []string

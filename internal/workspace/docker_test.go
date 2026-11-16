@@ -646,8 +646,8 @@ func TestDockerFree(t *testing.T) {
 		t.Fatalf("Free = %d, %v; want %d", got, err, 40*1024)
 	}
 	checkCalls(t, *calls, runsShellCalls("", `df -Pk "$1"`, "/runs"))
-	if _, err := parseDF("nonsense"); err == nil {
-		t.Fatal("parseDF accepted nonsense")
+	if _, err := ParseDF("nonsense"); err == nil {
+		t.Fatal("ParseDF accepted nonsense")
 	}
 }
 

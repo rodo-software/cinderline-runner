@@ -7,9 +7,7 @@ import (
 	"testing"
 )
 
-// The GitLab cases of the app repository's runner/lib.forge.test.mjs at
-// commit ecde51a (decision 2026-11-05-legacy-reference, amendments), run
-// against recorded answers instead of a network.
+// The GitLab forge against recorded answers instead of a network.
 
 // recordedGitLab is recorded, for a GitLab Forge.
 func recordedGitLab(t *testing.T, repository string, replies ...reply) (*GitLab, *[]request) {
@@ -25,7 +23,7 @@ func recordedGitLab(t *testing.T, repository string, replies ...reply) (*GitLab,
 
 const mrs = "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo/merge_requests"
 
-// Ported from "parseRepository reads GitLab URLs with nested groups" and
+// parseRepository reads GitLab URLs with nested groups and
 // the GitLab side of "parseRepository lets the forge argument win over the
 // host": any host is GitLab once the project names it. Picking the forge
 // from the project's forge or the host is the forge choice's, not this file's.
@@ -65,7 +63,7 @@ func TestGitLabDefaultBranch(t *testing.T) {
 	}
 }
 
-// Ported from "openPullRequest opens a GitLab merge request": the merge
+// OpenPullRequest opens a GitLab merge request: the merge
 // request's iid is its number.
 func TestGitLabOpenPullRequest(t *testing.T) {
 	const web = "https://gitlab.com/group/sub/repo/-/merge_requests/5"
@@ -99,8 +97,8 @@ func TestGitLabOpenPullRequest(t *testing.T) {
 	}
 }
 
-// Ported from "openPullRequest finds the open GitLab merge request on a
-// 409": GitLab answers 409 when the source branch has one open, with its
+// OpenPullRequest finds the open GitLab merge request on a
+// 409: GitLab answers 409 when the source branch has one open, with its
 // message as a list.
 func TestGitLabOpenPullRequestFindsEarlier(t *testing.T) {
 	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
@@ -151,8 +149,8 @@ func TestGitLabFindPullRequest(t *testing.T) {
 	wantURLs(t, (*reqs)[:1], "GET "+mrs+"?state=opened&source_branch=cinderline%2FEMB-3")
 }
 
-// Ported from "requestMerge asks GitLab to merge when the pipeline
-// succeeds".
+// RequestMerge asks GitLab to merge when the pipeline
+// succeeds.
 func TestGitLabRequestMerge(t *testing.T) {
 	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{200, `{"iid":5}`})
 
@@ -171,7 +169,7 @@ func TestGitLabRequestMerge(t *testing.T) {
 	}
 }
 
-// Ported from "requestMerge reports GitLab refusing": no retry.
+// RequestMerge reports GitLab refusing: no retry.
 func TestGitLabRequestMergeRefused(t *testing.T) {
 	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{405, `{"message":"405 Method Not Allowed"}`})
 	err := g.RequestMerge(context.Background(), PullRequest{Number: 5})
@@ -183,7 +181,7 @@ func TestGitLabRequestMergeRefused(t *testing.T) {
 	}
 }
 
-// Ported from "pullRequestOutcome on GitLab" and "awaitMerge reads GitLab
+// pullRequestOutcome on GitLab and "awaitMerge reads GitLab
 // merge requests" (the merge wait reads MergeState by branch, decision 0091).
 func TestGitLabMergeState(t *testing.T) {
 	const list = "GET " + mrs + "?source_branch=cinderline%2FEMBER-1&state=all"
@@ -217,7 +215,7 @@ func TestGitLabMergeState(t *testing.T) {
 	}
 }
 
-// Ported from "pullRequestOutcome throws on an error answer" (GitLab).
+// pullRequestOutcome throws on an error answer (GitLab).
 func TestGitLabMergeStateError(t *testing.T) {
 	g, _ := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{401, `{"message":"no"}`})
 	if _, err := g.MergeState(context.Background(), "cinderline/EMBER-1"); err == nil || !strings.Contains(err.Error(), "401") {
