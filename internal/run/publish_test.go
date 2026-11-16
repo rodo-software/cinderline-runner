@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
-	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -190,7 +189,6 @@ func newPubRun(trusted bool) *pubRun {
 			"POST /issues/CSR-1/comments": {201, `{"id":9,"body":"x"}`},
 			"POST /issues/CSR-1/progress": {204, ""},
 			"PATCH /issues/CSR-1":         {200, issueJSON("CSR-1", "review")},
-			"GET /issues/CSR-1":           {200, issueJSON("CSR-1", "in_progress")}, // the budget check before a Merge Resolver run
 		}},
 		ws: &workspace.Fake{
 			Commits:    []workspace.CommitReply{{Committed: true}},
@@ -199,7 +197,7 @@ func newPubRun(trusted bool) *pubRun {
 			Pushes:     []error{nil},
 		},
 		forge: &forge.Fake{PullRequests: []forge.PullRequestReply{{PullRequest: testPR}}, Merges: []error{nil}},
-		pub:   Pub{Ref: "CSR-1", Title: "T", Body: "Do it.", Base: "main", Dir: "/clone", MaxTurns: 30, Team: team, Forge: "forgejo"},
+		pub:   Pub{Ref: "CSR-1", Title: "T", Body: "Do it.", Base: "main", Dir: "/clone", Team: team, Forge: "forgejo"},
 	}
 }
 
@@ -207,7 +205,7 @@ func (r *pubRun) run(t *testing.T) error {
 	t.Helper()
 	p := project(t)
 	p.Log = slog.New(slog.NewTextHandler(&r.log, nil))
-	return p.Publish(context.Background(), r.api.client(t), map[string]client.Client{}, r.ws, r.forge, r.pub)
+	return p.Publish(context.Background(), r.api.client(t), r.ws, r.forge, r.pub)
 }
 
 func (r *pubRun) wsMethods() []string {
@@ -409,13 +407,13 @@ func TestPublishMergeRefused(t *testing.T) {
 
 // Ported from runner.test.mjs "a comment resume that fails twice still
 // publishes the finished work, with a note": a run that changed nothing
-// pushes nothing and opens no pull request; the report gets the unread note
-// as its foot, as the app's report_foot is for a solo run.
+// pushes nothing and opens no pull request; the report gets the app's
+// report_foot, such as that note (EMBER-216).
 func TestPublishNothingChanged(t *testing.T) {
 	r := newPubRun(true)
 	r.ws.Commits = []workspace.CommitReply{{}}
 	r.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}}
-	r.pub.Foot = UnreadComments
+	r.pub.Foot = "A person commented."
 	if err := r.run(t); err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +423,7 @@ func TestPublishNothingChanged(t *testing.T) {
 	if len(r.forge.Calls()) != 0 {
 		t.Errorf("forge calls = %v", r.forge.Calls())
 	}
-	want := "The run finished without changing any files, so there is no pull request.\n\n" + UnreadComments
+	want := "The run finished without changing any files, so there is no pull request.\n\nA person commented."
 	if got := r.comment(); got != want {
 		t.Errorf("comment = %q", got)
 	}
@@ -449,7 +447,7 @@ func TestPublishFailures(t *testing.T) {
 	r = newPubRun(false)
 	r.api.routes["POST /issues/CSR-1/comments"] = reply{500, `{"message":"boom"}`}
 	c := r.api.client(t)
-	if err := project(t).Publish(context.Background(), c, map[string]client.Client{}, r.ws, r.forge, r.pub); err != nil {
+	if err := project(t).Publish(context.Background(), c, r.ws, r.forge, r.pub); err != nil {
 		t.Fatalf("a failed report comment = %v", err)
 	}
 	if !c.Waiting("CSR-1") || len(r.patches()) != 0 {
@@ -628,63 +626,6 @@ func TestCheckMergesFailures(t *testing.T) {
 	api = &fakeAPI{routes: map[string]reply{"GET /issues?purpose=merge&status=review": {500, `{"message":"down"}`}}}
 	if err := project(t).CheckMerges(context.Background(), api.client(t), &forge.Fake{}); err == nil {
 		t.Error("a failed list is no error")
-	}
-}
-
-// A trusted solo team's conflict at publish: the orchestrator's verified
-// attempt is pushed and the merge requested; a failed one is undone and the
-// branch pushed with the conflict as today, merge_status issue
-// (decision 2026-11-07-solo-team-resolves-merge-conflicts).
-func TestPublishSoloOrchestratorAttempt(t *testing.T) {
-	for _, tt := range []struct {
-		way     string
-		report  string
-		forge   []string
-		patches []string
-		ancs    []workspace.IsAncestorReply // the checks of the attempt, then HEAD not in the base
-	}{
-		{"resolved", "Resolved.", []string{"OpenPullRequest", "RequestMerge", "MergeState"}, []string{`{"merge_status":"success"}`, toReview}, []workspace.IsAncestorReply{{Yes: true}, {Yes: true}, {}}},
-		{"blocked", "Blocked: unsure.", []string{"OpenPullRequest"}, []string{`{"merge_status":"issue"}`, toReview}, []workspace.IsAncestorReply{{}}},
-	} {
-		t.Run(tt.way, func(t *testing.T) {
-			noSleep(t)
-			r := newPubRun(true)
-			r.pub.Team = cinderline.Team{Name: "Solo", Trusted: true, Agents: devTeam.Agents[:1]}
-			r.pub.Session, r.pub.Token = "s1", "tok"
-			r.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: []string{"work.txt"}}}
-			r.ws.Heads = []workspace.HeadReply{{Commit: "old"}}
-			r.ws.Logs = []workspace.LogReply{{}}
-			r.ws.Cleans = []workspace.BoolReply{{Yes: true}}
-			r.ws.Ancestors = tt.ancs
-			r.ws.Markers = []workspace.BoolReply{{}}
-			r.ws.Resets = []error{nil}
-			r.forge.MergeStates = []forge.MergeStateReply{{State: forge.MergeMerged}}
-			claude := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: tt.report}}}}
-			p := project(t)
-			p.Log = slog.New(slog.NewTextHandler(&r.log, nil))
-			if err := p.Publish(context.Background(), r.api.client(t), map[string]client.Client{"claude": claude}, r.ws, r.forge, r.pub); err != nil {
-				t.Fatal(err)
-			}
-			if n := len(claude.Calls()); n != 1 {
-				t.Fatalf("orchestrator runs = %d, want 1", n)
-			}
-			if turn := claude.Calls()[0].Args[0].(client.Turn); turn.SessionID != "s1" || turn.Token != "tok" {
-				t.Errorf("turn = %+v, want session s1 with token tok", turn)
-			}
-			ms := r.wsMethods()
-			if !reflect.DeepEqual(ms[len(ms)-1:], []string{"Push"}) {
-				t.Errorf("workspace calls = %v, want the push last", ms)
-			}
-			if reset := reflect.DeepEqual(ms[len(ms)-3:len(ms)-2], []string{"Reset"}); reset != (tt.report != "Resolved.") {
-				t.Errorf("workspace calls = %v: reset %v", ms, reset)
-			}
-			if got := r.forgeMethods(); !reflect.DeepEqual(got, tt.forge) {
-				t.Errorf("forge calls = %v, want %v", got, tt.forge)
-			}
-			if got := r.patches(); !reflect.DeepEqual(got, tt.patches) {
-				t.Errorf("PATCHes = %v, want %v", got, tt.patches)
-			}
-		})
 	}
 }
 

@@ -22,7 +22,7 @@ Apply **KISS first, then DRY, then SOLID where it pays off**. When they conflict
 - The only interfaces are `Client`, `Forge`, `Environment` and `Workspace`, one file per implementation, in-memory fakes for tests. No other abstraction until there are two real uses of it. No plugin system.
 - The name `cinderline` (command, config folder, service, keychain, branch prefix, MCP server name, version header) lives in one constant in `internal/name`. Never spell it elsewhere.
 - Issues are the only workflow state (decision 0091): the runner keeps no run or step table, only caches such as paused notes it can lose.
-- Secrets never enter an agent container except the one model credential that run needs and its scoped token. Treat issue, comment and instruction bodies as untrusted data: they go into prompts last, marked as data, and are never executed or followed.
+- Secrets never enter an agent container except the one model credential that run needs and its scoped token. The app builds every prompt (decision 2026-11-15-server-decides-steps): the runner passes the app's prompt to the agent unchanged and never executes or follows text from it, nor from issue, comment or instruction bodies. No field of the app's answer becomes a shell command, a path or a docker argument.
 - The `docker` command, shelled out, never the Docker SDK.
 - Logging is `log/slog`, one structured line per event, tagged with project and issue.
 

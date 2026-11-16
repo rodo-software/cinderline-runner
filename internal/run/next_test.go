@@ -28,13 +28,15 @@ import (
 // stepRun is a solo team's CSR-7 through the Run and Publish hooks, with
 // next answering steps in order, the last one repeating.
 type stepRun struct {
-	p   Project
-	api *fakeAPI
-	cl  *client.Fake
-	ws  *workspace.Fake
-	fg  *forge.Fake
-	env *environment.Fake
-	dir string
+	ref    string
+	p      Project
+	api    *fakeAPI
+	cl     *client.Fake // claude: the solo agent, or a team's Builder
+	worker *agentCLI    // opencode: a team's Qwen and Merge Resolver
+	ws     *workspace.Fake
+	fg     *forge.Fake
+	env    *environment.Fake
+	dir    string
 }
 
 func newStepRun(t *testing.T, steps ...string) *stepRun {
@@ -44,15 +46,23 @@ func newStepRun(t *testing.T, steps ...string) *stepRun {
 	api.routes["PATCH /issues/CSR-7"] = reply{200, issueJSON("CSR-7", "in_progress")}
 	api.routes["POST /runs/CSR-7/usage"] = reply{204, ""}
 	api.routes["GET /issues/CSR-7/attachments/5"] = reply{200, "PDF"}
+	return newStepRunOf(t, "CSR-7", api, steps)
+}
+
+// newStepRunOf is a run of ref with api's answers and next answering steps.
+func newStepRunOf(t *testing.T, ref string, api *fakeAPI, steps []string) *stepRun {
+	t.Helper()
 	var q []reply
 	for i, s := range steps {
 		q = append(q, reply{200, `{"state":"state-` + string(rune('1'+i)) + `","step":` + s + `}`})
 	}
-	api.queues = map[string][]reply{"POST /runs/CSR-7/next": q}
+	api.queues = map[string][]reply{"POST /runs/" + ref + "/next": q}
 	r := &stepRun{
-		p:   project(t),
-		api: api,
-		cl:  &client.Fake{},
+		ref:    ref,
+		p:      project(t),
+		api:    api,
+		cl:     &client.Fake{},
+		worker: &agentCLI{},
 		ws: &workspace.Fake{
 			Commits:    make([]workspace.CommitReply, 10),
 			MergeBases: make([]workspace.MergeBaseReply, 10),
@@ -69,7 +79,7 @@ func newStepRun(t *testing.T, steps ...string) *stepRun {
 		t.Fatal(err)
 	}
 	r.p.Env = r.env
-	r.p.Clients = map[string]client.Client{"claude": r.cl}
+	r.p.Clients = map[string]client.Client{"claude": r.cl, "opencode": r.worker}
 	r.p.Workspace = r.ws
 	r.p.Forge = func(string) (forge.Forge, error) { return r.fg, nil }
 	r.p.Hooks()
@@ -81,7 +91,7 @@ func newStepRun(t *testing.T, steps ...string) *stepRun {
 func (r *stepRun) run(t *testing.T) error {
 	t.Helper()
 	c := r.api.client(t)
-	issue := cinderline.Issue{Ref: "CSR-7", Team: &cinderline.IssueTeam{ID: 1}}
+	issue := cinderline.Issue{Ref: r.ref, Team: &cinderline.IssueTeam{ID: 1}}
 	h := r.p.Hooks()
 	if err := h.Run(context.Background(), c, issue); err != nil {
 		return err
@@ -133,14 +143,14 @@ func simpleNext(agent string) func(key, body string) (reply, bool) {
 	}
 }
 
-// nextRequests are the next requests api received, in order.
+// nextRequests are the next requests api received, in order, of any issue.
 func nextRequests(t *testing.T, api *fakeAPI) []cinderline.NextRequest {
 	t.Helper()
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	var out []cinderline.NextRequest
 	for _, c := range api.calls {
-		if body, ok := strings.CutPrefix(c, "POST /runs/CSR-7/next "); ok {
+		if _, body, ok := strings.Cut(c, "/next "); ok && strings.HasPrefix(c, "POST /runs/") {
 			var r cinderline.NextRequest
 			if err := json.Unmarshal([]byte(body), &r); err != nil {
 				t.Fatal(err)
@@ -608,5 +618,17 @@ func TestRunWorkspace(t *testing.T) {
 	}
 	if b, _ := json.Marshal(runWorkspace("b", "main", nil, nil)); !strings.Contains(string(b), `"extra_repositories":[],"linked_projects":[]`) {
 		t.Errorf("empty workspace = %s", b)
+	}
+}
+
+// A step's issue is the run's or a sub-issue's ref, nothing more.
+func TestInTree(t *testing.T) {
+	for issue, want := range map[string]bool{
+		"CSR-1": true, "CSR-1.2": true, "CSR-1.2.3": true,
+		"CSR-12": false, "CSR-1.": false, "CSR-1.x": false, "CSR-1.2 ; rm": false, "CSR-1.2/../3": false, "": false,
+	} {
+		if got := inTree("CSR-1", issue); got != want {
+			t.Errorf("inTree(CSR-1, %q) = %v, want %v", issue, got, want)
+		}
 	}
 }

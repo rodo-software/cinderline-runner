@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // A repository that fails to fetch, or has no token, is left out and
-// reported in a progress line; the others reach the prompt (CSR-160).
+// reported in a progress line; the others reach next's facts (CSR-160).
 func TestExtraRepositories(t *testing.T) {
 	api := &fakeAPI{handle: func(key, body string) (reply, bool) {
 		return reply{204, ""}, key == "POST /issues/CSR-1/progress"
@@ -51,9 +52,8 @@ func TestExtraRepositories(t *testing.T) {
 		t.Errorf("progress for lib:\n%s", w)
 	}
 
-	prompt := CodingPrompt(soloTeam, "CSR-1", "T", "Body.", "b", "CSR", "", ok, nil, nil)
-	if !strings.Contains(prompt, "read-only, for reference:\n\n- `/extra/lib`: https://git.example/o/lib\n") ||
-		strings.Index(prompt, "/extra/lib") > strings.Index(prompt, "## Issue") {
-		t.Errorf("prompt:\n%s", prompt)
+	// The app's prompt names those the run fetched, from next's facts.
+	if w := runWorkspace("b", "main", ok, nil); len(w.ExtraRepositories) != 1 || w.ExtraRepositories[0] != (cinderline.WorkspaceRepository{Path: "/extra/lib", URL: "https://git.example/o/lib"}) {
+		t.Errorf("workspace = %+v", w)
 	}
 }

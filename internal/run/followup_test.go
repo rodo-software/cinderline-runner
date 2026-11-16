@@ -19,15 +19,13 @@ import (
 func soloRunAPI() *fakeAPI {
 	issue := `{"ref":"CSR-7","title":"Add hello","body":"Add a file.","status":{"value":"in_progress","label":"x"},"team":{"id":1,"name":"Dev"},"sub_issues":[]}`
 	return &fakeAPI{handle: simpleNext("Coder"), routes: map[string]reply{
-		"GET /project":                       {200, `{"key":"CSR","name":"CSR","repository_url":"` + cfg.Repository + `","forge":"forgejo","base_branch":"main","environment":"default"}`},
-		"GET /teams/1":                       {200, `{"id":1,"name":"Dev","max_minutes":30,"agents":[{"name":"Coder","role":"coder","client":"claude"}]}`},
-		"GET /issues/CSR-7":                  {200, issue},
-		"GET /issues/CSR-7/comments":         comments(),
-		"GET /issues/CSR-7/comments?after=0": comments(),
-		"POST /issues/CSR-7/comments":        {201, `{"id":1,"body":"x","author":{"name":"runner"}}`},
-		"POST /issues/CSR-7/progress":        {204, ""},
-		"POST /runs/CSR-7/agent-token":       {201, `{"token":"scoped","expires_at":"2030-01-01T00:00:00Z"}`},
-		"DELETE /runs/CSR-7/agent-token":     {204, ""},
+		"GET /project":                   {200, `{"key":"CSR","name":"CSR","repository_url":"` + cfg.Repository + `","forge":"forgejo","base_branch":"main","environment":"default"}`},
+		"GET /teams/1":                   {200, `{"id":1,"name":"Dev","max_minutes":30,"agents":[{"name":"Coder","role":"coder","client":"claude"}]}`},
+		"GET /issues/CSR-7":              {200, issue},
+		"POST /issues/CSR-7/comments":    {201, `{"id":1,"body":"x","author":{"name":"runner"}}`},
+		"POST /issues/CSR-7/progress":    {204, ""},
+		"POST /runs/CSR-7/agent-token":   {201, `{"token":"scoped","expires_at":"2030-01-01T00:00:00Z"}`},
+		"DELETE /runs/CSR-7/agent-token": {204, ""},
 	}}
 }
 
@@ -65,8 +63,8 @@ func TestAFollowUpResumesTheKeptSession(t *testing.T) {
 			}}
 			ws := &workspace.Fake{
 				Prepares:     []workspace.PrepareReply{{Dir: clone}, {Dir: clone}},
-				Commits:      []workspace.CommitReply{{}, {}},
-				MergeBases:   []workspace.MergeBaseReply{{}, {}},
+				Commits:      make([]workspace.CommitReply, 4), // the catch-up's and publish's of two runs
+				MergeBases:   make([]workspace.MergeBaseReply, 4),
 				FastForwards: []error{tt.ff},
 			}
 			p.Clients = map[string]client.Client{"claude": cl}
@@ -134,27 +132,25 @@ func TestAFollowUpResumesTheKeptSession(t *testing.T) {
 
 var time1 = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 
-// A team with workers resumes its orchestrator's kept session with the
-// follow-up prompt too.
+// A team with workers offers its orchestrator's kept session too, and
+// resumes it when the step says so.
 func TestAFollowUpResumesTheOrchestrator(t *testing.T) {
-	p := project(t)
-	r := newTeamRun(newTree("in_progress"))
+	r := newTeamStepRun(t, teamStep("CSR-1", "Parent", "Builder", "resume", "orchestrator"), failStep)
 	clone := t.TempDir()
-	if err := p.SavePaused("CSR-1", Paused{Dir: clone, Session: "the-session", Client: "claude", Kept: time1}); err != nil {
+	if err := r.p.SavePaused("CSR-1", Paused{Dir: clone, Session: "the-session", Client: "claude", Kept: time1}); err != nil {
 		t.Fatal(err)
 	}
 	r.ws.FastForwards = []error{nil}
-	r.ws.MergeBases = []workspace.MergeBaseReply{{}}
-	r.claude.Runs = []client.RunReply{ok("the-session", "Answered.")}
-	r.job.Links = "\nLinks.\n"
-	if _, err := r.run(t, context.Background(), p); err != nil {
-		t.Fatalf("Rounds = %v", err)
+	r.cl.Runs = []client.RunReply{ok("the-session", "Answered.")}
+	_ = r.run(t)
+	if s := r.reqs(t)[0].Sessions; len(s) != 1 || s[0] != offered("CSR-1", "Builder", "kept") {
+		t.Errorf("sessions = %+v, want the kept one", s)
 	}
-	ts := turns(&r.claude.Fake)
-	if len(ts) != 1 || ts[0].SessionID != "the-session" || ts[0].Prompt != FollowUpPrompt("CSR-1")+"\nLinks.\n" || ts[0].Dir != clone {
+	ts := turns(r.cl)
+	if len(ts) != 1 || ts[0].SessionID != "the-session" || ts[0].Dir != clone {
 		t.Fatalf("turns = %+v, want the follow-up in the-session", ts)
 	}
-	if n, _ := p.readPaused("CSR-1"); n.Session != "the-session" || !n.Kept.After(time1) {
+	if n, _ := r.p.readPaused("CSR-1"); n.Session != "the-session" || !n.Kept.After(time1) {
 		t.Fatalf("note = %+v, want kept again with a later time", n)
 	}
 }

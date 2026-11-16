@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -105,31 +104,6 @@ func TestAStepsAttachmentThatFailsDoesNotStartTheTurn(t *testing.T) {
 	}
 }
 
-// A sub-issue's files come after its parent's, which keep their names.
-func TestASubIssueGetsItsParentsAttachmentsToo(t *testing.T) {
-	p := project(t)
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /issues/CSR-1":                 {200, `{"ref":"CSR-1","title":"P","status":{"value":"in_progress","label":"x"},"attachments":[{"id":1,"name":"a.txt","size":1}]}`},
-		"GET /issues/CSR-1/attachments/1":   {200, "p"},
-		"GET /issues/CSR-1.1/attachments/2": {200, "s"},
-	}}
-	sub := cinderline.IssueWithComments{Issue: cinderline.Issue{Ref: "CSR-1.1", Parent: &cinderline.IssueSummary{Ref: "CSR-1"},
-		Attachments: []cinderline.Attachment{{ID: 2, Name: "a.txt", Size: 1}}}}
-	files, err := p.attachments(context.Background(), api.client(t), sub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []Attached{{"a.txt", 1}, {"2-a.txt", 1}}; !slices.Equal(files, want) {
-		t.Errorf("files = %v, want %v", files, want)
-	}
-	if got, _ := os.ReadFile(filepath.Join(attachmentsDir(p.State, cfg), "2-a.txt")); string(got) != "s" {
-		t.Errorf("2-a.txt = %q", got)
-	}
-	if s := WorkerPrompt("Code.", "CSR-1.1", "CSR-1", "Part", "", "b", "", false, files); !strings.HasSuffix(s, "- `/attachments/2-a.txt` (1 bytes)\n") {
-		t.Errorf("WorkerPrompt does not end with the files:\n%s", s)
-	}
-}
-
 func TestFileName(t *testing.T) {
 	for in, want := range map[string]string{
 		"report.pdf": "report.pdf",
@@ -141,14 +115,6 @@ func TestFileName(t *testing.T) {
 	} {
 		if got := fileName(cinderline.Attachment{ID: 9, Name: in}); got != want {
 			t.Errorf("fileName(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestByteSize(t *testing.T) {
-	for n, want := range map[int64]string{0: "0 bytes", 1023: "1023 bytes", 1024: "1 KB", 1536: "2 KB", 1 << 20: "1.0 MB", 10_400_000: "9.9 MB"} {
-		if got := byteSize(n); got != want {
-			t.Errorf("byteSize(%d) = %q, want %q", n, got, want)
 		}
 	}
 }

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
-	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
@@ -68,15 +67,10 @@ type Pub struct {
 	Body       string // the issue's text, untrusted; the pull request's text
 	Base       string
 	Dir        string
-	MaxTurns   int // the Merge Resolver's
 	Team       cinderline.Team
 	Forge      string // the project's forge, as GET project names it, for the report
-	Foot       string // below the report, such as UnreadComments; "": none
-	Verdict    string // above the report, such as the check verdict (CSR-80); "": none
-	// Session and Token are the solo orchestrator's session it just worked in
-	// and its scoped Cinderline token, for the merge attempt before the push
-	// (decision 2026-11-07-solo-team-resolves-merge-conflicts); never logged.
-	Session, Token string
+	Foot       string // below the report, the app's report_foot; "": none
+	Verdict    string // above the report, the app's report_head, such as the check verdict; "": none
 }
 
 // Published is what a publish opened, for FinishReport.
@@ -97,15 +91,17 @@ func pullRequestBody(ref, body string) string {
 func pullRequestTitle(ref, title string) string { return redact.String(ref + ": " + title) }
 
 // Publish ends a finished run, as legacy publish() and runIssue(): commit
-// what was left, merge the base in with UpdateBranch, push cinderline/<REF>
+// what was left, merge the base in, push cinderline/<REF>
 // (never the base), open or find the pull request and, for a trusted team
 // without conflicts, request the merge and wait for it every 15 seconds for
 // at most 15 minutes, holding the project's slot. A trusted issue's
 // merge_status is set. Then the report is commented and the issue moved to
-// Review. A conflict left is pushed as it is, for a person to resolve.
+// Review. A conflict left is pushed as it is, for a person to resolve: the
+// publish step's resolve_conflicts had it reported to next before (decision
+// 2026-11-15-server-decides-steps point 7).
 // Errors are the run's: the scheduler comments them and moves the issue to
 // Blocked.
-func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, fg forge.Forge, pub Pub) error {
+func (p Project) Publish(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, fg forge.Forge, pub Pub) error {
 	log := p.Log.With("project", p.Config.Key, "issue", pub.Ref)
 	// Built here, never passed in, so the push can never target the base.
 	branch := name.Name + "/" + pub.Ref
@@ -120,14 +116,11 @@ func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[
 	for attempt, wait := 1, publishBackoff; ; attempt, wait = attempt+1, wait*2 {
 		var nothing bool
 		var err error
-		if conflicts, nothing, pr, err = p.attempt(ctx, c, clients, ws, fg, pub, branch, title); err == nil {
+		if conflicts, nothing, pr, err = p.attempt(ctx, c, ws, fg, pub, branch, title); err == nil {
 			if !nothing {
 				published = &Published{URL: pr.URL, Base: pub.Base, Conflicts: conflicts}
 			}
 			break
-		}
-		if errors.Is(err, errHalted) {
-			return nil // checkBudget pushed the work and blocked the issue
 		}
 		if ctx.Err() != nil {
 			return err
@@ -175,14 +168,12 @@ func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[
 	return nil
 }
 
-// attempt does one attempt of the publish loop: UpdateBranch, IsAncestor,
+// attempt does one attempt of the publish loop: the base merge, IsAncestor,
 // push and OpenPullRequest. It returns the conflicts, whether nothing was
 // pushed (HEAD already in the base), the pull request, and any error.
-func (p Project) attempt(ctx context.Context, c *cinderline.Client, clients map[string]client.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (conflicts []string, nothing bool, pr forge.PullRequest, err error) {
+func (p Project) attempt(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, fg forge.Forge, pub Pub, branch, title string) (conflicts []string, nothing bool, pr forge.PullRequest, err error) {
 	// The branch protection blocks outdated pull requests (decision 0121).
-	conflicts, err = p.UpdateBranch(ctx, c, clients, ws, Upkeep{
-		Ref: pub.Ref, Branch: branch, Base: pub.Base, Dir: pub.Dir, MaxTurns: pub.MaxTurns, Team: pub.Team, Session: pub.Session, Token: pub.Token,
-	})
+	conflicts, err = ws.MergeBase(ctx, pub.Dir, pub.Base, leadAuthor(pub.Team))
 	if err != nil {
 		return nil, false, forge.PullRequest{}, err
 	}

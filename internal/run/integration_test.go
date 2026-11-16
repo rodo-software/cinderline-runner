@@ -155,22 +155,23 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	}
 	cl := &client.Claude{Project: project, Env: env, Credential: itCredential, MCPURL: "http://host.docker.internal/mcp", Tools: mount}
 
-	out, err := p.Attempts(ctx, c, cl, Job{Ref: ref, Client: "claude", Turn: client.Turn{
-		Dir: dir, Prompt: CodingPrompt(team, ref, "Add hello.txt", "Add a file.", branch, project, "", nil, nil, nil), MaxTurns: 10, MaxMinutes: team.MaxMinutes,
+	// The prompt is the app's (EMBER-214); the scripted agent ignores it.
+	out, err := p.turn(ctx, c, cl, ref, client.Turn{
+		Dir: dir, Prompt: "Add hello.txt to " + ref + ".", MaxTurns: 10, MaxMinutes: team.MaxMinutes,
 		Author: gitAuthor(team, "Coder"),
-	}})
+	})
 	if err != nil {
-		t.Fatalf("Attempts: %v", err)
+		t.Fatalf("turn: %v", err)
 	}
-	if out.Report != "Added hello.txt." || out.Paused {
-		t.Fatalf("Attempts = %+v, want the scripted agent's report", out)
+	if out.Report != "Added hello.txt." {
+		t.Fatalf("turn = %+v, want the scripted agent's report", out)
 	}
 	if got := env.specs[0].Cmd[0]; got != tools.Path+"/bin/claude" {
 		t.Errorf("the Claude Client ran %q, want the tools volume's claude", got)
 	}
 
-	if err := p.Publish(ctx, c, map[string]client.Client{"claude": cl}, ws, fg, Pub{
-		Ref: ref, Title: "Add hello.txt", Body: "Add a file.", Base: base, Dir: dir, MaxTurns: 10, Team: team, Forge: "forgejo",
+	if err := p.Publish(ctx, c, ws, fg, Pub{
+		Ref: ref, Title: "Add hello.txt", Body: "Add a file.", Base: base, Dir: dir, Team: team, Forge: "forgejo",
 	}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}

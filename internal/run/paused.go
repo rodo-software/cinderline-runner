@@ -38,20 +38,6 @@ const (
 	prunedDisk = "free disk space was below min_free_disk"
 )
 
-// ResumePrompt is what a paused session gets when it continues (decisions
-// 0116, 2026-11-03-reply-person), the text of legacy lib.mjs resumePrompt.
-// It also ends a wait, by wait_for or blocked (decision
-// 2026-11-14-waiting-issues), so it names both.
-func ResumePrompt(ref string) string {
-	return "A person has responded to your question on " + ref + ", or what it waited for is done. Read the latest comments with list_comments on " + ref + ". If the person's answer also asks you something, reply with reply_person on " + ref + " first, then continue the task under the same rules."
-}
-
-// FollowUpPrompt is what a finished run's kept session gets when its issue
-// is back in To do (CSR-145).
-func FollowUpPrompt(ref string) string {
-	return "Your earlier run on " + ref + " finished, and a person has moved " + ref + " back to To do. Read the comments since your last turn with list_comments on " + ref + ": they hold a follow-up question or change request. This worktree is up to date with the remote branch, which a person may have changed. If a person asks you something, reply with reply_person on " + ref + " first, then continue the task under the same rules."
-}
-
 func (p Project) noteFile(ref string) string {
 	return filepath.Join(PausedDir(p.State, p.Config), ref+".json")
 }

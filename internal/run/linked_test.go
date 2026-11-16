@@ -48,8 +48,8 @@ func linkedRun(t *testing.T, projectJSON string, runs int, fail ...string) (*Pro
 	for range runs {
 		cl.Runs = append(cl.Runs, client.RunReply{Result: client.Result{SessionID: "s1", Report: "Done."}})
 		ws.Prepares = append(ws.Prepares, workspace.PrepareReply{Dir: t.TempDir()})
-		ws.Commits = append(ws.Commits, workspace.CommitReply{})
-		ws.MergeBases = append(ws.MergeBases, workspace.MergeBaseReply{})
+		ws.Commits = append(ws.Commits, workspace.CommitReply{}, workspace.CommitReply{}) // the catch-up's and publish's
+		ws.MergeBases = append(ws.MergeBases, workspace.MergeBaseReply{}, workspace.MergeBaseReply{})
 		ws.FastForwards = append(ws.FastForwards, nil)
 	}
 	p.Clients = map[string]client.Client{"claude": cl}

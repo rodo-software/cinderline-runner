@@ -82,6 +82,33 @@ type runState struct {
 	// usage is the usage entries of the running run, by its top-level
 	// issue, until reportUsage sends them at the run's end.
 	usage map[string][]cinderline.UsageEntry
+	// asked is the conflict of each Review issue's branch last reported to
+	// next, by ref: a cache ReviewBranches may lose.
+	asked map[string]string
+}
+
+// askedAbout is the conflict last reported to next for ref; "": none. A nil
+// runState remembers nothing.
+func (r *runState) askedAbout(ref string) string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.asked[ref]
+}
+
+// setAsked records the conflict reported to next for ref.
+func (r *runState) setAsked(ref, conflict string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.asked == nil {
+		r.asked = map[string]string{}
+	}
+	r.asked[ref] = conflict
 }
 
 // noPullRequestFor is how long CheckMerges leaves an issue it found without
@@ -122,13 +149,9 @@ type runHandoff struct {
 	Ref, Title, Body string
 	Dir, Base        string
 	Team             cinderline.Team
-	MaxTurns         int
 	Forge            string
-	Foot             string // below the finish report: UnreadComments, or the app's report_foot
+	Foot             string // below the finish report: the app's report_foot
 	Verdict          string // above it: the app's report_head
-	// Solo team fields: the orchestrator's session and its scoped token,
-	// for the merge attempt before the push (decision 2026-11-07-solo-team-resolves-merge-conflicts).
-	Session, Token string
 }
 
 // NewProject builds a project's dependencies.
@@ -268,7 +291,6 @@ func notStarted(err error) error { return fmt.Errorf("%w: %w", scheduler.ErrNotS
 
 // hookRun is the Run hook that the scheduler calls.
 func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinderline.Issue) error {
-	log := p.Log.With("project", p.Config.Key, "issue", issue.Ref)
 	ref := issue.Ref
 	// The run ends here unless Publish takes over: one usage report per run.
 	handed := false
@@ -328,8 +350,6 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 		maxTurns = 50 // decision 2026-11-07-team-max-turns
 	}
 
-	title := full.Title
-	body := deref(full.Body)
 	// Fetched on every Run, so a resume and a follow-up read fresh code too (CSR-161).
 	links := p.linkedProjects(ctx, c, ref, proj.LinkedProjects)
 	check := deref(proj.CheckCommand)
@@ -337,44 +357,17 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 		check = "" // a generic run changes no files
 	}
 
-	if len(team.Agents) > 1 {
-		// Team with workers.
-		files, err := p.attachments(ctx, c, full)
-		if err != nil {
-			p.progress(ctx, c, ref, "The issue's attachments could not be downloaded: "+err.Error())
-			return notStarted(err)
-		}
-		// The orchestrator's own session in a team is not checked, only its sub-issues.
-		prompt := CodingPrompt(team, ref, title, body, branch, p.Config.Key, "", p.extraRepositories(ctx, c, ref), links, files)
-		out, err := p.Rounds(ctx, c, p.Clients, p.Workspace, TeamJob{
-			Ref: ref, Branch: branch, Base: base, MaxTurns: maxTurns, Team: team, Prompt: prompt, Links: LinkedSection(links), Check: check,
-		})
-		if err != nil {
-			return err
-		}
-		if out.Paused {
-			return nil // Publish must skip it.
-		}
-		h := runHandoff{Ref: ref, Title: title, Body: body, Dir: out.Dir, Base: base, Team: team, MaxTurns: maxTurns, Forge: proj.Forge}
-		if out.Unread {
-			h.Foot = UnreadComments
-		}
-		p.setHandoff(h)
-		handed = true
-		return nil
-	}
-
-	// Solo team (one agent): the app decides each step (decision 2026-11-15-server-decides-steps).
-	agent := team.Agents[0]
-	if p.Clients[agent.Client] == nil {
-		return notStarted(fmt.Errorf("agent %s runs on %s, which this runner does not run", agent.Name, agent.Client))
+	// Solo, generic and team runs alike: the app decides each step (decision 2026-11-15-server-decides-steps).
+	lead := team.Agents[0]
+	if p.Clients[lead.Client] == nil {
+		return notStarted(fmt.Errorf("agent %s runs on %s, which this runner does not run", lead.Name, lead.Client))
 	}
 	var extras []config.ExtraRepository
 	if !generic {
 		extras = p.extraRepositories(ctx, c, ref) // legacy's generic prompts name none
 	}
-	j := soloJob{
-		Ref: ref, Title: title, Body: body, Branch: branch, Base: base, Team: team, Agent: agent,
+	j := runJob{
+		Ref: ref, Title: full.Title, Body: deref(full.Body), Branch: branch, Base: base, Team: team,
 		MaxTurns: maxTurns, Generic: generic, Check: check, Forge: proj.Forge,
 		Workspace: runWorkspace(branch, base, extras, links),
 	}
@@ -382,7 +375,12 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	if err := p.resetAttachments(); err != nil {
 		return notStarted(err)
 	}
-	note, resumed := p.TakePaused(ctx, c, p.Workspace, ref, branch, agent.Client, generic)
+	take := p.TakePaused
+	if len(team.Agents) > 1 {
+		// A team's note stays, so a restart during its sub-issues resumes the orchestrator (0122).
+		take = p.resumable
+	}
+	note, resumed := take(ctx, c, p.Workspace, ref, branch, lead.Client, generic)
 	if resumed {
 		j.Dir, j.Session, j.Origin = note.Dir, note.Session, "paused"
 		if !note.Kept.IsZero() {
@@ -391,32 +389,11 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	} else if j.Dir, err = p.Workspace.Prepare(ctx, branch, base); err != nil {
 		return notStarted(err)
 	}
-
 	// A generic run never publishes, so its branch needs no base (legacy attempts()).
+	// Also on a clone fresh from the base, where the merge changes nothing,
+	// as Prepare does not say whether it continued the remote branch.
 	if !generic {
-		if j.Session != "" {
-			// For the solo agent's merge attempt in its session (decision 2026-11-07-solo-team-resolves-merge-conflicts).
-			tok, err := c.CreateAgentToken(ctx, ref, cinderline.KindOrchestrator, agent.Name)
-			if err != nil {
-				return notStarted(err)
-			}
-			j.Token = tok.Token
-		}
-		if err := p.CatchUp(ctx, c, p.Clients, p.Workspace, Upkeep{
-			Ref: ref, Branch: branch, Base: base, Dir: j.Dir, MaxTurns: maxTurns, Team: team,
-			Session: j.Session, Token: j.Token,
-		}, title); err != nil {
-			// A budget stop or halt before the first step: the note TakePaused took is kept.
-			if err := p.SavePaused(ref, Paused{Dir: j.Dir, Session: j.Session, Client: agent.Client}); err != nil {
-				log.Warn("paused note not written", "err", err)
-			}
-			if j.Token != "" {
-				if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
-					log.Warn("agent tokens not deleted", "err", derr)
-				}
-			}
-			return nil
-		}
+		j.Conflict = p.CatchUp(ctx, p.Workspace, ref, j.Dir, base, j.Title, team)
 	}
 	handed, err = p.steps(ctx, c, j)
 	return err
@@ -519,6 +496,21 @@ func (p *Project) linkedProjects(ctx context.Context, c *cinderline.Client, ref 
 	return links
 }
 
+// Linked is a project this project's agents may reach (decision
+// 2026-11-11-project-links), with the folders of its repositories this run
+// fetched under workspace.LinkedPath, as KEY/name.
+type Linked struct {
+	Key, Name string
+	Paths     []string
+}
+
+// Started is the first progress line of a claimed issue, as legacy
+// runner.mjs reports after the claim. The Run hook calls it right after the
+// claim.
+func (p Project) Started(ctx context.Context, c *cinderline.Client, ref string, team cinderline.Team) {
+	p.progress(ctx, c, ref, "Started "+team.Name+" / "+team.Agents[0].Name)
+}
+
 func (p *Project) setHandoff(h runHandoff) {
 	p.run.mu.Lock()
 	defer p.run.mu.Unlock()
@@ -548,20 +540,9 @@ func (p *Project) hookPublish(ctx context.Context, c *cinderline.Client, issue c
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if ctx.Err() != nil {
-			return
-		}
-		if h.Token != "" {
-			if derr := c.DeleteAgentTokens(ctx, issue.Ref); derr != nil {
-				p.Log.Warn("agent tokens not deleted", "err", derr)
-			}
-		}
-	}()
-	return p.Publish(ctx, c, p.Clients, p.Workspace, fg, Pub{
+	return p.Publish(ctx, c, p.Workspace, fg, Pub{
 		Ref: h.Ref, Title: h.Title, Body: h.Body, Base: h.Base,
-		Dir: h.Dir, MaxTurns: h.MaxTurns, Team: h.Team, Forge: h.Forge, Foot: h.Foot, Verdict: h.Verdict,
-		Session: h.Session, Token: h.Token,
+		Dir: h.Dir, Team: h.Team, Forge: h.Forge, Foot: h.Foot, Verdict: h.Verdict,
 	})
 }
 
@@ -571,7 +552,6 @@ func (p *Project) hookReviewBranches(ctx context.Context, c *cinderline.Client) 
 	if err != nil {
 		return err
 	}
-	p.run.setIdle(proj) // its Merge Resolver turns
 	fg, err := p.Forge(proj.Forge)
 	if err != nil {
 		return err

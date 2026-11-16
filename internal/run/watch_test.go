@@ -36,13 +36,13 @@ func fastWatch(t *testing.T) {
 	t.Cleanup(func() { watchEvery = old })
 }
 
-func stopWorkspace() *workspace.Fake {
-	return &workspace.Fake{
-		Commits: []workspace.CommitReply{{Committed: true}},
-		Heads:   []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}},
-		Pushes:  []error{nil},
-	}
+// working is Cinderline while the agent works: the issue stays In progress.
+func working() *fakeAPI {
+	return &fakeAPI{routes: map[string]reply{"GET /issues/CSR-7": {200, issueJSON("CSR-7", "in_progress")}}}
 }
+
+// stopStep is the app's answer after a stopped turn.
+const stopStep = `{"kind":"pause","reason":"stopped","block":false,"comment":null}`
 
 func wsMethods(ws *workspace.Fake) []string {
 	var out []string
@@ -57,24 +57,17 @@ func wsMethods(ws *workspace.Fake) []string {
 // names the last activity, and the paused note resumes the session once a
 // person moves it to To do (CSR-159).
 func TestAnIdleRunIsPushedAndBlocked(t *testing.T) {
-	p := project(t)
-	api := working()
-	api.routes["POST /issues/CSR-7/comments"] = reply{201, `{"id":9}`}
-	api.routes["PATCH /issues/CSR-7"] = reply{200, issueJSON("CSR-7", "blocked")}
-	ws := stopWorkspace()
-	j := job
-	j.Workspace = ws
+	r := newStepRun(t, runStep("new", "orchestrator"), stopStep)
+	r.ws.Heads = []workspace.HeadReply{{Commit: "0123456789abcdef0123456789abcdef01234567"}}
 	idle := fmt.Errorf("%w: no output for 10m0s; the last line was: sleep 3600", environment.ErrIdle)
-	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1"}, Err: idle}}}
-
-	out, err := p.Attempts(context.Background(), api.client(t), cl, j)
-	if err != nil || !out.Paused {
-		t.Fatalf("Attempts = %+v, %v; want paused", out, err)
+	r.cl.Runs = []client.RunReply{{Result: client.Result{SessionID: "s1"}, Err: idle}}
+	if err := r.run(t); err != nil {
+		t.Fatal(err)
 	}
-	if got := strings.Join(wsMethods(ws), ","); got != "Commit,Head,Push" {
+	if got := strings.Join(r.wsMethods(), ","); !strings.HasSuffix(got, "Commit,Head,Push") {
 		t.Errorf("workspace calls = %s, want the work committed and pushed", got)
 	}
-	writes := strings.Join(api.writes(), "\n")
+	writes := strings.Join(r.api.writes(), "\n")
 	if !strings.Contains(writes, `PATCH /issues/CSR-7 {"status":"blocked","expected_status":"in_progress"}`) {
 		t.Errorf("writes = %s, want a move to Blocked", writes)
 	}
@@ -83,7 +76,7 @@ func TestAnIdleRunIsPushedAndBlocked(t *testing.T) {
 			t.Errorf("the note lacks %q:\n%s", want, writes)
 		}
 	}
-	if n, ok := p.readPaused("CSR-7"); !ok || n.Session != "s1" {
+	if n, ok := r.p.readPaused("CSR-7"); !ok || n.Session != "s1" {
 		t.Errorf("paused note = %+v, %v; want session s1", n, ok)
 	}
 }
@@ -95,21 +88,16 @@ func TestAStatusChangeStopsTheRun(t *testing.T) {
 	fastWatch(t)
 	for _, status := range []string{"blocked", "cancelled", "backlog"} {
 		t.Run(status, func(t *testing.T) {
-			p := project(t)
-			api := working()
-			api.routes["GET /issues/CSR-7"] = reply{200, issueJSON("CSR-7", status)}
-			api.routes["POST /issues/CSR-7/comments"] = reply{201, `{"id":9}`}
-			ws := stopWorkspace()
-			j := job
-			j.Workspace = ws
-			out, err := p.Attempts(context.Background(), api.client(t), &hang{}, j)
-			if err != nil || !out.Paused {
-				t.Fatalf("Attempts = %+v, %v; want paused", out, err)
+			r := newStepRun(t, runStep("new", "orchestrator"), stopStep)
+			r.api.routes["GET /issues/CSR-7"] = reply{200, issueJSON("CSR-7", status)}
+			r.p.Clients["claude"] = &hang{}
+			if err := r.run(t); err != nil {
+				t.Fatal(err)
 			}
-			if got := strings.Join(wsMethods(ws), ","); got != "Commit,Head,Push" {
+			if got := strings.Join(r.wsMethods(), ","); !strings.HasSuffix(got, "Commit,Head,Push") {
 				t.Errorf("workspace calls = %s", got)
 			}
-			writes := strings.Join(api.writes(), "\n")
+			writes := strings.Join(r.api.writes(), "\n")
 			if strings.Contains(writes, "PATCH") || !strings.Contains(writes, "Review this manually") || !strings.Contains(writes, "moved to x") {
 				t.Errorf("writes = %s, want only the note naming the status", writes)
 			}
@@ -144,9 +132,10 @@ func TestTheAgentsOwnQuestionGetsAGrace(t *testing.T) {
 // A run that ends by itself is not touched by the watch.
 func TestAFinishedRunIsNotStopped(t *testing.T) {
 	fastWatch(t)
-	res, cl, err := attempt(t, client.RunReply{Result: client.Result{SessionID: "s1", Report: "done"}})
-	if err != nil || res.Paused || len(cl.Calls()) != 1 {
-		t.Fatalf("Attempts = %+v, %v", res, err)
+	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: "done"}}}}
+	res, err := project(t).turn(context.Background(), working().client(t), cl, "CSR-7", client.Turn{Dir: "/clone"})
+	if err != nil || res.Report != "done" || len(cl.Calls()) != 1 {
+		t.Fatalf("turn = %+v, %v", res, err)
 	}
 }
 
