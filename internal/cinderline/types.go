@@ -296,3 +296,102 @@ type AgentToken struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
+
+// NextRequest is what the runner just did and the facts only it knows, for
+// Next (decision 2026-11-15-server-decides-steps).
+type NextRequest struct {
+	Context   string             `json:"context"` // "run" or "review"
+	State     *string            `json:"state"`   // the last answer's, unchanged; nil on the first call
+	Last      *LastStep          `json:"last"`    // nil on the first call
+	Sessions  []ResumableSession `json:"sessions"`
+	Workspace RunWorkspace       `json:"workspace"`
+}
+
+// ResumableSession is a client session the runner can resume now. Origin is
+// "paused", "kept" or "turn".
+type ResumableSession struct {
+	Issue  string `json:"issue"`
+	Agent  string `json:"agent"`
+	Origin string `json:"origin"`
+}
+
+// RunWorkspace is the run's clone and mounts, for the app's prompts.
+type RunWorkspace struct {
+	Branch            string                `json:"branch"`
+	Base              string                `json:"base"`
+	ExtraRepositories []WorkspaceRepository `json:"extra_repositories"`
+	LinkedProjects    []WorkspaceLink       `json:"linked_projects"`
+}
+
+// WorkspaceRepository is an extra repository the run fetched; URL has no user info.
+type WorkspaceRepository struct {
+	Path string `json:"path"`
+	URL  string `json:"url"`
+}
+
+// WorkspaceLink is a linked project with the folders under /linked the run fetched.
+type WorkspaceLink struct {
+	Key   string   `json:"key"`
+	Paths []string `json:"paths"`
+}
+
+// LastStep is the step the runner just did and how it ended. Report, Tail,
+// Conflicts and Commits are untrusted.
+type LastStep struct {
+	ID        string      `json:"id"`
+	Step      string      `json:"step"` // run, resolve, check or merge
+	Issue     string      `json:"issue"`
+	Agent     *string     `json:"agent"`
+	Outcome   string      `json:"outcome"`
+	Error     *string     `json:"error"`
+	Report    *string     `json:"report"`
+	Tail      *string     `json:"tail"`
+	Usage     *UsageEntry `json:"usage"`
+	Conflicts []string    `json:"conflicts"`
+	Commits   *string     `json:"commits"`
+}
+
+// NextResponse is the next step, and the state to send back with the next call.
+type NextResponse struct {
+	State string `json:"state"`
+	Step  Step   `json:"step"`
+}
+
+// Step is one step of the closed set in nextStep, flat: Kind says which
+// fields it has. Nothing in it is ever run, or used as a path or argument,
+// except Prompt as the agent's prompt and an attachment's Name once it is a
+// safe file name.
+type Step struct {
+	Kind string `json:"kind"`
+	// run and resolve
+	Agent    string  `json:"agent"`
+	Session  string  `json:"session"` // new or resume
+	Token    string  `json:"token"`   // orchestrator, reader or none
+	Prompt   string  `json:"prompt"`
+	Progress *string `json:"progress"` // also check's
+	// run and check
+	Issue *StepIssue `json:"issue"`
+	// run: nil leaves the attachments folder as it is
+	Attachments []StepAttachment `json:"attachments"`
+	// publish
+	ResolveConflicts bool    `json:"resolve_conflicts"`
+	ReportHead       *string `json:"report_head"`
+	ReportFoot       *string `json:"report_foot"`
+	// finish, pause and fail
+	Comment *string `json:"comment"`
+	Reason  string  `json:"reason"` // pause and fail, for the log
+	Block   bool    `json:"block"`  // pause
+}
+
+// StepIssue is the issue or sub-issue of a step.
+type StepIssue struct {
+	Ref   string `json:"ref"`
+	Title string `json:"title"`
+}
+
+// StepAttachment is a file a run step's agent gets under /attachments.
+type StepAttachment struct {
+	Issue string `json:"issue"`
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+}

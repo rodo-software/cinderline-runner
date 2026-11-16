@@ -12,24 +12,34 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/client"
 )
 
-// attachedIssue is CSR-7 with three files: two share a name, one tries to
-// leave the folder.
-const attachedIssue = `{"ref":"CSR-7","title":"Add hello","body":"Add a file.","status":{"value":"in_progress","label":"x"},"team":{"id":1,"name":"Dev"},"sub_issues":[],
-	"attachments":[{"id":1,"name":"spec.pdf","size":2048},{"id":2,"name":"SPEC.pdf","size":10},{"id":3,"name":"../../etc/passwd","size":5}]}`
+// attachedRun is a solo run of CSR-7 whose first step gives the agent files.
+func attachedRun(t *testing.T, files string) *stepRun {
+	t.Helper()
+	r := newStepRun(t,
+		`{"kind":"run","agent":"Coder","session":"new","token":"none","prompt":"Do CSR-7.","progress":null,"issue":{"ref":"CSR-7","title":"Add hello"},"attachments":`+files+`}`,
+		`{"kind":"fail","reason":"attempts_failed","comment":"Stopped."}`,
+	)
+	r.cl.Runs = []client.RunReply{{Result: client.Result{SessionID: "s1"}}}
+	return r
+}
 
-// A run downloads its issue's files into the attachments folder before the
-// first turn, each under a safe, unique name, and the prompt lists them
-// (CSR-173). Prune empties the folder for the next run.
-func TestARunGetsItsIssuesAttachments(t *testing.T) {
-	p, cl, api, _ := linkedRun(t, appLink, 1)
-	api.routes["GET /issues/CSR-7"] = reply{200, attachedIssue}
-	for id, body := range map[string]string{"1": "one", "2": "two", "3": "three"} {
-		api.routes["GET /issues/CSR-7/attachments/"+id] = reply{200, body}
+// A run step downloads the files it names into the emptied attachments
+// folder before its turn (CSR-173, decision 2026-11-15-server-decides-steps
+// point 4). Prune empties the folder for the next run.
+func TestARunGetsItsStepsAttachments(t *testing.T) {
+	r := attachedRun(t, `[{"issue":"CSR-7","id":5,"name":"spec.pdf"},{"issue":"CSR-7","id":6,"name":"6-SPEC.pdf"}]`)
+	r.api.routes["GET /issues/CSR-7/attachments/6"] = reply{200, "two"}
+	dir := attachmentsDir(r.p.State, cfg)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	runCSR7(t, p, api)
-
-	dir := attachmentsDir(p.State, cfg)
-	want := map[string]string{"spec.pdf": "one", "2-SPEC.pdf": "two", ".._.._etc_passwd": "three"}
+	if err := os.WriteFile(filepath.Join(dir, "old.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(t); err == nil || err.Error() != "Stopped." {
+		t.Fatalf("run = %v, want the fail step's error", err)
+	}
+	want := map[string]string{"spec.pdf": "PDF", "6-SPEC.pdf": "two"}
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != len(want) {
 		t.Errorf("folder holds %d files, want %d", len(entries), len(want))
@@ -39,14 +49,7 @@ func TestARunGetsItsIssuesAttachments(t *testing.T) {
 			t.Errorf("%s = %q, %v; want %q", name, got, err, body)
 		}
 	}
-	prompt := cl.Calls()[0].Args[0].(client.Turn).Prompt
-	for _, line := range []string{"- `/attachments/spec.pdf` (2 KB)", "- `/attachments/2-SPEC.pdf` (10 bytes)", "- `/attachments/.._.._etc_passwd` (5 bytes)"} {
-		if !strings.HasSuffix(prompt, "\n") || !strings.Contains(prompt[strings.Index(prompt, "## Issue CSR-7"):], line) {
-			t.Errorf("prompt lacks %q after the issue text:\n%s", line, prompt)
-		}
-	}
-
-	if err := p.Prune(context.Background(), api.client(t)); err != nil {
+	if err := r.p.Prune(context.Background(), r.api.client(t)); err != nil {
 		t.Fatal(err)
 	}
 	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
@@ -54,41 +57,51 @@ func TestARunGetsItsIssuesAttachments(t *testing.T) {
 	}
 }
 
-// An issue without attachments (or from an app before EMBER-208) gets no
-// section and an empty folder: nothing of the last run is left.
+// A run starts with an empty folder: nothing of another issue's run is left
+// for a step that leaves the folder as it is (attachments null).
 func TestARunWithoutAttachments(t *testing.T) {
-	p, cl, api, _ := linkedRun(t, appLink, 1)
-	dir := attachmentsDir(p.State, cfg)
+	r := attachedRun(t, `null`)
+	dir := attachmentsDir(r.p.State, cfg)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "old.txt"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runCSR7(t, p, api)
+	_ = r.run(t)
 	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
 		t.Errorf("folder holds %d files, %v", len(entries), err)
 	}
-	if prompt := cl.Calls()[0].Args[0].(client.Turn).Prompt; strings.Contains(prompt, "/attachments") {
-		t.Errorf("prompt names attachments:\n%s", prompt)
+	if n := len(r.cl.Calls()); n != 1 {
+		t.Errorf("turns = %d, want 1", n)
 	}
 }
 
-// A file that cannot be downloaded stops the run before its first turn, with
-// a progress line, as a failed environment does.
-func TestAnAttachmentThatFailsStopsTheRun(t *testing.T) {
-	p, cl, api, _ := linkedRun(t, appLink, 1)
-	api.routes["GET /issues/CSR-7"] = reply{200, attachedIssue} // no download routes: 404
-	h := p.Hooks()
-	err := h.Run(context.Background(), api.client(t), cinderline.Issue{Ref: "CSR-7", Team: &cinderline.IssueTeam{ID: 1}})
-	if err == nil {
-		t.Fatal("no error")
-	}
-	if len(cl.Calls()) != 0 {
-		t.Error("an agent ran without its files")
-	}
-	if got := progressLines(api); !strings.Contains(got, "attachments could not be downloaded") {
-		t.Errorf("progress = %s", got)
+// A file that cannot be downloaded, a name that is not one safe file name,
+// two names that differ only in case, or a file of another issue: the turn
+// does not start, and next hears why.
+func TestAStepsAttachmentThatFailsDoesNotStartTheTurn(t *testing.T) {
+	for name, tt := range map[string]struct{ files, err string }{
+		"no download":   {`[{"issue":"CSR-7","id":9,"name":"gone.pdf"}]`, "attachment gone.pdf of CSR-7"},
+		"a path":        {`[{"issue":"CSR-7","id":5,"name":"../../etc/passwd"}]`, "not one safe, unique file name"},
+		"a dot name":    {`[{"issue":"CSR-7","id":5,"name":".."}]`, "not one safe, unique file name"},
+		"case twins":    {`[{"issue":"CSR-7","id":5,"name":"a.pdf"},{"issue":"CSR-7","id":6,"name":"A.pdf"}]`, "not one safe, unique file name"},
+		"another issue": {`[{"issue":"CSR-8","id":5,"name":"a.pdf"}]`, "outside CSR-7"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := attachedRun(t, tt.files)
+			_ = r.run(t)
+			if len(r.cl.Calls()) != 0 {
+				t.Error("an agent ran without its files")
+			}
+			reqs := nextRequests(t, r.api)
+			if len(reqs) != 2 || reqs[1].Last.Outcome != "not_started" || !strings.Contains(deref(reqs[1].Last.Error), tt.err) {
+				t.Fatalf("requests = %+v, want the second with not_started and %q", reqs, tt.err)
+			}
+			if entries, _ := os.ReadDir(filepath.Dir(attachmentsDir(r.p.State, cfg))); len(entries) > 1 {
+				t.Errorf("something was written beside the attachments folder: %v", entries)
+			}
+		})
 	}
 }
 

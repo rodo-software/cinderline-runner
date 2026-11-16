@@ -71,8 +71,8 @@ type Pub struct {
 	MaxTurns   int // the Merge Resolver's
 	Team       cinderline.Team
 	Forge      string // the project's forge, as GET project names it, for the report
-	Unread     bool   // reading a person's comments failed twice: add UnreadComments
-	Verdict    string // the runner's check verdict, above the report (CSR-80)
+	Foot       string // below the report, such as UnreadComments; "": none
+	Verdict    string // above the report, such as the check verdict (CSR-80); "": none
 	// Session and Token are the solo orchestrator's session it just worked in
 	// and its scoped Cinderline token, for the merge attempt before the push
 	// (decision 2026-11-07-solo-team-resolves-merge-conflicts); never logged.
@@ -165,11 +165,11 @@ func (p Project) Publish(ctx context.Context, c *cinderline.Client, clients map[
 		}
 	}
 
-	report := FinishReport(published, pub.Team.Trusted, pub.Forge)
-	if pub.Unread {
-		report += UnreadComments
+	report := withVerdict(pub.Verdict, FinishReport(published, pub.Team.Trusted, pub.Forge))
+	if pub.Foot != "" {
+		report += "\n\n" + pub.Foot
 	}
-	p.comment(ctx, c, pub.Ref, withVerdict(pub.Verdict, report))
+	p.comment(ctx, c, pub.Ref, report)
 	// Refused when the issue is no longer In progress, for example after a question (decision 0116).
 	move(ctx, c, pub.Ref, "review", "in_progress")
 	return nil

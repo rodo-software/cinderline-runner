@@ -2,15 +2,12 @@ package run
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
-	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -27,74 +24,6 @@ func usageReports(api *fakeAPI, ref string) []string {
 		}
 	}
 	return out
-}
-
-// Ported from legacy runner.test.mjs "an issue over its budget runs no
-// agent, is Blocked and keeps its note", through the Run hook. Before the
-// move to Blocked the clone is committed and pushed, so no work is lost
-// (Willem on CSR-76, EMBER-143).
-func TestAnIssueOverItsBudgetRunsNoAgentIsBlockedAndKeepsItsNote(t *testing.T) {
-	clone := t.TempDir()
-	p := project(t)
-	p.Hooks()
-	if err := p.SavePaused("CSR-7", Paused{Dir: clone, Session: "the-session", Client: "claude"}); err != nil {
-		t.Fatal(err)
-	}
-	cl := &client.Fake{}
-	ws := &workspace.Fake{Commits: []workspace.CommitReply{{}, {Committed: true}}, MergeBases: []workspace.MergeBaseReply{{}}, Pushes: []error{nil}}
-	p.Clients, p.Workspace = map[string]client.Client{"claude": cl}, ws
-	p.Forge = func(string) (forge.Forge, error) { return &forge.Fake{}, nil }
-	over := strings.TrimSuffix(issueJSON("CSR-7", "in_progress"), "}") + `,"budget_usd":5,"over_budget":true,"usage":{"cost_usd":5.126}}`
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /teams/1":                   {200, `{"id":1,"name":"Dev","agents":[{"name":"Builder","role":"orchestrator","client":"claude","model":"m"}]}`},
-		"GET /issues/CSR-7":              {200, over},
-		"GET /project":                   {200, `{"key":"CSR","forge":"forgejo","base_branch":"main"}`},
-		"GET /issues/CSR-7/comments":     {200, `{"comments":[]}`},
-		"POST /issues/CSR-7/progress":    {204, ""},
-		"POST /issues/CSR-7/comments":    {201, `{"id":9,"body":"x"}`},
-		"POST /runs/CSR-7/agent-token":   {201, `{"token":"tok","expires_at":"2030-01-01T00:00:00Z"}`},
-		"DELETE /runs/CSR-7/agent-token": {204, ""},
-		"PATCH /issues/CSR-7":            {200, issueJSON("CSR-7", "blocked")},
-	}}
-
-	if err := p.hookRun(context.Background(), api.client(t), cinderline.Issue{Ref: "CSR-7", Team: &cinderline.IssueTeam{ID: 1}}); err != nil {
-		t.Fatal(err)
-	}
-
-	if n := len(cl.Calls()); n != 0 {
-		t.Errorf("agent runs = %d, want none", n)
-	}
-	var steps []string
-	for _, c := range ws.Calls() {
-		steps = append(steps, c.Method+" "+fmt.Sprint(c.Args[1:]...))
-	}
-	want := []string{"Exists ", "Commit Dev / BuilderCSR-7: T", "MergeBase mainDev / Builder", "Commit Dev / BuilderCSR-7: T", "Push cinderline/CSR-7"}
-	if !slices.Equal(steps, want) {
-		t.Errorf("workspace = %q, want %q", steps, want)
-	}
-	var moves, comments []string
-	for _, w := range api.writes() {
-		if b, ok := strings.CutPrefix(w, "PATCH /issues/CSR-7 "); ok {
-			moves = append(moves, b)
-		}
-		if b, ok := strings.CutPrefix(w, "POST /issues/CSR-7/comments "); ok {
-			var in struct{ Body string }
-			_ = json.Unmarshal([]byte(b), &in)
-			comments = append(comments, in.Body)
-		}
-	}
-	if !slices.Equal(moves, []string{`{"status":"blocked","expected_status":"in_progress"}`}) {
-		t.Errorf("moves = %q", moves)
-	}
-	if !slices.Equal(comments, []string{"**Budget reached**: this issue has cost $5.13 of its $5.00 budget. Raise the budget on the issue and move it to To do to continue."}) {
-		t.Errorf("comments = %q", comments)
-	}
-	if n, ok := p.readPaused("CSR-7"); !ok || n.Session != "the-session" || n.Dir != clone || !n.Kept.IsZero() {
-		t.Errorf("note = %+v, %v; want the paused session kept", n, ok)
-	}
-	if got := usageReports(api, "CSR-7"); len(got) != 0 {
-		t.Errorf("usage reports = %q, want none: nothing ran", got)
-	}
 }
 
 // The usage of a run is reported only at its end, so the budget check adds

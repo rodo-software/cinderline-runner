@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -79,6 +80,17 @@ func runCSR7(t *testing.T, p *Project, api *fakeAPI) {
 	p.takeHandoff()
 }
 
+// linkedFacts is the linked projects of the first next request, as
+// "KEY: path path" lines.
+func linkedFacts(t *testing.T, api *fakeAPI) string {
+	t.Helper()
+	var out []string
+	for _, l := range nextRequests(t, api)[0].Workspace.LinkedProjects {
+		out = append(out, strings.TrimSpace(l.Key+": "+strings.Join(l.Paths, " ")))
+	}
+	return strings.Join(out, "\n")
+}
+
 func progressLines(api *fakeAPI) string {
 	var out []string
 	for _, w := range api.writes() {
@@ -92,7 +104,8 @@ func progressLines(api *fakeAPI) string {
 // A run of CSR with a link to EMBER, added here, fetches EMBER's repository
 // at its base branch with EMBER's git token, and EMBER's extra repositories
 // with their own tokens; never a token of another URL or project. One that
-// fails is left out and reported. The prompt names what it can read (CSR-161).
+// fails is left out and reported. The next request names what it can read
+// (CSR-161), for the app's prompt.
 func TestALinkedProjectsRepositoriesAreFetchedAndNamed(t *testing.T) {
 	p, cl, api, calls := linkedRun(t, appLink, 1, "EMBER/bad")
 	// Same key on another Cinderline: not the linked project.
@@ -126,11 +139,11 @@ func TestALinkedProjectsRepositoriesAreFetchedAndNamed(t *testing.T) {
 	if got := (*calls)[0].repos; !slices.Equal(got, want) {
 		t.Errorf("fetched %+v\nwant %+v", got, want)
 	}
-	prompt := turns(cl)[0].Prompt
-	line := "- EMBER (Cinderline app): its repositories, read-only: `/linked/EMBER/app`, `/linked/EMBER/docs`\n"
-	if !strings.Contains(prompt, line) || !strings.Contains(prompt, "every change to code goes into this run's own repository") ||
-		strings.Index(prompt, line) > strings.Index(prompt, "## Issue") {
-		t.Errorf("prompt:\n%s", prompt)
+	if n := len(cl.Calls()); n != 1 {
+		t.Errorf("turns = %d, want 1", n)
+	}
+	if got := linkedFacts(t, api); got != "EMBER: EMBER/app EMBER/docs" {
+		t.Errorf("linked projects in the request = %q", got)
 	}
 	if pr := progressLines(api); !strings.Contains(pr, "https://git.example/o/bad of linked project EMBER not fetched") {
 		t.Errorf("progress:\n%s", pr)
@@ -153,15 +166,19 @@ func TestWithoutLinksARunGetsNoLinkedCode(t *testing.T) {
 			if len(*calls) != 1 || (*calls)[0].path != workspace.LinkedPath || len((*calls)[0].repos) != 0 {
 				t.Errorf("fetches = %+v, want the linked volume pruned to nothing", *calls)
 			}
-			if prompt := turns(cl)[0].Prompt; strings.Contains(prompt, "Linked projects") || strings.Contains(prompt, "/linked") {
-				t.Errorf("prompt:\n%s", prompt)
+			if n := len(cl.Calls()); n != 1 {
+				t.Errorf("turns = %d, want 1", n)
+			}
+			if got := linkedFacts(t, api); got != "" {
+				t.Errorf("linked projects in the request = %q, want none", got)
 			}
 		})
 	}
 }
 
 // A linked project not added on this runner gives a progress line that names
-// it and the add command, no paths in the prompt, and the run goes on.
+// it and the add command, the project without paths in the request, and the
+// run goes on.
 func TestALinkedProjectNotOnThisRunner(t *testing.T) {
 	p, cl, api, calls := linkedRun(t, appLink, 1)
 	p.Others = []config.Project{cfg}
@@ -172,9 +189,11 @@ func TestALinkedProjectNotOnThisRunner(t *testing.T) {
 	if len(*calls) != 1 || len((*calls)[0].repos) != 0 {
 		t.Errorf("fetches = %+v", *calls)
 	}
-	prompt := turns(cl)[0].Prompt
-	if !strings.Contains(prompt, "- EMBER (Cinderline app): its code is not available in this run\n") || strings.Contains(prompt, "/linked/") {
-		t.Errorf("prompt:\n%s", prompt)
+	if n := len(cl.Calls()); n != 1 {
+		t.Errorf("turns = %d, want 1", n)
+	}
+	if got := linkedFacts(t, api); got != "EMBER:" {
+		t.Errorf("linked projects in the request = %q, want EMBER without paths", got)
 	}
 }
 
@@ -195,8 +214,8 @@ func TestALinkedProjectInAnotherWorkspaceIsNotUsed(t *testing.T) {
 }
 
 // A follow-up on a kept session and a resume after an answered question
-// fetch the linked repositories again before the agent starts, and their
-// prompts name the links (CSR-161).
+// fetch the linked repositories again before the agent starts, and each
+// run's first next request names them (CSR-161).
 func TestAResumeAndAFollowUpFetchAgain(t *testing.T) {
 	p, cl, api, calls := linkedRun(t, appLink, 3)
 	p.Others = []config.Project{cfg, app}
@@ -223,11 +242,20 @@ func TestAResumeAndAFollowUpFetchAgain(t *testing.T) {
 			t.Errorf("fetch %d after %d turns with %+v; want after %d", i, f.turns, f.repos, i)
 		}
 	}
-	section := LinkedSection([]Linked{{Key: "EMBER", Name: "Cinderline app", Paths: []string{"EMBER/app"}}})
-	if got := turns(cl)[1].Prompt; got != FollowUpPrompt("CSR-7")+section {
-		t.Errorf("follow-up prompt:\n%s", got)
+	var firsts []string
+	for _, r := range nextRequests(t, api) {
+		if r.Last == nil {
+			origin := "none"
+			if len(r.Sessions) == 1 {
+				origin = r.Sessions[0].Origin
+			}
+			firsts = append(firsts, fmt.Sprint(origin, " ", r.Workspace.LinkedProjects))
+		}
 	}
-	if got := turns(cl)[2].Prompt; got != ResumePrompt("CSR-7")+section {
-		t.Errorf("resume prompt:\n%s", got)
+	if want := []string{"none [{EMBER [EMBER/app]}]", "kept [{EMBER [EMBER/app]}]", "paused [{EMBER [EMBER/app]}]"}; !slices.Equal(firsts, want) {
+		t.Errorf("first requests = %q, want %q", firsts, want)
+	}
+	if ts := turns(cl); ts[1].SessionID != "s1" || ts[2].SessionID != "s1" {
+		t.Errorf("turns = %+v, want the follow-up and the resume in s1", ts)
 	}
 }

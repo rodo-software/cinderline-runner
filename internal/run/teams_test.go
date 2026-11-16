@@ -21,8 +21,6 @@ import (
 // reaches. The legacy runner tests drive a whole process with fake CLIs and
 // git; these drive Rounds against the fakes. CSR-1 is the parent.
 
-func ptr(s string) *string { return &s }
-
 var devTeam = cinderline.Team{ID: 1, Name: "Dev", MaxMinutes: 45, Agents: []cinderline.TeamAgent{
 	{Name: "Builder", Role: "orchestrator", Client: "claude", Model: ptr("m"), Effort: ptr("high"), Instructions: ptr("Lead.")},
 	{Name: "Qwen", Role: "worker", Client: "opencode", Model: ptr("openrouter/qwen"), Instructions: ptr("Code.")},

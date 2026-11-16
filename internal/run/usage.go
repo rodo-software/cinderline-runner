@@ -23,8 +23,28 @@ const usageTimeout = 30 * time.Second
 // addUsage collects one CLI run's usage under the run's top-level issue top,
 // for reportUsage. A nil runState or a run without usage collects nothing.
 func (r *runState) addUsage(top, issue, agent, model string, u *client.Usage) {
-	if r == nil || u == nil {
+	if e := usageEntry(issue, agent, model, u); e != nil {
+		r.addEntry(top, *e)
+	}
+}
+
+// addEntry collects e under top, for reportUsage; a nil runState collects nothing.
+func (r *runState) addEntry(top string, e cinderline.UsageEntry) {
+	if r == nil {
 		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.usage == nil {
+		r.usage = map[string][]cinderline.UsageEntry{}
+	}
+	r.usage[top] = append(r.usage[top], e)
+}
+
+// usageEntry is one CLI run's usage on issue; nil without usage.
+func usageEntry(issue, agent, model string, u *client.Usage) *cinderline.UsageEntry {
+	if u == nil {
+		return nil
 	}
 	e := cinderline.UsageEntry{
 		Issue: issue, Agent: agent,
@@ -35,12 +55,7 @@ func (r *runState) addUsage(top, issue, agent, model string, u *client.Usage) {
 	if model != "" {
 		e.Model = &model
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.usage == nil {
-		r.usage = map[string][]cinderline.UsageEntry{}
-	}
-	r.usage[top] = append(r.usage[top], e)
+	return &e
 }
 
 // pendingCost is the known cost of top's entries not reported yet.
@@ -60,7 +75,9 @@ func (r *runState) pendingCost(top string) float64 {
 }
 
 // reportUsage sends the entries collected for top in one call, at the end of
-// its run (reporting is rate-limited per token: app decision
+// its run: a team's, the merge turns of a solo run, and the turn whose next
+// call failed (a solo run's turns travel in next, decision
+// 2026-11-15-server-decides-steps point 6) (reporting is rate-limited per token: app decision
 // 2026-11-07-shared-tables-and-scalability point 16). A stopped run still
 // reports what it has. A failure only logs, as legacy reportUsage: the
 // entries are lost, the run is not.
@@ -80,7 +97,9 @@ func (p Project) reportUsage(ctx context.Context, c *cinderline.Client, top stri
 	c.Send(ctx, cinderline.Write{Ref: top, Usage: entries})
 }
 
-// checkBudget runs before every agent CLI run of top's run, in top's clone
+// checkBudget runs before every agent CLI run of a team's run and of a merge
+// turn (a solo run's turns are the app's to judge, decision
+// 2026-11-15-server-decides-steps point 6), in top's clone
 // dir. When top reached its budget it starts no run: it commits and pushes
 // what the clone holds, so no work is lost (preserve first, report second,
 // EMBER-143; Willem on CSR-76), moves top to Blocked with a "Budget reached"

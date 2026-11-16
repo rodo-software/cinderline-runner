@@ -225,7 +225,11 @@ func TestHooksRunIssueToReview(t *testing.T) {
 			var mu sync.Mutex
 			status := "todo"
 			cur := func() string { mu.Lock(); defer mu.Unlock(); return status }
+			app := simpleNext("Coder")
 			api := &fakeAPI{handle: func(key, body string) (reply, bool) {
+				if r, ok := app(key, body); ok {
+					return r, true
+				}
 				switch {
 				case strings.HasPrefix(key, "GET /work"):
 					if cur() != "todo" {
@@ -313,8 +317,8 @@ func TestHooksRunIssueToReview(t *testing.T) {
 			if turn.Dir != "/clone" || turn.MaxTurns != tc.want || turn.MaxMinutes != 30 || turn.Token != "scoped" {
 				t.Errorf("turn = %+v; want Dir /clone, MaxTurns %d, MaxMinutes 30, Token scoped", turn, tc.want)
 			}
-			if !strings.Contains(turn.Prompt, ref) {
-				t.Errorf("prompt lacks %s: %q", ref, turn.Prompt)
+			if turn.Prompt != "Do CSR-7." {
+				t.Errorf("prompt = %q, want the step's", turn.Prompt)
 			}
 			var opened bool
 			for _, call := range fg.Calls() {
@@ -323,10 +327,12 @@ func TestHooksRunIssueToReview(t *testing.T) {
 			if !opened {
 				t.Errorf("no pull request opened; forge calls %+v", fg.Calls())
 			}
-			// One usage call at the run's end, after its publish (CSR-76).
-			wantUsage := `{"entries":[{"issue":"CSR-7","agent":"Coder","model":null,"input_tokens":10,"output_tokens":20,"cache_read_tokens":30,"cache_write_tokens":40,"cost_usd":0.5}]}`
-			if got := usageReports(api, ref); !slices.Equal(got, []string{wantUsage}) {
-				t.Errorf("usage reports = %q, want %q", got, wantUsage)
+			// The turn's usage travels in next, so no usage call (decision 2026-11-15-server-decides-steps point 6).
+			if got := usageReports(api, ref); len(got) != 0 {
+				t.Errorf("usage reports = %q, want none", got)
+			}
+			if reqs := nextRequests(t, api); len(reqs) != 2 || reqs[1].Last == nil || reqs[1].Last.Usage == nil || *reqs[1].Last.Usage.CostUSD != 0.5 {
+				t.Errorf("next requests = %+v, want the turn's usage in the second", reqs)
 			}
 			var reported bool
 			for _, w := range api.writes() {

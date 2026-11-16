@@ -258,65 +258,6 @@ func TestTheOrchestratorsOwnSubIssueGetsTheCheck(t *testing.T) {
 	}
 }
 
-// A solo team's run is checked inside Attempts, before publish, resuming its session.
-func soloCheck(t *testing.T, env []environment.RunReply, runs ...client.RunReply) (Outcome, *client.Fake, *environment.Fake, *workspace.Fake, error) {
-	t.Helper()
-	p := project(t)
-	p.Hooks()
-	e := &environment.Fake{Runs: env}
-	p.Env = e
-	ws := &workspace.Fake{Commits: make([]workspace.CommitReply, 10), Pushes: make([]error, 10)}
-	cl := &client.Fake{Runs: runs}
-	j := job
-	j.Check, j.Workspace, j.Branch = checkCmd, ws, "cinderline/CSR-7"
-	j.Turn.MaxMinutes = 45
-	api := working()
-	api.routes["POST /issues/CSR-7/progress"] = reply{204, ""}
-	out, err := p.Attempts(context.Background(), api.client(t), cl, j)
-	return out, cl, e, ws, err
-}
-
-func TestASoloRunGetsTheCheckBeforePublish(t *testing.T) {
-	out, cl, e, ws, err := soloCheck(t, []environment.RunReply{fail("FAIL: TestX"), pass()},
-		ok("s1", "Done."), ok("s1", "Fixed."))
-	if err != nil || out.Paused || out.ChecksFailed {
-		t.Fatalf("Attempts = %+v, %v", out, err)
-	}
-	if out.Verdict != "Checks passed after 1 fix." || out.Report != "Fixed." {
-		t.Errorf("verdict %q, report %q; want Checks passed after 1 fix. and the fix run's report", out.Verdict, out.Report)
-	}
-	ts := turns(cl)
-	if len(ts) != 2 || ts[1].SessionID != "s1" || ts[1].Prompt != FixPrompt("CSR-7", checkCmd, "FAIL: TestX") {
-		t.Errorf("turns = %+v; want the session resumed with FixPrompt", ts)
-	}
-	if n := len(envRuns(e)); n != 2 {
-		t.Errorf("check runs = %d, want 2", n)
-	}
-	var pushes int
-	for _, c := range ws.Calls() {
-		if c.Method == "Push" {
-			pushes++
-		}
-	}
-	if pushes != 2 {
-		t.Errorf("pushes = %d, want one before each check", pushes)
-	}
-}
-
-func TestASoloRunThatStaysRedEndsAsChecksFailed(t *testing.T) {
-	out, cl, _, _, err := soloCheck(t, []environment.RunReply{fail("F1"), fail("F2"), fail("F3"), fail("F4")},
-		ok("s1", "Done."), ok("s1", "1."), ok("s1", "2."), ok("s1", "3."))
-	if err != nil || out.Paused || !out.ChecksFailed {
-		t.Fatalf("Attempts = %+v, %v; want ChecksFailed", out, err)
-	}
-	if want := "**Checks failed** after 3 fixes. The last lines of `make check`:\n\n```\nF4\n```"; out.Verdict != want {
-		t.Errorf("verdict = %q, want %q", out.Verdict, want)
-	}
-	if n := len(cl.Calls()); n != 4 {
-		t.Errorf("runs = %d, want 4", n)
-	}
-}
-
 func TestAPublishCommentStartsWithTheVerdict(t *testing.T) {
 	if got := withVerdict("Checks passed on the first try.", "Opened x."); got != "Checks passed on the first try.\n\nOpened x." {
 		t.Errorf("withVerdict = %q", got)

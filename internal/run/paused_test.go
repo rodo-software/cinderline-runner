@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -128,42 +127,6 @@ func TestCommentCursor(t *testing.T) {
 	}
 }
 
-// Ported from runner.test.mjs "an answered issue resumes its session and can
-// pause again": the resumed run asks again, so the issue is Blocked after it;
-// the note names the same session and nothing is commented or moved.
-func TestAnsweredIssueResumesAndCanPauseAgain(t *testing.T) {
-	p := project(t)
-	note := pausedNote(t, p, Paused{Session: "the-session", Client: "claude"})
-	got, ok := take(p, "CSR-7", "claude")
-	if !ok || got != note {
-		t.Fatalf("TakePaused = %+v, %v; want %+v", got, ok, note)
-	}
-
-	api := &fakeAPI{routes: map[string]reply{
-		"GET /issues/CSR-7":          {200, issueJSON("CSR-7", "blocked")},
-		"GET /issues/CSR-7/comments": comments(comment(5, false)),
-	}}
-	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "the-session"}}}}
-	j := job
-	j.Turn.Dir, j.Resume = got.Dir, got.Session
-	out, err := p.Attempts(context.Background(), api.client(t), cl, j)
-	if err != nil || !out.Paused {
-		t.Fatalf("Attempts = %+v, %v; want paused", out, err)
-	}
-
-	want := client.Turn{Dir: note.Dir, Prompt: ResumePrompt("CSR-7"), SessionID: "the-session", MaxTurns: first.MaxTurns}
-	if ts := turns(cl); len(ts) != 1 || ts[0] != want {
-		t.Fatalf("turns = %+v, want %+v", ts, want)
-	}
-	if w := api.writes(); len(w) != 0 {
-		t.Fatalf("writes = %q, want none", w)
-	}
-	again, ok := take(p, "CSR-7", "claude")
-	if !ok || again != note {
-		t.Fatalf("note after the pause = %+v, %v; want %+v", again, ok, note)
-	}
-}
-
 // A fresh run that asks a person pauses too, and a quick answer that moved
 // the issue back to To do already is a pause as well (decision 0116).
 func TestAQuestionPausesTheRun(t *testing.T) {
@@ -237,115 +200,10 @@ func TestTakePaused(t *testing.T) {
 	}
 }
 
-// Ported from runner.test.mjs "a comment by <a person|an agent> during a run
-// <resumes the session before the pull request|does not resume it>": 5
-// answered a question before the run and is never delivered twice; 7 comes
-// during the run.
-func TestACommentDuringARun(t *testing.T) {
-	for _, by := range []string{"a person", "an agent"} {
-		t.Run(by, func(t *testing.T) {
-			p := project(t)
-			api := working()
-			api.routes["GET /issues/CSR-7/comments"] = comments(comment(5, false), comment(6, true))
-			api.routes["GET /issues/CSR-7/comments?after=6"] = comments(comment(7, by == "an agent"))
-			api.routes["GET /issues/CSR-7/comments?after=7"] = comments()
-			cl := &client.Fake{Runs: []client.RunReply{
-				{Result: client.Result{SessionID: "the-session", Report: "built"}},
-				{Result: client.Result{SessionID: "the-session", Report: "read them"}},
-			}}
-			out, err := p.Attempts(context.Background(), api.client(t), cl, job)
-			if err != nil || out.Paused || out.Unread {
-				t.Fatalf("Attempts = %+v, %v", out, err)
-			}
-			ts := turns(cl)
-			if by == "an agent" {
-				if len(ts) != 1 || out.Report != "built" {
-					t.Fatalf("turns = %+v, report %q; want one run", ts, out.Report)
-				}
-				return
-			}
-			// Resumed once in the same session; the second check finds nothing new.
-			want := client.Turn{Dir: first.Dir, Prompt: CommentsPrompt("CSR-7"), SessionID: "the-session", MaxTurns: first.MaxTurns}
-			if len(ts) != 2 || ts[1] != want || out.Report != "read them" {
-				t.Fatalf("turns = %+v, report %q; want second %+v", ts, out.Report, want)
-			}
-			if w := api.writes(); !slices.Equal(w, []string{`POST /issues/CSR-7/progress {"body":"Reading new comments from a person"}`}) {
-				t.Fatalf("writes = %q", w)
-			}
-		})
-	}
-}
-
-// Ported from runner.test.mjs "a comment resume that fails twice still
-// publishes the finished work, with a note": both resumes run in the same
-// session with the comments prompt, nothing starts over, and the outcome
-// says to add UnreadComments to the final comment.
-func TestACommentResumeThatFailsTwice(t *testing.T) {
-	p := project(t)
-	api := working()
-	api.queues = map[string][]reply{"GET /issues/CSR-7/comments": {comments(), comments(comment(7, false))}}
-	cl := &client.Fake{Runs: []client.RunReply{
-		{Result: client.Result{SessionID: "the-session", Report: "built"}},
-		{Result: client.Result{SessionID: "the-session"}, Err: errFailed},
-		{Result: client.Result{SessionID: "the-session"}, Err: errFailed},
-	}}
-	out, err := p.Attempts(context.Background(), api.client(t), cl, job)
-	if err != nil || !out.Unread || out.Paused || out.Report != "built" {
-		t.Fatalf("Attempts = %+v, %v; want the finished work with Unread", out, err)
-	}
-	ts := turns(cl)
-	want := client.Turn{Dir: first.Dir, Prompt: CommentsPrompt("CSR-7"), SessionID: "the-session", MaxTurns: first.MaxTurns}
-	if len(ts) != 3 || ts[1] != want || ts[2] != want {
-		t.Fatalf("turns = %+v, want two resumes %+v", ts, want)
-	}
-	if w := api.writes(); !slices.Contains(w, `POST /issues/CSR-7/progress {"body":"Retrying (attempt 2)"}`) {
-		t.Fatalf("writes = %q, want the retry's progress line", w)
-	}
-	if !strings.Contains(UnreadComments, "resuming the agent to read those comments failed twice") {
-		t.Fatalf("UnreadComments = %q", UnreadComments)
-	}
-}
-
-// A comment resume that hits the turn limit continues with the continue
-// prompt, as legacy does; then a success ends it without the note.
-func TestACommentResumeContinuesAfterTheTurnLimit(t *testing.T) {
-	p := project(t)
-	api := working()
-	api.queues = map[string][]reply{"GET /issues/CSR-7/comments": {comments(), comments(comment(7, false))}}
-	api.routes["GET /issues/CSR-7/comments?after=7"] = comments()
-	cl := &client.Fake{Runs: []client.RunReply{
-		{Result: client.Result{SessionID: "s1"}},
-		{Result: client.Result{SessionID: "s1", HitTurnLimit: true}, Err: errFailed},
-		{Result: client.Result{SessionID: "s1", Report: "done"}},
-	}}
-	out, err := p.Attempts(context.Background(), api.client(t), cl, job)
-	if err != nil || out.Unread || out.Report != "done" {
-		t.Fatalf("Attempts = %+v, %v", out, err)
-	}
-	if ts := turns(cl); len(ts) != 3 || ts[2].Prompt != ContinuePrompt("CSR-7") || ts[2].SessionID != "s1" {
-		t.Fatalf("turns = %+v", ts)
-	}
-}
-
-// A resumed run that fails for another reason starts over fresh, with the
-// first prompt and no session (legacy: paused and resume cleared).
-func TestAFailedResumeStartsOver(t *testing.T) {
-	p := project(t)
-	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "the-session"}, Err: errFailed}, {}}}
-	j := job
-	j.Resume = "the-session"
-	if _, err := p.Attempts(context.Background(), working().client(t), cl, j); err != nil {
-		t.Fatal(err)
-	}
-	if ts := turns(cl); len(ts) != 2 || ts[1] != first {
-		t.Fatalf("turns = %+v, want second %+v", ts, first)
-	}
-}
-
-// A status or comment list Cinderline cannot give ends the run with the
-// error, which the scheduler comments before Review.
+// A status Cinderline cannot give ends a team's turn with the error, which
+// the scheduler comments before Blocked.
 func TestAttemptsFailsWhenCinderlineDoes(t *testing.T) {
-	for _, route := range []string{"GET /issues/CSR-7", "GET /issues/CSR-7/comments"} {
+	for _, route := range []string{"GET /issues/CSR-7"} {
 		t.Run(route, func(t *testing.T) {
 			api := working()
 			api.routes[route] = reply{500, `{"message":"Server error."}`}

@@ -124,8 +124,8 @@ type runHandoff struct {
 	Team             cinderline.Team
 	MaxTurns         int
 	Forge            string
-	Unread           bool
-	Verdict          string // the solo run's check verdict, heading the report
+	Foot             string // below the finish report: UnreadComments, or the app's report_foot
+	Verdict          string // above it: the app's report_head
 	// Solo team fields: the orchestrator's session and its scoped token,
 	// for the merge attempt before the push (decision 2026-11-07-solo-team-resolves-merge-conflicts).
 	Session, Token string
@@ -332,28 +332,20 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 	body := deref(full.Body)
 	// Fetched on every Run, so a resume and a follow-up read fresh code too (CSR-161).
 	links := p.linkedProjects(ctx, c, ref, proj.LinkedProjects)
-	files, err := p.attachments(ctx, c, full)
-	if err != nil {
-		p.progress(ctx, c, ref, "The issue's attachments could not be downloaded: "+err.Error())
-		return notStarted(err)
-	}
 	check := deref(proj.CheckCommand)
 	if generic {
 		check = "" // a generic run changes no files
 	}
-	soloCheck := check // the orchestrator's own session in a team is not checked, only its sub-issues
-	if len(team.Agents) > 1 {
-		soloCheck = ""
-	}
-	var prompt string
-	if generic {
-		prompt = GenericPrompt(deref(team.Agents[0].Instructions), ref, title, body, p.Config.Key)
-	} else {
-		prompt = CodingPrompt(team, ref, title, body, branch, p.Config.Key, soloCheck, p.extraRepositories(ctx, c, ref), links, files)
-	}
 
 	if len(team.Agents) > 1 {
 		// Team with workers.
+		files, err := p.attachments(ctx, c, full)
+		if err != nil {
+			p.progress(ctx, c, ref, "The issue's attachments could not be downloaded: "+err.Error())
+			return notStarted(err)
+		}
+		// The orchestrator's own session in a team is not checked, only its sub-issues.
+		prompt := CodingPrompt(team, ref, title, body, branch, p.Config.Key, "", p.extraRepositories(ctx, c, ref), links, files)
 		out, err := p.Rounds(ctx, c, p.Clients, p.Workspace, TeamJob{
 			Ref: ref, Branch: branch, Base: base, MaxTurns: maxTurns, Team: team, Prompt: prompt, Links: LinkedSection(links), Check: check,
 		})
@@ -363,108 +355,71 @@ func (p *Project) hookRun(ctx context.Context, c *cinderline.Client, issue cinde
 		if out.Paused {
 			return nil // Publish must skip it.
 		}
-		p.setHandoff(ref, title, body, out.Dir, base, team, maxTurns, proj.Forge, out.Unread, "", "", "")
+		h := runHandoff{Ref: ref, Title: title, Body: body, Dir: out.Dir, Base: base, Team: team, MaxTurns: maxTurns, Forge: proj.Forge}
+		if out.Unread {
+			h.Foot = UnreadComments
+		}
+		p.setHandoff(h)
 		handed = true
 		return nil
 	}
 
-	// Solo team (one agent).
-	agent := &team.Agents[0]
-	cl := p.Clients[agent.Client]
-	if cl == nil {
+	// Solo team (one agent): the app decides each step (decision 2026-11-15-server-decides-steps).
+	agent := team.Agents[0]
+	if p.Clients[agent.Client] == nil {
 		return notStarted(fmt.Errorf("agent %s runs on %s, which this runner does not run", agent.Name, agent.Client))
 	}
-
-	dir := ""
-	session := ""
-	note, resumed := p.TakePaused(ctx, c, p.Workspace, ref, branch, agent.Client, generic)
-	if resumed {
-		dir = note.Dir
-		session = note.Session
-	} else {
-		var err error
-		dir, err = p.Workspace.Prepare(ctx, branch, base)
-		if err != nil {
-			return notStarted(err)
-		}
+	var extras []config.ExtraRepository
+	if !generic {
+		extras = p.extraRepositories(ctx, c, ref) // legacy's generic prompts name none
 	}
-
-	tok, err := c.CreateAgentToken(ctx, ref, cinderline.KindOrchestrator, agent.Name)
-	if err != nil {
+	j := soloJob{
+		Ref: ref, Title: title, Body: body, Branch: branch, Base: base, Team: team, Agent: agent,
+		MaxTurns: maxTurns, Generic: generic, Check: check, Forge: proj.Forge,
+		Workspace: runWorkspace(branch, base, extras, links),
+	}
+	// A run's attachments come from its steps; another run's files must not linger.
+	if err := p.resetAttachments(); err != nil {
 		return notStarted(err)
 	}
-	token := tok.Token
+	note, resumed := p.TakePaused(ctx, c, p.Workspace, ref, branch, agent.Client, generic)
+	if resumed {
+		j.Dir, j.Session, j.Origin = note.Dir, note.Session, "paused"
+		if !note.Kept.IsZero() {
+			j.Origin = "kept"
+		}
+	} else if j.Dir, err = p.Workspace.Prepare(ctx, branch, base); err != nil {
+		return notStarted(err)
+	}
 
 	// A generic run never publishes, so its branch needs no base (legacy attempts()).
 	if !generic {
+		if j.Session != "" {
+			// For the solo agent's merge attempt in its session (decision 2026-11-07-solo-team-resolves-merge-conflicts).
+			tok, err := c.CreateAgentToken(ctx, ref, cinderline.KindOrchestrator, agent.Name)
+			if err != nil {
+				return notStarted(err)
+			}
+			j.Token = tok.Token
+		}
 		if err := p.CatchUp(ctx, c, p.Clients, p.Workspace, Upkeep{
-			Ref: ref, Branch: branch, Base: base, Dir: dir, MaxTurns: maxTurns, Team: team,
-			Session: session, Token: token,
+			Ref: ref, Branch: branch, Base: base, Dir: j.Dir, MaxTurns: maxTurns, Team: team,
+			Session: j.Session, Token: j.Token,
 		}, title); err != nil {
-			// A budget stop before the first turn: the note TakePaused took is kept.
-			if err := p.SavePaused(ref, Paused{Dir: dir, Session: session, Client: agent.Client}); err != nil {
+			// A budget stop or halt before the first step: the note TakePaused took is kept.
+			if err := p.SavePaused(ref, Paused{Dir: j.Dir, Session: j.Session, Client: agent.Client}); err != nil {
 				log.Warn("paused note not written", "err", err)
 			}
-			if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
-				log.Warn("agent tokens not deleted", "err", derr)
+			if j.Token != "" {
+				if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
+					log.Warn("agent tokens not deleted", "err", derr)
+				}
 			}
 			return nil
 		}
 	}
-
-	turn := client.Turn{
-		Dir: dir, Prompt: prompt, MaxTurns: maxTurns,
-		MaxMinutes: team.MaxMinutes, Model: deref(agent.Model), Effort: deref(agent.Effort),
-		Author: gitAuthor(team, agent.Name), Token: token, Ponytail: team.Ponytail,
-	}
-	job := Job{Ref: ref, Agent: agent.Name, Client: agent.Client, Workspace: p.Workspace, Turn: turn, Resume: session, FollowUp: resumed && !note.Kept.IsZero(), Links: LinkedSection(links), Generic: generic, Check: soloCheck, Title: title, Branch: branch}
-	if generic {
-		job.Workspace, job.Links = nil, "" // nothing to push at a budget stop; legacy's generic prompts name no links
-	}
-	out, err := p.Attempts(ctx, c, cl, job)
-	if ctx.Err() == nil && !out.Paused {
-		// Kept for a follow-up even when the run failed: the next run can continue it.
-		p.keep(ref, Paused{Dir: dir, Session: cmp.Or(out.SessionID, session), Client: agent.Client, Generic: generic})
-	}
-	if err != nil {
-		if ctx.Err() == nil {
-			if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
-				log.Warn("agent tokens not deleted", "err", derr)
-			}
-		}
-		return err
-	}
-	if out.Paused {
-		if ctx.Err() == nil {
-			if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
-				log.Warn("agent tokens not deleted", "err", derr)
-			}
-		}
-		return nil // Publish must skip it.
-	}
-	if generic {
-		// No commit, push or pull request: the agent reported in its own comment (legacy GENERIC_REPORT).
-		if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
-			log.Warn("agent tokens not deleted", "err", derr)
-		}
-		p.comment(ctx, c, ref, GenericReport)
-		// Refused when the issue is no longer In progress, as in Publish (decision 0116).
-		move(ctx, c, ref, "review", "in_progress")
-		return nil
-	}
-	if out.ChecksFailed {
-		// No pull request for red work: verify pushed the branch; the verdict is the report (decision 2026-11-16-check-step point 2).
-		if derr := c.DeleteAgentTokens(ctx, ref); derr != nil {
-			log.Warn("agent tokens not deleted", "err", derr)
-		}
-		p.comment(ctx, c, ref, withVerdict(out.Verdict, cmp.Or(out.Report, "(The agent ended without a report.)")))
-		move(ctx, c, ref, "review", "in_progress")
-		return nil
-	}
-	// Run hands off to Publish; Publish deletes the token.
-	p.setHandoff(ref, title, body, dir, base, team, maxTurns, proj.Forge, out.Unread, out.SessionID, token, out.Verdict)
-	handed = true
-	return nil
+	handed, err = p.steps(ctx, c, j)
+	return err
 }
 
 // extraRepositories fetches the project's extra repositories and returns
@@ -564,14 +519,10 @@ func (p *Project) linkedProjects(ctx context.Context, c *cinderline.Client, ref 
 	return links
 }
 
-func (p *Project) setHandoff(ref, title, body, dir, base string, team cinderline.Team, maxTurns int, forgeKind string, unread bool, session, token, verdict string) {
+func (p *Project) setHandoff(h runHandoff) {
 	p.run.mu.Lock()
 	defer p.run.mu.Unlock()
-	p.run.handoff = &runHandoff{
-		Ref: ref, Title: title, Body: body, Dir: dir, Base: base,
-		Team: team, MaxTurns: maxTurns, Forge: forgeKind, Unread: unread,
-		Session: session, Token: token, Verdict: verdict,
-	}
+	p.run.handoff = &h
 }
 
 func (p *Project) takeHandoff() *runHandoff {
@@ -609,7 +560,7 @@ func (p *Project) hookPublish(ctx context.Context, c *cinderline.Client, issue c
 	}()
 	return p.Publish(ctx, c, p.Clients, p.Workspace, fg, Pub{
 		Ref: h.Ref, Title: h.Title, Body: h.Body, Base: h.Base,
-		Dir: h.Dir, MaxTurns: h.MaxTurns, Team: h.Team, Forge: h.Forge, Unread: h.Unread, Verdict: h.Verdict,
+		Dir: h.Dir, MaxTurns: h.MaxTurns, Team: h.Team, Forge: h.Forge, Foot: h.Foot, Verdict: h.Verdict,
 		Session: h.Session, Token: h.Token,
 	})
 }

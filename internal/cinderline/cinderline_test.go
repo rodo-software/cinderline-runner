@@ -746,3 +746,50 @@ func TestUnavailable(t *testing.T) {
 		}
 	}
 }
+
+// nextStep sends the request as the contract has it, empty lists as lists,
+// and reads a step of any kind into Step; unknown properties are ignored.
+func TestNext(t *testing.T) {
+	resp := `{"state":"v1.k3Jx","step":{"kind":"run","agent":"Ada","session":"resume","token":"orchestrator","prompt":"Go on.","progress":"Ada is working","issue":{"ref":"CSR-9","title":"T"},"attachments":[{"issue":"CSR-9","id":4,"name":"a.pdf"}],"later":true}}`
+	c, rec := server(t, 200, resp, nil)
+	state := "v1.old"
+	got, err := c.Next(context.Background(), "CSR-9", NextRequest{
+		Context: "run", State: &state,
+		Last: &LastStep{ID: "id1", Step: "run", Issue: "CSR-9", Agent: ptr("Ada"), Outcome: "turn_limit", Error: ptr("limit"),
+			Usage: &UsageEntry{Issue: "CSR-9", Agent: "Ada"}, Conflicts: []string{}},
+		Sessions:  []ResumableSession{{Issue: "CSR-9", Agent: "Ada", Origin: "turn"}},
+		Workspace: RunWorkspace{Branch: "cinderline/CSR-9", Base: "main", ExtraRepositories: []WorkspaceRepository{}, LinkedProjects: []WorkspaceLink{{Key: "EMBER", Paths: []string{}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.method != "POST" || rec.path != "/api/runner/v1/runs/CSR-9/next" {
+		t.Errorf("request = %s %s", rec.method, rec.path)
+	}
+	want := `{"context":"run","state":"v1.old",
+		"last":{"id":"id1","step":"run","issue":"CSR-9","agent":"Ada","outcome":"turn_limit","error":"limit","report":null,"tail":null,
+			"usage":{"issue":"CSR-9","agent":"Ada","model":null,"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0,"cost_usd":null},
+			"conflicts":[],"commits":null},
+		"sessions":[{"issue":"CSR-9","agent":"Ada","origin":"turn"}],
+		"workspace":{"branch":"cinderline/CSR-9","base":"main","extra_repositories":[],"linked_projects":[{"key":"EMBER","paths":[]}]}}`
+	if !sameJSON(t, rec.body, want) {
+		t.Errorf("body = %s\nwant %s", rec.body, want)
+	}
+	s := got.Step
+	if got.State != "v1.k3Jx" || s.Kind != "run" || s.Agent != "Ada" || s.Session != "resume" || s.Token != "orchestrator" || s.Prompt != "Go on." ||
+		*s.Progress != "Ada is working" || *s.Issue != (StepIssue{Ref: "CSR-9", Title: "T"}) || len(s.Attachments) != 1 || s.Attachments[0] != (StepAttachment{Issue: "CSR-9", ID: 4, Name: "a.pdf"}) {
+		t.Errorf("answer = %+v", got)
+	}
+
+	c, _ = server(t, 200, `{"state":"s","step":{"kind":"run","attachments":null}}`, nil)
+	if got, err := c.Next(context.Background(), "CSR-9", NextRequest{}); err != nil || got.Step.Attachments != nil {
+		t.Errorf("attachments null = %v, %v; want nil, which leaves the folder", got.Step.Attachments, err)
+	}
+	c, _ = server(t, 200, `{"state":"s","step":{"kind":"pause","reason":"budget","block":true,"comment":"Budget reached"}}`, nil)
+	if got, err := c.Next(context.Background(), "CSR-9", NextRequest{}); err != nil || !got.Step.Block || *got.Step.Comment != "Budget reached" || got.Step.Reason != "budget" {
+		t.Errorf("pause = %+v, %v", got.Step, err)
+	}
+	if c.Version() != version {
+		t.Errorf("Version = %q, want %q", c.Version(), version)
+	}
+}

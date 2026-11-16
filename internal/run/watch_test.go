@@ -150,26 +150,6 @@ func TestAFinishedRunIsNotStopped(t *testing.T) {
 	}
 }
 
-// When Cinderline stops answering as the agent finishes, the finished work
-// still goes on to publish, and the agent's final text waits in the outbox,
-// as its own comment may have failed too (CSR-159, the CSR-34 incident).
-func TestAnOutageAtTheEndStillPublishes(t *testing.T) {
-	down := reply{502, `{}`}
-	api := &fakeAPI{queues: map[string][]reply{
-		"GET /issues/CSR-7":          {{200, issueJSON("CSR-7", "in_progress")}, down}, // the budget check, then the status
-		"GET /issues/CSR-7/comments": {{200, `{"comments":[]}`}, down},
-	}, routes: map[string]reply{"POST /issues/CSR-7/comments": down}}
-	c := api.client(t)
-	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1", Report: "Added the endpoint."}}}}
-	out, err := project(t).Attempts(context.Background(), c, cl, job)
-	if err != nil || out.Paused || out.Report != "Added the endpoint." {
-		t.Fatalf("Attempts = %+v, %v; want the finished work for publish", out, err)
-	}
-	if !c.Waiting("CSR-7") {
-		t.Error("the agent's report is not in the outbox")
-	}
-}
-
 // The idle limit is the project's idle_minutes from Cinderline, set in its
 // web panel (Willem on CSR-159); 20 minutes while the app sends none. A
 // project with none seen yet has no runState in tests: no limit.

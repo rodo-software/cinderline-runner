@@ -160,6 +160,9 @@ func New(baseURL, token, version string) *Client {
 	}
 }
 
+// Version is the runner's version, as it sends it on every request.
+func (c *Client) Version() string { return c.version }
+
 // APIVersion is the API version of the last response, or "" before the first.
 func (c *Client) APIVersion() string {
 	c.mu.Lock()
@@ -520,6 +523,15 @@ func (c *Client) CreateAgentToken(ctx context.Context, ref string, kind TokenKin
 func (c *Client) ReportUsage(ctx context.Context, ref string, entries []UsageEntry) error {
 	in := map[string][]UsageEntry{"entries": entries}
 	return c.call(ctx, "reportUsage", "POST", "/runs/"+url.PathEscape(ref)+"/usage", in, 204, nil)
+}
+
+// Next reports the step the runner just did in the run of the top-level
+// issue ref and returns the next one (nextStep, decision
+// 2026-11-15-server-decides-steps). One try: the caller decides on retries.
+func (c *Client) Next(ctx context.Context, ref string, r NextRequest) (NextResponse, error) {
+	var out NextResponse
+	err := c.call(ctx, "nextStep", "POST", "/runs/"+url.PathEscape(ref)+"/next", r, 200, &out)
+	return out, err
 }
 
 // DeleteAgentTokens deletes every agent token of the issue.

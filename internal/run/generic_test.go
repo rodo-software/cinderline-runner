@@ -26,9 +26,18 @@ const genericTeam = `{"id":1,"name":"Ops","max_minutes":30,"trusted":false,"max_
 	`{"name":"Clerk","role":"orchestrator","client":"claude","model":null,"instructions":"Tidy.","description":null,"price":null},` +
 	`{"name":"Qwen","role":"worker","client":"opencode","model":null,"instructions":null,"description":null,"price":null}]}`
 
+// genericFinish is the app's step that ends a generic run.
+const genericFinish = `{"kind":"finish","comment":"The run is done. Read its comments."}`
+
+// genericTurn is a run step for the generic team's Clerk in session (new or resume).
+func genericTurn(session string) string {
+	return `{"kind":"run","agent":"Clerk","session":"` + session + `","token":"orchestrator","prompt":"Tidy CSR-7.","progress":null,"issue":{"ref":"CSR-7","title":"T"},"attachments":[]}`
+}
+
 // genericRun runs CSR-7 of team (JSON) through the Run and Publish hooks, as
-// the scheduler does after the claim, and returns the API's writes.
-func genericRun(t *testing.T, p Project, team string, cl *client.Fake, ws *workspace.Fake, fg *forge.Fake) *fakeAPI {
+// the scheduler does after the claim, with next answering steps in order,
+// and returns the API.
+func genericRun(t *testing.T, p Project, team string, cl *client.Fake, ws *workspace.Fake, fg *forge.Fake, steps ...string) *fakeAPI {
 	t.Helper()
 	ref := "CSR-7"
 	var mu sync.Mutex
@@ -38,7 +47,11 @@ func genericRun(t *testing.T, p Project, team string, cl *client.Fake, ws *works
 		defer mu.Unlock()
 		return `{"ref":"` + ref + `","title":"T","body":"B","status":{"value":"` + status + `","label":"x"},"team":{"id":1,"name":"Ops"},"sub_issues":[]}`
 	}
-	api := &fakeAPI{handle: func(key, body string) (reply, bool) {
+	var q []reply
+	for _, s := range steps {
+		q = append(q, reply{200, `{"state":"s","step":` + s + `}`})
+	}
+	api := &fakeAPI{queues: map[string][]reply{"POST /runs/" + ref + "/next": q}, handle: func(key, body string) (reply, bool) {
 		switch key {
 		case "GET /project":
 			return reply{200, `{"key":"CSR","name":"CSR","repository_url":"` + cfg.Repository + `","forge":"forgejo","base_branch":"main","environment":"default","check_command":"make check"}`}, true
@@ -97,26 +110,30 @@ func commentBodies(api *fakeAPI) []string {
 }
 
 // Ported from runner.test.mjs "a generic run uses genericPrompt, ends with
-// GENERIC_REPORT and moves to review", with the generic half of
-// lib.prompt.test.mjs "runKind returns the kind from the team flags": the
-// team's generic_runs picks the generic prompt. No commit, push, base merge
-// or forge call; the orchestrator runs alone although the team lists a worker.
+// GENERIC_REPORT and moves to review". Which prompt and report a generic
+// team gets is the app's now (EMBER-215); the runner's part: the step's
+// prompt reaches the agent, finish posts its comment and moves the issue to
+// Review, and nothing is committed, pushed, merged or sent to the forge. The
+// orchestrator runs alone although the team lists a worker.
 func TestGenericRunEndsWithReportInReview(t *testing.T) {
 	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "s1"}}}}
 	ws := &workspace.Fake{Prepares: []workspace.PrepareReply{{Dir: "/clone"}}}
 	fg := &forge.Fake{}
 	p := project(t)
-	api := genericRun(t, p, genericTeam, cl, ws, fg)
+	api := genericRun(t, p, genericTeam, cl, ws, fg, genericTurn("new"), genericFinish)
 
 	runs := cl.Calls()
 	if len(runs) != 1 {
 		t.Fatalf("client runs = %d, want 1", len(runs))
 	}
-	if got, want := runs[0].Args[0].(client.Turn).Prompt, GenericPrompt("Tidy.", "CSR-7", "T", "B", "CSR"); got != want {
-		t.Errorf("prompt =\n%s\nwant GenericPrompt:\n%s", got, want)
+	if got := runs[0].Args[0].(client.Turn).Prompt; got != "Tidy CSR-7." {
+		t.Errorf("prompt = %q, want the step's", got)
 	}
-	if got := commentBodies(api); len(got) == 0 || got[len(got)-1] != `{"body":"`+GenericReport+`"}` {
-		t.Errorf("comments = %q, want the last to be %q", got, GenericReport)
+	if got := commentBodies(api); len(got) == 0 || got[len(got)-1] != `{"body":"The run is done. Read its comments."}` {
+		t.Errorf("comments = %q, want the last to be the finish step's", got)
+	}
+	if w := nextRequests(t, api)[0].Workspace; len(w.ExtraRepositories) != 0 || w.Branch != "cinderline/CSR-7" || w.Base != "main" {
+		t.Errorf("workspace facts = %+v", w)
 	}
 	var moves []string
 	for _, w := range api.writes() {
@@ -146,21 +163,25 @@ func TestGenericRunEndsWithReportInReview(t *testing.T) {
 }
 
 // Ported from runner.test.mjs "a paused generic run resumes as generic, no
-// team-changed comment": the generic note's session resumes in its clone.
+// team-changed comment": the generic note's session is offered as paused and
+// resumes in its clone.
 func TestPausedGenericRunResumesAsGeneric(t *testing.T) {
 	p := project(t)
 	note := pausedNote(t, p, Paused{Session: "the-session", Client: "claude", Generic: true})
 	cl := &client.Fake{Runs: []client.RunReply{{Result: client.Result{SessionID: "the-session"}}}}
 	ws := &workspace.Fake{}
-	api := genericRun(t, p, genericTeam, cl, ws, &forge.Fake{})
+	api := genericRun(t, p, genericTeam, cl, ws, &forge.Fake{}, genericTurn("resume"), genericFinish)
+	if s := nextRequests(t, api)[0].Sessions; len(s) != 1 || s[0] != (cinderline.ResumableSession{Issue: "CSR-7", Agent: "Clerk", Origin: "paused"}) {
+		t.Errorf("sessions offered = %+v, want the-session as paused", s)
+	}
 
 	runs := cl.Calls()
 	if len(runs) != 1 {
 		t.Fatalf("client runs = %d, want 1", len(runs))
 	}
 	turn := runs[0].Args[0].(client.Turn)
-	if turn.SessionID != "the-session" || turn.Dir != note.Dir || turn.Prompt != ResumePrompt("CSR-7") {
-		t.Errorf("turn = %+v; want the session the-session in %s with ResumePrompt", turn, note.Dir)
+	if turn.SessionID != "the-session" || turn.Dir != note.Dir {
+		t.Errorf("turn = %+v; want the session the-session in %s", turn, note.Dir)
 	}
 	got := commentBodies(api)
 	for _, b := range got {
@@ -168,8 +189,8 @@ func TestPausedGenericRunResumesAsGeneric(t *testing.T) {
 			t.Errorf("team-changed comment %s", b)
 		}
 	}
-	if len(got) == 0 || got[len(got)-1] != `{"body":"`+GenericReport+`"}` {
-		t.Errorf("comments = %q, want the last to be %q", got, GenericReport)
+	if len(got) == 0 || got[len(got)-1] != `{"body":"The run is done. Read its comments."}` {
+		t.Errorf("comments = %q, want the last to be the finish step's", got)
 	}
 }
 
@@ -206,8 +227,9 @@ func TestPausedNoteOfTheOtherKindIsDropped(t *testing.T) {
 	}
 }
 
-// A generic run over its budget is blocked and keeps its note, as a coding
-// run, but commits and pushes nothing: it has nothing to publish.
+// A generic run the app pauses with block (over its budget) is blocked and
+// keeps its note, as a coding run, but commits and pushes nothing: it has
+// nothing to publish.
 func TestGenericBudgetStopPushesNothing(t *testing.T) {
 	clone := t.TempDir()
 	p := project(t)
@@ -219,10 +241,10 @@ func TestGenericBudgetStopPushesNothing(t *testing.T) {
 	ws := &workspace.Fake{}
 	p.Clients, p.Workspace = map[string]client.Client{"claude": cl}, ws
 	p.Forge = func(string) (forge.Forge, error) { return &forge.Fake{}, nil }
-	over := strings.TrimSuffix(issueJSON("CSR-7", "in_progress"), "}") + `,"budget_usd":5,"over_budget":true,"usage":{"cost_usd":5.126}}`
 	api := &fakeAPI{routes: map[string]reply{
+		"POST /runs/CSR-7/next":          {200, `{"state":"s","step":{"kind":"pause","reason":"budget","block":true,"comment":"**Budget reached**"}}`},
 		"GET /teams/1":                   {200, genericTeam},
-		"GET /issues/CSR-7":              {200, over},
+		"GET /issues/CSR-7":              {200, issueJSON("CSR-7", "in_progress")},
 		"GET /project":                   {200, `{"key":"CSR","forge":"forgejo","base_branch":"main"}`},
 		"GET /issues/CSR-7/comments":     {200, `{"comments":[]}`},
 		"POST /issues/CSR-7/progress":    {204, ""},

@@ -264,7 +264,7 @@ func (p Project) Rounds(ctx context.Context, c *cinderline.Client, clients map[s
 		}
 		turn.Token = tok.Token
 
-		res, err := p.Attempts(ctx, c, cl, Job{Ref: j.Ref, Agent: orch.Name, Client: orch.Client, Turn: turn, NoComments: true, Workspace: ws})
+		res, err := p.Attempts(ctx, c, cl, Job{Ref: j.Ref, Agent: orch.Name, Client: orch.Client, Turn: turn, Workspace: ws})
 		if res.SessionID != "" {
 			session = res.SessionID
 			if err := p.SavePaused(j.Ref, Paused{Dir: dir, Session: session, Client: orch.Client}); err != nil {

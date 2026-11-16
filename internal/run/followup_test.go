@@ -14,10 +14,11 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// soloRunAPI answers what hookRun asks for a solo team's CSR-7, In progress.
+// soloRunAPI answers what hookRun asks for a solo team's CSR-7, In progress,
+// with simpleNext as the app.
 func soloRunAPI() *fakeAPI {
 	issue := `{"ref":"CSR-7","title":"Add hello","body":"Add a file.","status":{"value":"in_progress","label":"x"},"team":{"id":1,"name":"Dev"},"sub_issues":[]}`
-	return &fakeAPI{routes: map[string]reply{
+	return &fakeAPI{handle: simpleNext("Coder"), routes: map[string]reply{
 		"GET /project":                       {200, `{"key":"CSR","name":"CSR","repository_url":"` + cfg.Repository + `","forge":"forgejo","base_branch":"main","environment":"default"}`},
 		"GET /teams/1":                       {200, `{"id":1,"name":"Dev","max_minutes":30,"agents":[{"name":"Coder","role":"coder","client":"claude"}]}`},
 		"GET /issues/CSR-7":                  {200, issue},
@@ -31,9 +32,10 @@ func soloRunAPI() *fakeAPI {
 }
 
 // A finished solo run keeps its session; when the issue is back in To do,
-// the next run fast-forwards the clone and resumes that session with the
-// follow-up prompt (CSR-145). A clone that cannot be fast-forwarded, or a
-// session pruning deleted, starts fresh with a comment that says so.
+// the next run fast-forwards the clone and offers that session to next as
+// kept, and resumes it when the step says so (CSR-145; the follow-up prompt
+// is the app's, EMBER-215). A clone that cannot be fast-forwarded, or a
+// session pruning deleted, is not offered, with a comment that says so.
 func TestAFollowUpResumesTheKeptSession(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -99,8 +101,13 @@ func TestAFollowUpResumesTheKeptSession(t *testing.T) {
 					commented += w
 				}
 			}
+			reqs := nextRequests(t, api)
+			offered := reqs[len(reqs)-2].Sessions
 			if tt.comment == "" {
-				want := client.Turn{Dir: clone, Prompt: FollowUpPrompt("CSR-7"), SessionID: "s1", MaxTurns: 50, MaxMinutes: 30, Idle: defaultIdle, Author: "Dev / Coder", Token: "scoped"}
+				if len(offered) != 1 || offered[0] != (cinderline.ResumableSession{Issue: "CSR-7", Agent: "Coder", Origin: "kept"}) {
+					t.Fatalf("sessions offered = %+v, want s1 as kept", offered)
+				}
+				want := client.Turn{Dir: clone, Prompt: "Do CSR-7.", SessionID: "s1", MaxTurns: 50, MaxMinutes: 30, Idle: defaultIdle, Author: "Dev / Coder", Token: "scoped"}
 				if second != want {
 					t.Fatalf("second turn = %+v, want %+v", second, want)
 				}
@@ -108,8 +115,8 @@ func TestAFollowUpResumesTheKeptSession(t *testing.T) {
 					t.Fatalf("comments %q, %d prepares left; want none and the kept clone", commented, len(ws.Prepares))
 				}
 			} else {
-				if second.SessionID != "" || !strings.Contains(second.Prompt, "# Your task: CSR-7") {
-					t.Fatalf("second turn = %+v, want a fresh session", second)
+				if second.SessionID != "" || len(offered) != 0 {
+					t.Fatalf("second turn = %+v, sessions offered %+v; want a fresh session", second, offered)
 				}
 				if !strings.Contains(commented, tt.comment) {
 					t.Fatalf("comments %q, want %q", commented, tt.comment)

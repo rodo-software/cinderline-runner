@@ -409,12 +409,13 @@ func TestPublishMergeRefused(t *testing.T) {
 
 // Ported from runner.test.mjs "a comment resume that fails twice still
 // publishes the finished work, with a note": a run that changed nothing
-// pushes nothing and opens no pull request; the report gets the unread note.
+// pushes nothing and opens no pull request; the report gets the unread note
+// as its foot, as the app's report_foot is for a solo run.
 func TestPublishNothingChanged(t *testing.T) {
 	r := newPubRun(true)
 	r.ws.Commits = []workspace.CommitReply{{}}
 	r.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}}
-	r.pub.Unread = true
+	r.pub.Foot = UnreadComments
 	if err := r.run(t); err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +425,7 @@ func TestPublishNothingChanged(t *testing.T) {
 	if len(r.forge.Calls()) != 0 {
 		t.Errorf("forge calls = %v", r.forge.Calls())
 	}
-	want := "The run finished without changing any files, so there is no pull request." + UnreadComments
+	want := "The run finished without changing any files, so there is no pull request.\n\n" + UnreadComments
 	if got := r.comment(); got != want {
 		t.Errorf("comment = %q", got)
 	}

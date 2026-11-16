@@ -66,20 +66,11 @@ func (p Project) verify(ctx context.Context, c *cinderline.Client, cl client.Cli
 			log.Warn("push failed", "err", err)
 		}
 		p.progress(ctx, c, top, fmt.Sprintf("Checking %s (try %d)", ref, fixes+1))
-		out, err := p.Env.Run(ctx, environment.Spec{
-			Issue: path.Base(turn.Dir),
-			Dir:   turn.Dir,
-			// The agent's mounts without its client state and tools.
-			Mounts: []string{
-				"-v", workspace.Volume(p.Config.ID(), "repo") + ":" + workspace.RepoPath + ":ro",
-				"-v", workspace.Volume(p.Config.ID(), "runs") + ":" + workspace.RunsPath,
-			},
-			Cmd:     []string{"sh", "-c", check},
-			Timeout: time.Duration(turn.MaxMinutes) * time.Minute,
-		})
-		var exit interface{ ExitCode() int }
+		failed, tail, err := p.runCheck(ctx, turn.Dir, check, turn.MaxMinutes)
 		switch {
-		case err == nil:
+		case err != nil:
+			return checked{Result: res}, err
+		case !failed:
 			log.Info("checks passed", "fixes", fixes)
 			v := "Checks passed on the first try."
 			if fixes == 1 {
@@ -88,13 +79,8 @@ func (p Project) verify(ctx context.Context, c *cinderline.Client, cl client.Cli
 				v = fmt.Sprintf("Checks passed after %d fixes.", fixes)
 			}
 			return checked{Verdict: v, Result: res}, nil
-		case ctx.Err() != nil:
-			return checked{Result: res}, ctx.Err()
-		case !errors.As(err, &exit) && !errors.Is(err, environment.ErrTimeout):
-			return checked{Result: res}, fmt.Errorf("the check could not run: %w", err)
 		}
-		tail := environment.Tail(out)
-		log.Info("checks failed", "fixes", fixes, "err", err)
+		log.Info("checks failed", "fixes", fixes)
 		if fixes == maxFixes {
 			return checked{Failed: true, Result: res, Verdict: fmt.Sprintf("**Checks failed** after %d fixes. The last lines of `%s`:\n\n```\n%s\n```", maxFixes, check, tail)}, nil
 		}
@@ -123,4 +109,31 @@ func (p Project) verify(ctx context.Context, c *cinderline.Client, cl client.Cli
 			log.Warn("fix run failed", "err", err) // the next check decides
 		}
 	}
+}
+
+// runCheck runs check in dir, with the agent's clone mounts but without its
+// client state, tools or credentials, limited to maxMinutes. failed is a
+// check that ran and failed, with the tail of its output; err is a stop or
+// a check that could not run.
+func (p Project) runCheck(ctx context.Context, dir, check string, maxMinutes int) (failed bool, tail string, err error) {
+	out, err := p.Env.Run(ctx, environment.Spec{
+		Issue: path.Base(dir),
+		Dir:   dir,
+		Mounts: []string{
+			"-v", workspace.Volume(p.Config.ID(), "repo") + ":" + workspace.RepoPath + ":ro",
+			"-v", workspace.Volume(p.Config.ID(), "runs") + ":" + workspace.RunsPath,
+		},
+		Cmd:     []string{"sh", "-c", check},
+		Timeout: time.Duration(maxMinutes) * time.Minute,
+	})
+	var exit interface{ ExitCode() int }
+	switch {
+	case err == nil:
+		return false, "", nil
+	case ctx.Err() != nil:
+		return false, "", ctx.Err()
+	case !errors.As(err, &exit) && !errors.Is(err, environment.ErrTimeout):
+		return false, "", fmt.Errorf("the check could not run: %w", err)
+	}
+	return true, environment.Tail(out), nil
 }

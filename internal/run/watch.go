@@ -122,31 +122,37 @@ func (p Project) turn(ctx context.Context, c *cinderline.Client, cl client.Clien
 // no work is lost (preserve first, report second, EMBER-143), moves ref to
 // Blocked when the runner stopped it on its own, and leaves a note with the
 // branch, the commit and the agent's last report. A failed push is said in
-// the note; the clone keeps the commit and the next start pushes it.
+// the note; the clone keeps the commit and the next start pushes it. A
+// generic run (nil ws) pushes nothing (CSR-75).
 func (p Project) halt(ctx context.Context, c *cinderline.Client, ws workspace.Workspace, ref string, t client.Turn, res client.Result, stop *stopError) error {
 	log := p.Log.With("project", p.Config.Key, "issue", ref)
 	branch := name.Name + "/" + ref
-	if _, err := ws.Commit(ctx, t.Dir, t.Author, ref+": work until the runner stopped the agent"); err != nil {
-		log.Warn("stopped work not committed", "err", err)
-	}
-	head, err := ws.Head(ctx, t.Dir)
-	if err != nil {
-		head = "(unknown)"
-	}
-	where := "is pushed to"
-	if err := ws.Push(ctx, t.Dir, branch); err != nil {
-		log.Warn("stopped work not pushed", "err", err)
-		where = "is not pushed yet; the runner pushes it at its next start. It waits in the run's clone, on"
+	work := ""
+	if ws != nil {
+		if _, err := ws.Commit(ctx, t.Dir, t.Author, ref+": work until the runner stopped the agent"); err != nil {
+			log.Warn("stopped work not committed", "err", err)
+		}
+		head, err := ws.Head(ctx, t.Dir)
+		if err != nil {
+			head = "(unknown)"
+		}
+		where := "is pushed to"
+		if err := ws.Push(ctx, t.Dir, branch); err != nil {
+			log.Warn("stopped work not pushed", "err", err)
+			where = "is not pushed yet; the runner pushes it at its next start. It waits in the run's clone, on"
+		}
+		work = fmt.Sprintf(" Its work, commit %s, %s branch `%s`.", head, where, branch)
+		log = log.With("commit", head)
 	}
 	if stop.block {
 		move(ctx, c, ref, "blocked", "in_progress")
 	}
-	note := fmt.Sprintf("**Review this manually**: the runner stopped the agent because %s. Its work, commit %s, %s branch `%s`.", stop.why, head, where, branch)
+	note := "**Review this manually**: the runner stopped the agent because " + stop.why + "." + work
 	if res.Report != "" {
 		note += "\n\nThe agent's last report:\n\n" + res.Report
 	}
 	note += "\n\nMove the issue to To do to let the agent go on from there."
 	p.comment(ctx, c, ref, note)
-	log.Warn("agent stopped", "why", stop.why, "commit", head)
+	log.Warn("agent stopped", "why", stop.why)
 	return fmt.Errorf("%w: %s", errHalted, stop.why)
 }
