@@ -1,4 +1,4 @@
-# Cinderline runner
+# Cinderline runner 
 
 The Cinderline runner is a native Go program on a developer's machine that takes To do issues from a Cinderline instance, runs an agent team on each in its own Docker container, pushes a branch and opens a pull request.
 
