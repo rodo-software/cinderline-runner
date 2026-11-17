@@ -198,7 +198,7 @@ services:
       retries: 30
 ```
 
-The agent's image here is the default image. For another toolchain, put a Dockerfile beside the file and give the agent service `build: .` instead of `image` (this repository's `.cinderline/` is an example); the image needs `/bin/sh` and runs as uid 1000.
+The agent's image here is the default image. For another toolchain, see "A project's own toolchain" below.
 
 A file is refused, with the reason in a progress line on the issue, when:
 
@@ -208,6 +208,35 @@ A file is refused, with the reason in a progress line on the issue, when:
 - a volume is external or sets anything (`driver`, `driver_opts`, `name`, `labels`), or a network is external;
 - a secret or config comes from the environment;
 - a build context, Dockerfile, `env_file`, secret or config file lies outside the repository. Symlinks in the repository are left out of the copy compose reads.
+
+### A project's own toolchain
+
+A project that needs a language or tool the default image lacks brings its own agent image (decision 2026-11-16-project-toolchains):
+
+1. Put a Dockerfile and a `.cinderline/compose.yml` in the repository and merge them into the base branch. The runner reads only that branch. The agent service gets `build: .` to build the Dockerfile beside the file, or `image:` to pull a published image, but not both.
+2. An admin sets the project's environment to `docker` in Cinderline.
+
+The runner builds or pulls the image on its own machine before each turn. What the image needs:
+
+- `/bin/sh` and a glibc or musl loader: the agent CLIs come from the runner's tools volume, so the image needs none of them. It needs no git token either, because the runner fetches and pushes outside it. Install git anyway: the agents use it on their work.
+- Everything writable for uid 1000:1000, which the runner runs it as: `HOME` and the caches of the toolchain. Either give uid 1000 a user with a home, or set `HOME` and the caches to `/tmp`.
+- The toolchain at build time. During a turn the agent reaches only the hosts under "Network", and PyPI is not among them: add `pypi.org:443` and `files.pythonhosted.org:443` to the project's `allow_hosts` if its agents install Python packages.
+
+The agent service's `command`, `entrypoint`, `user` and mounts are ignored; its `environment` is used. Other services, such as a database, start beside it as in the MySQL example above.
+
+Examples, each a Dockerfile and a `compose.yml` to copy into `.cinderline/`. Each passes the check above:
+
+- Go: this repository's own [`.cinderline/`](.cinderline/), with staticcheck and govulncheck, `HOME` in `/tmp`.
+- Python: [`docs/toolchains/python/`](docs/toolchains/python/), with pytest and ruff in a virtual environment uid 1000 owns.
+- Node: [`docs/toolchains/node/`](docs/toolchains/node/), whose `node` user is uid 1000 already.
+
+Each `compose.yml` is the same three lines:
+
+```yaml
+services:
+  agent:
+    build: .
+```
 
 ## Update
 

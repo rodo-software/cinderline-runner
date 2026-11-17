@@ -133,7 +133,6 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 
 - Build the push scan: before a push, look for the secrets the runner knows; a hit stops the push and the issue is blocked with a note naming the kind of secret and the place. A match on a well-known shape of unknown secret only warns. After a hit the clone and session are kept. (CSR-190; 2026-11-11-secret-redaction; Willem 2026-11-17, answer 20; 2026-11-17-open-questions-answered, point 2)
 - Slim the default image back to PHP 8.4, Composer, Node 22 and git, then publish and pin it again. (2026-11-16-project-toolchains; Willem 2026-11-17, answer 21)
-- Add small example toolchain files for Go, Python and Node to the README. (2026-11-16-project-toolchains)
 - Force Docker's built-in seccomp profile on every agent container and on a project's compose services (`--security-opt seccomp=builtin`), so isolation does not depend on the machine's Docker settings. (2026-11-17-open-questions-answered, point 1)
 
 ## Known gaps between the rules and the code
