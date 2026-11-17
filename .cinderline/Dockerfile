@@ -1,6 +1,6 @@
 # This project's agent image in the docker environment (decision
-# 2026-11-16-project-toolchains point 2): the pins of images/default/Dockerfile
-# for Go, without PHP, Composer and Node. Agent CLIs come from the tools
+# 2026-11-16-project-toolchains point 2): the Go pins the default image held until
+# CLR-185, without PHP, Composer and Node. Agent CLIs come from the tools
 # volume. The golang bookworm image already holds git, and gcc and libc6-dev
 # for go test -race.
 FROM golang:1.27.4-bookworm

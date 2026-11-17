@@ -1,6 +1,6 @@
 # Go in the default image
 
-- **Status:** Accepted
+- **Status:** Superseded by 2026-11-16-project-toolchains (CLR-185)
 - **Date:** 2026-11-06
 - **Source:** Decided by Willem on 2026-11-06 on CSR-31, option A of three; proposed by Claude. Changes the plan's M4 `Environment` item.
 
