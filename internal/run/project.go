@@ -44,11 +44,14 @@ func OutboxFile(state string, p config.Project) string {
 // Project is one configured project: what its runs need, and what its loop
 // knows now.
 type Project struct {
-	Config  config.Project
-	Secrets *secrets.Secrets
-	State   string                  // the host state folder (config.Paths.State)
-	Env     environment.Environment // where the project's turns run
-	Log     *slog.Logger
+	Config config.Project
+	// Providers are the runner's model providers, the same for every project
+	// (decision 2026-11-17-local-model-providers).
+	Providers []config.Provider
+	Secrets   *secrets.Secrets
+	State     string                  // the host state folder (config.Paths.State)
+	Env       environment.Environment // where the project's turns run
+	Log       *slog.Logger
 
 	Clients   map[string]client.Client // by agent client name
 	Workspace workspace.Workspace
@@ -66,7 +69,7 @@ type Project struct {
 	deleteSession func(ctx context.Context, ref, session string) error                  // a session's files on the state volume
 	prepare       func(ctx context.Context, proj cinderline.Project, base string) error // the environment and the tools mount
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
-	detect        func(ctx context.Context) []cinderline.ReportClient
+	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
 	image         string // the agent image the tools mount was filled for; only runs touch it, one at a time
 
 	detectMu sync.Mutex    // one detection at a time
@@ -78,10 +81,13 @@ type Project struct {
 	status  localapi.ProjectStatus
 	stopRun context.CancelCauseFunc // ends the agent turn in flight; nil while none runs
 	stopRef string                  // the run whose turn stopRun ends
+
+	openRouter bool // the last detection found OpenCode's OpenRouter key usable; guarded by mu
 }
 
-// NewProject builds a project's dependencies.
-func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *environment.Docker, log *slog.Logger) (*Project, error) {
+// NewProject builds a project's dependencies; providers are the runner's
+// model providers, which every project's OpenCode agents can use.
+func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Secrets, state string, env *environment.Docker, log *slog.Logger) (*Project, error) {
 	gitToken, _, err := sec.Get(cfg, secrets.GitToken)
 	if err != nil {
 		return nil, err
@@ -92,6 +98,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	p := &Project{
 		detected:  make(chan struct{}),
 		Config:    cfg,
+		Providers: providers,
 		Secrets:   sec,
 		State:     state,
 		Env:       env,
@@ -100,15 +107,23 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 		Workspace: ws,
 	}
 	mcpURL := strings.TrimRight(cfg.URL, "/") + "/mcp"
+	clientProviders, err := modelProviders(providers, sec)
+	if err != nil {
+		return nil, err
+	}
 	var clis []*client.CLI // the real clients, which get the tools mount
 	for name, kind := range keys {
 		cred, _, err := sec.Get(cfg, kind)
 		// Without a keychain key, Claude Code, Codex and Gemini CLI use the
-		// login that `login` stored on the state volume.
-		if err != nil && !(errors.Is(err, secrets.ErrNotFound) && (name == "claude" || name == "codex" || name == "gemini")) {
+		// login that `login` stored on the state volume, and OpenCode the
+		// runner's providers.
+		if err != nil && !(errors.Is(err, secrets.ErrNotFound) && (name == "claude" || name == "codex" || name == "gemini" || name == "opencode" && len(providers) > 0)) {
 			continue
 		}
 		cl := &client.CLI{Name: name, Project: cfg.ID(), Env: env, Exec: exec, Credential: cred, BaseURL: cfg.OpenAIBaseURL, Vertex: cfg.GeminiVertex, MCPURL: mcpURL}
+		if name == "opencode" {
+			cl.Providers = clientProviders
+		}
 		p.Clients[name], clis = cl, append(clis, cl)
 	}
 	p.Forge = func(kind string) (forge.Forge, error) {
@@ -116,7 +131,7 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	}
 	p.prepare = func(ctx context.Context, proj cinderline.Project, base string) error {
 		var compose *environment.Compose
-		// existing is not built yet and keeps the default environment.
+		// Any environment other than docker is the default one.
 		if proj.Environment == "docker" {
 			// The file is read from the repo volume's base branch: fetch it first.
 			if err := ws.Fetch(ctx); err != nil {
@@ -161,20 +176,34 @@ func NewProject(cfg config.Project, sec *secrets.Secrets, state string, env *env
 	p.deleteSession = func(ctx context.Context, ref, session string) error {
 		return client.DeleteSession(ctx, exec, cfg.ID(), ref, session)
 	}
-	p.detect = func(ctx context.Context) []cinderline.ReportClient {
+	p.detect = func(ctx context.Context) ([]cinderline.ReportClient, bool) {
 		image, err := env.Image(ctx)
 		if err != nil {
 			p.Log.Warn("detection: no image", "project", cfg.Key, "err", err)
-			return allMissingBinary()
+			return allMissingBinary(), false
 		}
 		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
 		if err != nil {
 			p.Log.Warn("detection: no tools mount", "project", cfg.Key, "err", err)
-			return allMissingBinary()
+			return allMissingBinary(), false
 		}
-		return detectClients(ctx, exec, cfg, sec, image, mount, p.Log)
+		return detectClients(ctx, exec, cfg, len(providers) > 0, sec, image, mount, p.Log)
 	}
 	return p, nil
+}
+
+// modelProviders are the runner's providers with their optional runner-wide
+// keys (decision 2026-11-17-local-model-providers).
+func modelProviders(providers []config.Provider, sec *secrets.Secrets) (map[string]client.Provider, error) {
+	m := map[string]client.Provider{}
+	for _, p := range providers {
+		key, _, err := sec.Get(secrets.Runner, secrets.ProviderKey(p.Name))
+		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return nil, err
+		}
+		m[p.Name] = client.Provider{BaseURL: p.BaseURL, Key: key}
+	}
+	return m, nil
 }
 
 // Detect reruns client detection and keeps the result for the report.
@@ -184,13 +213,14 @@ func (p *Project) Detect(ctx context.Context) {
 	}
 	p.detectMu.Lock()
 	defer p.detectMu.Unlock()
-	got := p.detect(ctx)
+	got, openRouter := p.detect(ctx)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.clients == nil && p.detected != nil {
 		close(p.detected)
 	}
 	p.clients = append([]cinderline.ReportClient{}, got...) // never nil: detection has a result
+	p.openRouter = openRouter
 }
 
 // hasClients reports whether client detection has had a result.

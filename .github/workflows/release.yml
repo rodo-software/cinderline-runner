@@ -1,14 +1,12 @@
-# Draft for Willem (CSR-41): agents may not edit .github/ (AGENTS.md; decision
-# 2026-11-05-ci), so this file waits here. To put it in place:
-#   1. Copy this file to .github/workflows/release.yml and merge it to main.
-#   2. Tag a release on main and push the tag, for example
+# To release:
+#   1. Tag a release on main and push the tag, for example
 #      git tag v0.1.0 && git push origin v0.1.0. A tag with a pre-release
 #      suffix such as v0.1.0-rc1 is marked as a pre-release.
-#   3. Check the release page: six archives, checksums.txt, and release notes
+#   2. Check the release page: six archives, checksums.txt, and release notes
 #      that start with the pinned Claude Code, OpenCode and ponytail versions,
-#      followed by the commits since the previous tag. Once the repository is
-#      public (decision 2026-11-16-attest-when-public), check the attestation
-#      with: gh attestation verify <archive> --repo rodo-software/cinderline-runner
+#      followed by the commits since the previous tag. Check the attestation
+#      (decision 2026-11-16-attest-when-public) with:
+#      gh attestation verify <archive> --repo rodo-software/cinderline-runner
 # The release runs on GitHub Actions, not Forgejo, because artifact
 # attestations exist only there (decision 2026-11-05-ci; decision
 # 2026-11-05-runner-rewrite-details item 16). There is no signing key: the
@@ -43,8 +41,8 @@ jobs:
           args: release --clean --release-header ${{ runner.temp }}/release-header.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Skipped while the repository is private: the organization's plan stores no
-      # attestations for private repositories (decision 2026-11-16-attest-when-public).
+      # The repository is public; the step would skip itself on a private one,
+      # for which the organization's plan stores no attestations (decision 2026-11-16-attest-when-public).
       - uses: actions/attest-build-provenance@v4
         if: ${{ !github.event.repository.private }}
         with:

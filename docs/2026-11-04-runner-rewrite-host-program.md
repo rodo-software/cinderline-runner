@@ -1,6 +1,6 @@
 # The runner is rewritten in Go as a native host program in its own repository; agents run in containers
 
-> **Status note (2026-11-05):** points 11 and 19 of decision [2026-11-05-runner-rewrite-details](decisions/2026-11-05-runner-rewrite-details.md) supersede this record's name and service lines: the command is `cinderline`, not `ember`, and on Windows the daemon is a logon scheduled task, not a Windows service. The app was called Ember when this record was written; this copy says Cinderline, except for the superseded command name.
+> **Status note (2026-11-05):** points 11 and 19 of decision [2026-11-05-runner-rewrite-details](decisions/archive/2026-11-05-runner-rewrite-details.md) supersede this record's name and service lines: the command is `cinderline`, not `ember`, and on Windows the daemon is a logon scheduled task, not a Windows service. The app was called Ember when this record was written; this copy says Cinderline, except for the superseded command name.
 
 - **Status:** Accepted
 - **Date:** 2026-11-04

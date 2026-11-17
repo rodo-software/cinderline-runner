@@ -62,6 +62,10 @@ func hostPort(hp string) (host, port string, ok bool) {
 	return strings.ToLower(host), port, true
 }
 
+// dial connects to an allowed target; the tests map host.docker.internal,
+// which the runner maps for a local model provider with --add-host.
+var dial = (&net.Dialer{Timeout: 30 * time.Second}).DialContext
+
 type proxy struct {
 	allow   map[string]bool
 	log     *slog.Logger
@@ -73,8 +77,8 @@ func newProxy(allow map[string]bool, out io.Writer) http.Handler {
 		allow: allow,
 		log:   slog.New(slog.NewJSONHandler(out, nil)),
 		// A no-op Rewrite keeps the request's absolute URL as the target.
-		// The zero Transport ignores proxy variables.
-		forward: &httputil.ReverseProxy{Rewrite: func(*httputil.ProxyRequest) {}, Transport: &http.Transport{}},
+		// A Transport without Proxy ignores proxy variables.
+		forward: &httputil.ReverseProxy{Rewrite: func(*httputil.ProxyRequest) {}, Transport: &http.Transport{DialContext: dial}},
 	}
 }
 
@@ -116,7 +120,7 @@ func (p *proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host not allowed", http.StatusForbidden)
 		return
 	}
-	up, err := net.DialTimeout("tcp", r.Host, 30*time.Second)
+	up, err := dial(r.Context(), "tcp", r.Host)
 	if err != nil {
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 		return

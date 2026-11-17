@@ -23,7 +23,8 @@ Request:
     "clients": [{"name": "claude", "version": "2.1.0", "state": "ready"}],
     "environments": ["default", "docker"],
     "errors": [{"kind": "not_started", "issue": "EMBER-12", "message": "…"}],
-    "refused_connections": 0
+    "refused_connections": 0,
+    "model_providers": ["openrouter", "cerebellum"]
   },
   "running": ["EMBER-12"],
   "idle": true,
@@ -32,7 +33,7 @@ Request:
 }
 ```
 
-- `report`: always sent by the loop, always whole. A poll without it only asks which project the token belongs to (`add` and `key set` check a token that way): the answer has `poll_after`, `review_after` and `project`, and nothing is stored, blocked or offered. Client states are `ready`, `missing_binary`, `missing_credential`, `invalid_credential`. Error kinds are `repository_mismatch` (no issue) and `not_started` (with `issue`).
+- `report`: always sent by the loop, always whole. A poll without it only asks which project the token belongs to (`add` and `key set` check a token that way): the answer has `poll_after`, `review_after` and `project`, and nothing is stored, blocked or offered. Client states are `ready`, `missing_binary`, `missing_credential`, `invalid_credential`. Error kinds are `repository_mismatch` (no issue) and `not_started` (with `issue`). `model_providers` (optional; left out: none) names the model providers the runner can use for OpenCode, `openrouter` when its key is set plus each configured one; each name is lower-case letters, digits and dashes, starting with a letter or digit (decision 2026-11-17-local-model-providers).
 - `running`: the top-level issues the runner works on now, and those whose last report still waits in its outbox.
 - `idle`: the runner can start a run now.
 - `held` (optional): the issues the runner keeps a session or clone of. Sent when it is about to tidy up: at start and while idle.
@@ -70,7 +71,7 @@ What the app does, in this order:
 1. Stores the report and the heartbeat time on the token.
 2. **Unheld issues.** Every active top-level In progress issue of the project with a team that is not in `running` goes to Blocked with the app's note (it names the branch `<name>/<REF>` and says to move the issue to To do to run it again).
 3. **`stop`:** the `running` issues whose turn must end: archived, unknown, Cancelled or Backlog, or Blocked; only a Blocked issue whose latest comment is an agent's is left alone for one poll interval, because an agent that asked a person a question is ending its turn itself.
-4. **`job`** (only with `idle`, and never while the project is archived or its runners are paused): the first of the top 20 To do issues, in board order, that waits for nothing, has an active team, and whose team's agent clients are all `ready` in the report. It is an offer: nothing is claimed. The first issue passed over because a client is not ready gets one progress line saying which, written only when it differs from the issue's latest progress line; later ones in the same poll get none. `null`: no work.
+4. **`job`** (only with `idle`, and never while the project is archived or its runners are paused): the first of the top 20 To do issues, in board order, that waits for nothing, has an active team, and whose team's agent clients are all `ready` in the report, with every OpenCode agent's model provider (the part of its model before the first `/`) in `model_providers` (decision 2026-11-17-local-model-providers). The client is checked first: `opencode` is `ready` when its binary is there and at least one provider is usable, and which provider a model needs is the app's check, by name. It is an offer: nothing is claimed. The first issue passed over because a client is not ready or a provider is missing gets one progress line saying which ("Not started: the runner has no `cerebellum` model provider." for a provider), written only when it differs from the issue's latest progress line; later ones in the same poll get none. `null`: no work.
 5. **`held`** (when asked): per issue what to do with its session and clone. `keep`: part of a run (To do, In progress, Blocked). `expire`: the runner may delete it by its own age and disk limits. `drop`: delete it now (Done, Cancelled, archived, unknown).
 6. **`review`** (when asked). First the facts: for a trusted team's Review issue, `merged` sets `merge_status` to `success`; `closed`, `failed` or a conflict sets it to `issue`; `open` and `none` change nothing. Then the list: the active top-level Review issues with a team whose `merge_status` is not `success`, in board order, at most 200. `merge` says the runner may ask the forge to merge the pull request once it is current (a trusted team).
 
@@ -121,14 +122,14 @@ Request:
 | `resolve` | as `run`, and `not_verified` (the runner undid a merge it could not verify) | as `run` |
 | `check` | `passed`, `failed`, `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's) |
 | `merge` | `conflict` | `conflicts`, `commits` |
-| `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request` (URL), `conflicts`, `merge` (`merged`, `closed`, `pending`, `failed`; null when not asked), `commit`, `error` |
+| `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request` (URL), `conflicts`, `merge` (`merged`, `closed`, `failed`; `pending`: the runner asked the forge to merge and had not seen the merge when it moved on, at the wait's limit or because the issue was stopped during the wait; null: the runner did not ask the forge to merge, because the step did not say `merge` or the issue was stopped before it asked), `commit`, `error` |
 | `stop` | `pushed`, `not_pushed` | `commit`, `error` |
 
 A `stop` the app did not ask for is the runner's own failure (an error or panic in its code): it pushes what it can and reports `stop` with `error`.
 
 A `check` that was `stopped` ends like a `run` turn that was `stopped`: the app answers `stop`, then writes the "Review this manually" note and answers `done` with session `paused`; there is no fix turn.
 
-When the poll stops an issue while the runner publishes it, the runner still pushes and opens the pull request but does not ask the forge to merge it: it reports `published` with `merge: null`, also when the step said `merge: true` (decision 2026-11-17-second-audit-decisions). For a trusted team the app's finish report says the pull request is open and was not merged automatically because the issue was stopped during publishing, so a person merges it by hand; `merge_status` stays as it is, and the move to Review is refused harmlessly when the issue is no longer In progress.
+When the poll stops an issue while the runner publishes it, before it asked the forge to merge, the runner still pushes and opens the pull request but does not ask the forge to merge it: it reports `published` with `merge: null`, also when the step said `merge: true` (decision 2026-11-17-second-audit-decisions). For a trusted team the app's finish report says the pull request is open and was not merged automatically because the issue was stopped during publishing, so a person merges it by hand; `merge_status` stays as it is, and the move to Review is refused harmlessly when the issue is no longer In progress. A stop while the runner waits for a merge it already asked for is reported as `merge: pending`, like a wait that reached its limit; the finish report then says the forge merges it when CI is green and it had not merged yet when the runner moved on (Willem, 2026-11-17).
 
 `usage` is recorded on its issue, which must be the run's issue or one of its sub-issues (otherwise `422`). An agent that is no longer on the team, because it was renamed or removed during the run, is recorded under the name the runner sent; it never refuses the step.
 
@@ -140,6 +141,7 @@ When the poll stops an issue while the runner publishes it, the runner still pus
 | | `report.clients` | 50 items; `name`, `version` 100 each |
 | | `report.environments` | 10 items |
 | | `report.errors` | 50 items; `message` 2,000, `issue` 50 |
+| | `report.model_providers` | 50 items of 50 |
 | | `running` | 20 items of 50 |
 | | `held` | 200 items of 50 |
 | | `review` | 200 items; `ref` 50; `conflicts` 1,000 items of 1,000 |

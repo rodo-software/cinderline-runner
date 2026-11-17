@@ -47,3 +47,24 @@ func ProjectHosts(cinderlineURL string, allowHosts []string) []string {
 	}
 	return append(append(hosts, Registries...), allowHosts...)
 }
+
+// HostGateway is the name of the runner's own machine in the proxy
+// container, and only there (decision 2026-11-17-local-model-providers).
+const HostGateway = "host.docker.internal"
+
+// ProviderURL is a model provider's base URL as the agent reaches it, and
+// its host:port for the allowlist. A provider on the runner's own machine
+// (localhost, 127.0.0.1, ::1 or host.docker.internal) becomes HostGateway
+// on its port; config has checked the URL.
+func ProviderURL(rawURL string) (string, string) {
+	hp := HostPort(rawURL)
+	host, port, _ := net.SplitHostPort(hp)
+	switch host {
+	case "localhost", "127.0.0.1", "::1", HostGateway:
+	default:
+		return rawURL, hp
+	}
+	u, _ := url.Parse(rawURL)
+	u.Host = net.JoinHostPort(HostGateway, port)
+	return u.String(), u.Host
+}

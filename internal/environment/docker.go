@@ -120,7 +120,9 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := d.up(ctx, s.Issue, proxy, append(slices.Clip(d.Allow), s.Allow...)); err != nil {
+	// Only a turn's own provider maps the host, never the project's allow_hosts.
+	hostGateway := slices.ContainsFunc(s.Allow, func(hp string) bool { return strings.HasPrefix(hp, HostGateway+":") })
+	if err := d.up(ctx, s.Issue, proxy, append(slices.Clip(d.Allow), s.Allow...), hostGateway); err != nil {
 		return "", err
 	}
 	var p *composed
@@ -152,7 +154,8 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	agent := net + "-agent"
 	argv := append(append([]string{"docker", "run", "--rm", "--interactive"}, workspace.Labels(d.Project, s.Issue)...),
 		"--name", agent, "--network", net)
-	// No --add-host host.docker.internal: decision 2026-11-09-network-allowlist.
+	// No --add-host host.docker.internal: decision 2026-11-09-network-allowlist;
+	// a local provider maps it in the proxy only (2026-11-17-local-model-providers).
 	argv = append(append(argv, hardening...), "--user", workspace.AgentUser, "--workdir", s.Dir)
 	for _, kv := range env {
 		argv = append(argv, "-e", kv)
@@ -333,10 +336,12 @@ func (d *Docker) network(issue string) string {
 
 // up creates the issue's internal network, which has no route out and no
 // upstream DNS, starts the egress proxy on it as proxy, allowing allow, and
-// connects the proxy to the default bridge as its way out. What an earlier
+// connects the proxy to the default bridge as its way out. hostGateway maps
+// HostGateway to the runner's machine in the proxy, which reaches only the
+// ports allow lists on it. What an earlier
 // turn left under these names is removed first when it is in the way. A
 // failure leaves nothing behind.
-func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string) error {
+func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string, hostGateway bool) error {
 	labels := workspace.Labels(d.Project, issue)
 	net := d.network(issue)
 	create := append(append([]string{"docker", "network", "create", "--internal"}, labels...), net)
@@ -351,6 +356,9 @@ func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []strin
 	// No --rm: down removes them, and an automatic removal would race with that.
 	proxy := append(append([]string{"docker", "run", "--detach"}, labels...),
 		"--name", net+"-proxy", "--network", net, "--network-alias", "proxy")
+	if hostGateway {
+		proxy = append(proxy, "--add-host", HostGateway+":host-gateway")
+	}
 	proxy = append(append(append(proxy, hardening...), "--read-only", proxyImage), allow...)
 	for _, argv := range [][]string{proxy, {"docker", "network", "connect", "bridge", net + "-proxy"}} {
 		if _, err := d.exec(ctx, argv...); err != nil {

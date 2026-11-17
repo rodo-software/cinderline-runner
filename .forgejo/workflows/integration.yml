@@ -1,0 +1,29 @@
+# Linux integration tests (go test -tags integration): one issue end to end
+# against real Docker, a throwaway Forgejo and a fake app, and the egress
+# allowlist. They run on a Forgejo runner in host mode, labelled linux-host,
+# on a Linux machine with Docker (decision 2026-11-06-integration-ci-host-runner).
+# Host mode, not runs-on: docker: the test bind-mounts a folder from its
+# temp dir and reaches containers at their bridge IP, which only work
+# directly on the Docker host. The host needs git, gcc (for -race), a user
+# that can run docker, a daemon on its default seccomp profile (the allowlist
+# test checks that unshare is refused), and outbound HTTPS: Go, the pinned
+# agent CLIs (downloads.claude.ai, registry.npmjs.org, nodejs.org), images,
+# example.com and example.net. No secrets. The tools volume and the default
+# and proxy images stay on the host as caches, so only the first run
+# downloads about 400 MB and builds the images.
+name: integration
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+jobs:
+  linux-integration:
+    runs-on: linux-host
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -race -count=1 -tags integration -run Integration -timeout 30m -v ./internal/run/

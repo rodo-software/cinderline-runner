@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -31,18 +32,30 @@ type CLI struct {
 	Vertex     bool                    // Gemini: Credential is a Vertex AI express-mode key; false: the Gemini API
 	MCPURL     string                  // Cinderline's MCP endpoint, as the agent container reaches it
 	Tools      tools.Mount             // from tools.Tools.Mount for the Environment's image
+	// Providers are the runner's model providers by name, for OpenCode
+	// (decision 2026-11-17-local-model-providers).
+	Providers map[string]Provider
 }
 
 var _ Client = (*CLI)(nil)
+
+// Provider is a model provider of the project's: an OpenAI-compatible base
+// URL as configured, and its key; empty: none.
+type Provider struct{ BaseURL, Key string }
+
+// ErrNotStarted is a turn the CLI did not start, as its model's provider is
+// missing: no container ran.
+var ErrNotStarted = errors.New("turn not started")
 
 // kind is what differs between the agent CLIs.
 type kind struct {
 	env        func(c *CLI, t Turn) []string                 // the CLI's own environment
 	cmd        func(c *CLI, t Turn, session string) []string // the argv in the container
 	parse      func(out string) Result
-	hosts      func(c *CLI) []string
-	ownSession bool // the runner picks a fresh turn's session ID
-	libs       bool // needs Tools.OpenCodeEnv: on musl, the libraries from the tools volume
+	hosts      func(c *CLI, t Turn) []string
+	check      func(c *CLI, t Turn) error // nil: every turn can start
+	ownSession bool                       // the runner picks a fresh turn's session ID
+	libs       bool                       // needs Tools.OpenCodeEnv: on musl, the libraries from the tools volume
 }
 
 var kinds = map[string]kind{"claude": claude, "codex": codex, "opencode": opencode, "gemini": gemini}
@@ -54,7 +67,7 @@ var kinds = map[string]kind{"claude": claude, "codex": codex, "opencode": openco
 // unchecked against the CLIs; a missing one shows up as a refused host.
 func (c *CLI) Hosts() []string {
 	if k, ok := kinds[c.Name]; ok {
-		return k.hosts(c)
+		return k.hosts(c, Turn{})
 	}
 	return nil
 }
@@ -67,6 +80,11 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	k, ok := kinds[c.Name]
 	if !ok {
 		return Result{}, fmt.Errorf("unknown client %q", c.Name)
+	}
+	if k.check != nil {
+		if err := k.check(c, t); err != nil {
+			return Result{}, fmt.Errorf("%w: %w", ErrNotStarted, err)
+		}
 	}
 	if err := PrepareState(ctx, c.Exec, c.Project, c.Name); err != nil {
 		return Result{}, err
@@ -88,7 +106,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
 		Idle:    t.Idle,
-		Allow:   c.Hosts(),
+		Allow:   k.hosts(c, t),
 	})
 	res := k.parse(out)
 	res.SessionID = cmp.Or(res.SessionID, t.SessionID)

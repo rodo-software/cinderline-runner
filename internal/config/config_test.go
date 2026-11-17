@@ -421,3 +421,87 @@ func TestValidateWorkspace(t *testing.T) {
 		}
 	}
 }
+
+// Decision 2026-11-17-local-model-providers point 1: a provider is a name
+// (lower-case letters, digits and dashes, not openrouter, unique on the
+// runner, at the top of the config file, not per project) and an OpenAI-compatible base URL (http or https, a host, an
+// optional port and path, no user info).
+func TestValidateProviders(t *testing.T) {
+	ok := Project{URL: "https://a.example.com", Key: "WEB", Workspace: "default", Repository: "https://g.example.com/r.git"}
+	for _, good := range [][]Provider{
+		{{Name: "cerebellum", BaseURL: "http://studio.local:8080/v1"}},
+		{{Name: "local-1", BaseURL: "http://localhost:11434/v1"}, {Name: "lan", BaseURL: "https://192.168.1.5/v1"}},
+		{{Name: "v6", BaseURL: "http://[::1]:8080"}},
+		{{Name: "plain", BaseURL: "https://llm.example.com"}},
+	} {
+		if err := (&Config{Projects: []Project{ok}, Providers: good}).Validate(); err != nil {
+			t.Errorf("%+v: %v", good, err)
+		}
+	}
+	for name, bad := range map[string][]Provider{
+		"upper case":    {{Name: "Cere", BaseURL: "http://h:1/v1"}},
+		"underscore":    {{Name: "a_b", BaseURL: "http://h:1/v1"}},
+		"empty name":    {{Name: "", BaseURL: "http://h:1/v1"}},
+		"leading dash":  {{Name: "-a", BaseURL: "http://h:1/v1"}},
+		"too long":      {{Name: strings.Repeat("a", 51), BaseURL: "http://h:1/v1"}},
+		"openrouter":    {{Name: "openrouter", BaseURL: "http://h:1/v1"}},
+		"twice":         {{Name: "a", BaseURL: "http://h:1/v1"}, {Name: "a", BaseURL: "http://g:1/v1"}},
+		"ftp":           {{Name: "a", BaseURL: "ftp://h/v1"}},
+		"no scheme":     {{Name: "a", BaseURL: "h:1/v1"}},
+		"no host":       {{Name: "a", BaseURL: "http:///v1"}},
+		"user info":     {{Name: "a", BaseURL: "http://u:p@h:1/v1"}},
+		"query":         {{Name: "a", BaseURL: "http://h:1/v1?x=1"}},
+		"fragment":      {{Name: "a", BaseURL: "http://h:1/v1#x"}},
+		"port zero":     {{Name: "a", BaseURL: "http://h:0/v1"}},
+		"port too high": {{Name: "a", BaseURL: "http://h:70000/v1"}},
+		"space":         {{Name: "a", BaseURL: "http://h:1/v 1"}},
+		"bad host":      {{Name: "a", BaseURL: "http://h*st:1/v1"}},
+	} {
+		if err := (&Config{Projects: []Project{ok}, Providers: bad}).Validate(); err == nil || !strings.Contains(err.Error(), "provider") {
+			t.Errorf("%s: err = %v, want a provider error", name, err)
+		}
+	}
+	// A password in the URL is never repeated in the error.
+	if err := (&Config{Providers: []Provider{{Name: "a", BaseURL: "http://u:hunter2@h:1/v1"}}}).Validate(); err == nil || strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// Providers are a top-level list; a project entry with its own is refused
+// as an unknown field (pre-release, no migration).
+func TestLoadProvidersAtTheTop(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	project := `{"url":"https://a.example.com","key":"WEB","workspace":"default","repository":"https://g.example.com/r.git"`
+	if err := os.WriteFile(path, []byte(`{"version":1,"providers":[{"name":"cerebellum","base_url":"http://localhost:8080/v1"}],"projects":[`+project+`}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || len(cfg.Providers) != 1 || cfg.Providers[0].Name != "cerebellum" {
+		t.Fatalf("Load = %+v, %v", cfg, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":1,"projects":[`+project+`,"providers":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "providers") {
+		t.Errorf("a project's providers: %v, want an unknown field", err)
+	}
+}
+
+// Decision 2026-11-17-local-model-providers point 3: allow_hosts never
+// opens the runner's own machine; a provider does, on one port.
+func TestAllowHostsRefusesTheRunnersMachine(t *testing.T) {
+	ok := Project{URL: "https://a.example.com", Key: "WEB", Workspace: "default", Repository: "https://g.example.com/r.git"}
+	for _, hp := range []string{"localhost:8080", "LocalHost:1", "127.0.0.1:11434", "127.1.2.3:80", "host.docker.internal:8080", "HOST.DOCKER.INTERNAL:1", "[::1]:8080"} {
+		p := ok
+		p.AllowHosts = []string{hp}
+		err := (&Config{Projects: []Project{p}}).Validate()
+		if err == nil || !strings.Contains(err.Error(), "add-provider") {
+			t.Errorf("%s: %v, want refused with a pointer to add-provider", hp, err)
+		}
+	}
+	p := ok
+	p.AllowHosts = []string{"studio.lan:1234", "192.168.1.5:8080", "localhost.example.com:443"}
+	if err := (&Config{Projects: []Project{p}}).Validate(); err != nil {
+		t.Errorf("ordinary hosts: %v", err)
+	}
+}

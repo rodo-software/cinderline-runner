@@ -9,7 +9,7 @@ package run
 //
 //	go test -race -tags integration -run Integration -timeout 30m ./internal/run/
 //
-// See docs/ci/integration.yml for the CI job.
+// .forgejo/workflows/integration.yml runs it in CI.
 
 import (
 	"context"

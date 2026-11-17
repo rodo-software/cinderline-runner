@@ -5,9 +5,10 @@ package run
 // The M8 check of plan section 3 (CSR-63): an agent reaches what its run
 // needs and nothing else. Real Docker, the real proxy image built from
 // images/proxy and the default image as the agent. It needs outbound HTTPS
-// to example.com and example.net. The integration CI job
-// (.github/workflows/integration.yml) runs it with the M4 test:
-// -run Integration ./internal/run/.
+// to example.com and example.net, and a Docker daemon with its default
+// seccomp profile (a daemon set to seccomp unconfined lets unshare through).
+// The integration CI job (.forgejo/workflows/integration.yml) runs it with
+// the M4 test: -run Integration ./internal/run/.
 
 import (
 	"bytes"

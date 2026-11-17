@@ -18,7 +18,7 @@ var gemini = kind{
 	},
 	parse: parseGemini,
 	// The Gemini API, or Vertex AI's global endpoint for an express-mode key.
-	hosts: func(c *CLI) []string {
+	hosts: func(c *CLI, _ Turn) []string {
 		switch {
 		case c.Credential == "":
 			return []string{"generativelanguage.googleapis.com:443", "cloudcode-pa.googleapis.com:443", "oauth2.googleapis.com:443"}

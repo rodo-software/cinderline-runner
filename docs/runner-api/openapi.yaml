@@ -319,7 +319,7 @@ components:
               name:
                 type: string
                 maxLength: 100
-                description: The agent CLI, as a team's agent names its `client`, e.g. `claude`, `codex`, `opencode`.
+                description: The agent CLI, as a team's agent names its `client`, e.g. `claude`, `codex`, `gemini`, `opencode`.
               version:
                 type: [string, 'null']
                 maxLength: 100
@@ -331,7 +331,7 @@ components:
           maxItems: 10
           items:
             type: string
-            enum: [default, docker, existing]
+            enum: [default, docker]
         errors:
           type: array
           maxItems: 50
@@ -354,6 +354,14 @@ components:
           type: integer
           minimum: 0
           description: The connections the runner's egress proxy refused.
+        model_providers:
+          type: array
+          maxItems: 50
+          description: The model providers the runner can use for OpenCode, `openrouter` when its key is set plus each configured one (decision 2026-11-17-local-model-providers). Left out, the runner has none. An issue whose team has an OpenCode agent on a provider not named here is not offered.
+          items:
+            type: string
+            maxLength: 50
+            pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
 
     ReviewFact:
       type: object
@@ -395,9 +403,13 @@ components:
             is archived or its runners are paused: the first of the top 20 To
             do issues, in board order, that waits for nothing, has an active
             team, and whose team's agent clients are all `ready` in the
-            report. Nothing is claimed: the run's first `next` request does
-            that. The first issue passed over because a client is not ready
-            gets a progress line saying which. Null: no work.
+            report, with every OpenCode agent's model provider (its model
+            before the first `/`) in `model_providers`. The client is checked
+            first; which provider a model needs is the app's check, by name.
+            Nothing is claimed: the run's first `next` request does that. The
+            first issue passed over because a client is not ready or a
+            provider is missing gets a progress line saying which. Null: no
+            work.
         stop:
           type: array
           description: The `running` issues whose turn must end now, with the outcome `stopped`. The issue is unknown, archived, Cancelled or in Backlog, or Blocked; only a Blocked issue whose latest comment is an agent's is left alone for one poll interval, because an agent that asked a person a question is ending its turn itself.
@@ -446,6 +458,7 @@ components:
           description: The slug of the project's workspace; null while the instance has none.
         repository_url:
           type: [string, 'null']
+          description: '`https://host[:port]/path` without a user name or password; the app accepts nothing else. One saved before it did may be in another form, which the runner reports as `repository_mismatch`.'
         forge:
           type: [string, 'null']
           enum: [github, gitlab, forgejo, null]
@@ -633,8 +646,9 @@ components:
         A `check` that was `stopped` ends as a `stopped` turn: `stop`, then
         `done` with session `paused`, and no fix turn.
 
-        A `publish` during which the poll stopped the issue still pushes and
-        opens the pull request but does not ask the forge to merge it: it
+        A `publish` during which the poll stopped the issue before the runner
+        asked the forge to merge still pushes and opens the pull request but
+        does not ask the forge to merge it: it
         reports `published` with `merge` null, also when the step said
         `merge: true`. The app then reports the pull request as open and not
         merged because of the stop, and leaves the merge status as it is.
@@ -684,7 +698,7 @@ components:
         merge:
           type: [string, 'null']
           enum: [merged, closed, pending, failed, null]
-          description: How the merge the step asked for ended; null when not asked, or when the poll stopped the issue during the publish.
+          description: 'How the merge ended. `pending`: the runner asked the forge to merge and had not seen the merge when it moved on, at the wait''s limit or because the poll stopped the issue during the wait. Null: the runner did not ask the forge to merge, because the step did not say `merge` or the poll stopped the issue before it asked.'
         commit:
           type: [string, 'null']
           maxLength: 100

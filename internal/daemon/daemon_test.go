@@ -252,8 +252,33 @@ func TestPollAtStart(t *testing.T) {
 	}
 	delete(r, "clients")
 	got, _ := json.Marshal(r)
-	if want := `{"environments":["default","docker"],"errors":[],"refused_connections":0,"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
+	if want := `{"environments":["default","docker"],"errors":[],"model_providers":[],"refused_connections":0,"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
 		t.Errorf("report = %s, want Bearer tok-A with %s", a.polls[0], want)
+	}
+}
+
+// Decision 2026-11-17-local-model-providers: the runner's providers reach
+// the report of every project.
+func TestEveryProjectReportsTheRunnersProviders(t *testing.T) {
+	keyring.MockInit()
+	a, b := newApp(t), newApp(t)
+	p := paths(t)
+	pa, pb := project(a.url, "A"), project(b.url, "B")
+	cfg := &config.Config{Projects: []config.Project{pa, pb}, Providers: []config.Provider{{Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}}
+	if err := cfg.Save(p.File); err != nil {
+		t.Fatal(err)
+	}
+	setToken(t, p, pa)
+	setToken(t, p, pb)
+	start(t, p)
+	for _, app := range []*app{a, b} {
+		waitFor(t, "a poll", func() bool { return app.count() > 0 })
+		app.mu.Lock()
+		poll := app.polls[0]
+		app.mu.Unlock()
+		if !strings.Contains(poll, `"model_providers":["lan"]`) {
+			t.Errorf("report %s, want lan", poll)
+		}
 	}
 }
 

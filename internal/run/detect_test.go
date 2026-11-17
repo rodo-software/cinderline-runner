@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -96,7 +97,8 @@ var testCfg = config.Project{URL: "https://test.example.com", Key: "TEST", Repos
 
 func testDetect(ctx context.Context, exec workspace.Exec, sec *secrets.Secrets, cfg config.Project) []cinderline.ReportClient {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return detectClients(ctx, exec, cfg, sec, "test-image", testMount, log)
+	got, _ := detectClients(ctx, exec, cfg, false, sec, "test-image", testMount, log)
+	return got
 }
 
 // Test that all tests pass.
@@ -476,7 +478,7 @@ func TestDetectScriptNoKeyOrBaseURLValueInArgv(t *testing.T) {
 		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", nil)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	got := detectClients(ctx, s.exec, cfg, sec, "test-image", testMount, log)
+	got, _ := detectClients(ctx, s.exec, cfg, false, sec, "test-image", testMount, log)
 
 	s.mu.Lock()
 	for _, call := range s.calls {
@@ -509,7 +511,7 @@ func TestDetectMountOpenCodeEnvInKeyCheck(t *testing.T) {
 		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", nil)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	got := detectClients(ctx, s.exec, testCfg, sec, "test-image", openCodeMount, log)
+	got, _ := detectClients(ctx, s.exec, testCfg, false, sec, "test-image", openCodeMount, log)
 	m := map[string]cinderline.ReportClient{}
 	for _, rc := range got {
 		m[rc.Name] = rc
@@ -528,13 +530,56 @@ func TestDetectMountOpenCodeEnvInKeyCheck(t *testing.T) {
 func TestDetectRefreshes(t *testing.T) {
 	p := &Project{}
 	n := 0
-	p.detect = func(context.Context) []cinderline.ReportClient {
+	p.detect = func(context.Context) ([]cinderline.ReportClient, bool) {
 		n++
-		return []cinderline.ReportClient{{Name: "claude", State: "ready"}}
+		return []cinderline.ReportClient{{Name: "claude", State: "ready"}}, true
 	}
 	p.Detect(context.Background())
 	p.Detect(context.Background())
-	if n != 2 || len(p.clients) != 1 {
+	if n != 2 || len(p.clients) != 1 || !p.openRouter {
 		t.Errorf("detection ran %d times, kept %v; want 2 and the result", n, p.clients)
+	}
+}
+
+// Decision 2026-11-17-local-model-providers: OpenCode is ready when its
+// binary is there and at least one provider is usable, OpenRouter by a key
+// not known to be invalid or one of the runner's providers; whether OpenRouter is
+// usable is reported apart. Configured providers are not checked.
+func TestDetectOpenCodeProviders(t *testing.T) {
+	versionArgv := []string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/opencode", "--version"}
+	keyArgv := []string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
+		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}
+	for _, tt := range []struct {
+		name       string
+		providers  bool
+		key        string
+		keyErr     error
+		state      string
+		openRouter bool
+	}{
+		{"key valid", false, "sk-or", nil, "ready", true},
+		{"key invalid", false, "sk-or", exitCodeError(3), "invalid_credential", false},
+		{"no key", false, "", nil, "missing_credential", false},
+		{"providers only", true, "", nil, "ready", false},
+		{"providers and an invalid key", true, "sk-or", exitCodeError(3), "ready", false},
+		{"providers and a valid key", true, "sk-or", nil, "ready", true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			keyring.MockInit()
+			sec := secrets.New(t.TempDir())
+			if tt.key != "" {
+				if _, err := sec.Set(testCfg, secrets.OpenRouterKey, tt.key); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := newScriptedExec()
+			s.add(versionArgv, "1.19.5\n", nil)
+			s.add(keyArgv, "", tt.keyErr)
+			got, openRouter := detectClients(context.Background(), s.exec, testCfg, tt.providers, sec, "test-image", testMount, discard())
+			i := slices.IndexFunc(got, func(c cinderline.ReportClient) bool { return c.Name == "opencode" })
+			if i < 0 || got[i].State != tt.state || openRouter != tt.openRouter {
+				t.Errorf("opencode = %+v, openrouter %v; want %s, %v", got, openRouter, tt.state, tt.openRouter)
+			}
+		})
 	}
 }

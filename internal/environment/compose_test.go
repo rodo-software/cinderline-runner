@@ -392,3 +392,35 @@ func TestComposeFileMustBeInTheRepository(t *testing.T) {
 		t.Error("a file outside the repository was accepted")
 	}
 }
+
+// Decision 2026-11-17-local-model-providers: a compose environment reaches a
+// provider on the runner's own machine as the default one does: through the
+// proxy, which alone maps host.docker.internal; the agent's NO_PROXY never
+// names it.
+func TestRunInComposeReachesALocalProviderThroughTheProxyOnly(t *testing.T) {
+	d, calls, _ := composeRunner(t, `{"services": {"agent": {"image": "php:8.4"}, "db": {"image": "postgres:17"}}}`)
+	s := turn
+	s.Allow = []string{"host.docker.internal:11434"}
+	if _, err := d.Run(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	var proxy, agent []string
+	for _, c := range calls() {
+		a := strings.Join(c.Argv, " ")
+		switch {
+		case strings.Contains(a, "<stdin:"):
+			agent = c.Argv
+		case strings.Contains(a, "--network-alias proxy"):
+			proxy = c.Argv
+		}
+	}
+	if !hasPair(proxy, "--add-host", "host.docker.internal:host-gateway") || proxy[len(proxy)-1] != "host.docker.internal:11434" {
+		t.Errorf("proxy argv = %q", proxy)
+	}
+	if agent == nil || slices.Contains(agent, "--add-host") || strings.Contains(strings.Join(agent, " "), "host.docker.internal") {
+		t.Errorf("agent argv = %q", agent)
+	}
+	if !hasPair(agent, "-e", "HTTP_PROXY=http://proxy:3128") {
+		t.Errorf("agent argv %q does not send plain http through the proxy", agent)
+	}
+}

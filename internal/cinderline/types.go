@@ -21,6 +21,9 @@ type Report struct {
 	Environments       []string       `json:"environments"`
 	Errors             []ReportError  `json:"errors"`
 	RefusedConnections int            `json:"refused_connections"`
+	// ModelProviders are the providers OpenCode agents can use here:
+	// openrouter, then the runner's own (decision 2026-11-17-local-model-providers).
+	ModelProviders []string `json:"model_providers"`
 }
 
 // ReportClient is the state of one agent CLI on this machine: ready,

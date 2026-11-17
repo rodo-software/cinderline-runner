@@ -57,7 +57,7 @@ func TestOpenCodeConfig(t *testing.T) {
 		} `json:"agent"`
 		MCP map[string]map[string]any `json:"mcp"`
 	}
-	orch := opencodeConfig(Turn{MaxTurns: 40, Token: "tok"}, "https://cs.example/mcp")
+	orch := opencodeConfig(Turn{MaxTurns: 40, Token: "tok"}, "https://cs.example/mcp", nil)
 	if err := json.Unmarshal([]byte(orch), &cfg); err != nil {
 		t.Fatalf("config is not JSON: %v\n%s", err, orch)
 	}
@@ -85,7 +85,7 @@ func TestOpenCodeConfig(t *testing.T) {
 	}
 
 	cfg.MCP = nil
-	if err := json.Unmarshal([]byte(opencodeConfig(Turn{MaxTurns: 1}, "u")), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(opencodeConfig(Turn{MaxTurns: 1}, "u", nil)), &cfg); err != nil {
 		t.Fatal(err)
 	}
 	if cfg.MCP == nil || len(cfg.MCP) != 0 {
@@ -98,24 +98,24 @@ func TestOpenCodeConfig(t *testing.T) {
 // to OpenCode, and no Anthropic login" (OpenCode half: only the OpenRouter
 // key, no other secret).
 func TestOpenCodeEnv(t *testing.T) {
-	orch := opencodeEnv("sk-or-k", Turn{MaxTurns: 3, Token: "tok"}, "u")
+	orch := opencodeEnv("sk-or-k", Turn{MaxTurns: 3, Token: "tok"}, "u", nil)
 	want := []string{
 		"XDG_DATA_HOME=/state/opencode/data",
 		"XDG_CONFIG_HOME=/state/opencode/config",
 		"OPENROUTER_API_KEY=sk-or-k",
-		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(Turn{MaxTurns: 3, Token: "tok"}, "u"),
+		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(Turn{MaxTurns: 3, Token: "tok"}, "u", nil),
 		"CINDERLINE_TOKEN=tok",
 	}
 	if !reflect.DeepEqual(orch, want) {
 		t.Errorf("orchestrator env =\n%q\nwant\n%q", orch, want)
 	}
 
-	worker := opencodeEnv("sk-or-k", Turn{MaxTurns: 3}, "u")
+	worker := opencodeEnv("sk-or-k", Turn{MaxTurns: 3}, "u", nil)
 	want = []string{
 		"XDG_DATA_HOME=/state/opencode/data",
 		"XDG_CONFIG_HOME=/state/opencode/config",
 		"OPENROUTER_API_KEY=sk-or-k",
-		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(Turn{MaxTurns: 3}, "u"),
+		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(Turn{MaxTurns: 3}, "u", nil),
 		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
 	}
 	if !reflect.DeepEqual(worker, want) {
@@ -211,7 +211,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
 		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-opencode:/state", "-v", "tools:/opt/cinderline:ro"},
-		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp"), wantIdentity),
+		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp", nil), wantIdentity),
 		Cmd:     append([]string{"/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
@@ -233,7 +233,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 // fails before OpenCode printed one; the failure is returned with the result.
 func TestOpenCodeRunResumeFails(t *testing.T) {
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: "crash", Err: environment.ErrTimeout}}}
-	c := &CLI{Name: "opencode", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	c := &CLI{Name: "opencode", Project: "CSR", Env: env, Credential: "sk-or-k", Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
 	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", SessionID: "ses_1", MaxTurns: 5})
 	if !errors.Is(err, environment.ErrTimeout) || res.SessionID != "ses_1" || res.Tail != "crash" {
 		t.Errorf("Run = %+v, %v", res, err)
@@ -246,11 +246,99 @@ func TestOpenCodeRunResumeFails(t *testing.T) {
 func TestOpenCodeRunStateVolumeFails(t *testing.T) {
 	env := &environment.Fake{}
 	boom := errors.New("docker broke")
-	c := &CLI{Name: "opencode", Project: "CSR", Env: env, Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
+	c := &CLI{Name: "opencode", Project: "CSR", Env: env, Credential: "sk-or-k", Exec: func(context.Context, []string, ...string) (string, error) { return "", boom }}
 	if _, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"}); !errors.Is(err, boom) {
 		t.Errorf("Run err = %v, want %v", err, boom)
 	}
 	if len(env.Calls()) != 0 {
 		t.Error("the turn ran without its state volume")
+	}
+}
+
+// Decision 2026-11-17-local-model-providers point 2: a turn on
+// "<provider>/<model>" gets that provider in OpenCode's inline config:
+// OpenCode's bundled OpenAI-compatible package, the base URL as the agent
+// reaches it, the key by environment variable name and the model declared,
+// as OpenCode 1.19.5 drops a config provider without models. It gets only
+// that provider's key and host, never OpenRouter's.
+func TestOpenCodeProviderTurn(t *testing.T) {
+	env := &environment.Fake{Runs: []environment.RunReply{{Output: ""}}}
+	c := &CLI{
+		Name: "opencode", Project: "CSR", Env: env, Credential: "sk-or-k", MCPURL: "u",
+		Providers: map[string]Provider{"cerebellum": {BaseURL: "http://localhost:8080/v1", Key: "sk-local"}, "lan": {BaseURL: "http://studio.lan:1234/v1"}},
+		Exec:      func(context.Context, []string, ...string) (string, error) { return "", nil },
+	}
+	turn := Turn{Dir: "/runs/CSR-7", Prompt: "p", MaxTurns: 5, Model: "cerebellum/qwen/qwen3-coder:30b"}
+	if _, err := c.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	s := env.Calls()[0].Args[0].(environment.Spec)
+	if !reflect.DeepEqual(s.Allow, []string{"host.docker.internal:8080"}) {
+		t.Errorf("Allow = %q, want only the provider on the host", s.Allow)
+	}
+	var config string
+	for _, kv := range s.Env {
+		if v, ok := strings.CutPrefix(kv, "OPENCODE_CONFIG_CONTENT="); ok {
+			config = v
+		}
+		if strings.Contains(kv, "sk-or-k") || strings.HasPrefix(kv, "OPENROUTER_API_KEY") {
+			t.Errorf("a provider turn gets the OpenRouter key: %q", kv)
+		}
+	}
+	if !slices.Contains(s.Env, "CINDERLINE_PROVIDER_KEY=sk-local") {
+		t.Errorf("env %q lacks the provider's key", s.Env)
+	}
+	var cfg struct {
+		Provider map[string]struct {
+			NPM     string            `json:"npm"`
+			Name    string            `json:"name"`
+			Options map[string]string `json:"options"`
+			Models  map[string]any    `json:"models"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(config), &cfg); err != nil {
+		t.Fatalf("config %q: %v", config, err)
+	}
+	p, ok := cfg.Provider["cerebellum"]
+	if len(cfg.Provider) != 1 || !ok || p.NPM != "@ai-sdk/openai-compatible" || p.Name != "cerebellum" ||
+		!reflect.DeepEqual(p.Options, map[string]string{"baseURL": "http://host.docker.internal:8080/v1", "apiKey": "{env:CINDERLINE_PROVIDER_KEY}"}) ||
+		!reflect.DeepEqual(p.Models, map[string]any{"qwen/qwen3-coder:30b": map[string]any{}}) {
+		t.Errorf("provider config = %s", config)
+	}
+	if strings.Contains(config, "sk-local") {
+		t.Errorf("config holds the key: %s", config)
+	}
+
+	// Without a key: no apiKey, no key variable; another machine keeps its URL.
+	env = &environment.Fake{Runs: []environment.RunReply{{Output: ""}}}
+	c.Env = env
+	turn.Model = "lan/gemma"
+	if _, err := c.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	s = env.Calls()[0].Args[0].(environment.Spec)
+	if !reflect.DeepEqual(s.Allow, []string{"studio.lan:1234"}) {
+		t.Errorf("Allow = %q", s.Allow)
+	}
+	for _, kv := range s.Env {
+		if strings.HasPrefix(kv, "CINDERLINE_PROVIDER_KEY") || strings.HasPrefix(kv, "OPENCODE_CONFIG_CONTENT=") &&
+			(strings.Contains(kv, "apiKey") || !strings.Contains(kv, `"baseURL":"http://studio.lan:1234/v1"`)) {
+			t.Errorf("env %q", kv)
+		}
+	}
+}
+
+// A turn on a provider the project does not have, or on OpenRouter without
+// its key, is not started: no state volume, no container.
+func TestOpenCodeTurnWithoutItsProviderIsNotStarted(t *testing.T) {
+	for _, tt := range []struct{ model, cred string }{{"cerebellum/qwen", "sk-or-k"}, {"openrouter/q/c", ""}, {"", ""}} {
+		env := &environment.Fake{}
+		ran := false
+		c := &CLI{Name: "opencode", Project: "CSR", Env: env, Credential: tt.cred, Providers: map[string]Provider{"lan": {BaseURL: "http://h:1"}},
+			Exec: func(context.Context, []string, ...string) (string, error) { ran = true; return "", nil }}
+		_, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Model: tt.model})
+		if !errors.Is(err, ErrNotStarted) || ran || len(env.Calls()) != 0 {
+			t.Errorf("%q: err = %v, docker ran %v, env calls %d; want not started", tt.model, err, ran, len(env.Calls()))
+		}
 	}
 }

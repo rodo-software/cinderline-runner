@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/zalando/go-keyring"
@@ -39,6 +40,15 @@ const (
 // so a token only ever goes to the URL it was added with (CSR-160). Config
 // has checked the URL holds no whitespace, as entry needs.
 func ExtraGitToken(repoURL string) Kind { return Kind("git-token:" + repoURL) }
+
+// ProviderKey is the kind of a model provider's optional API key, one per
+// provider name, held under Runner (decision 2026-11-17-local-model-providers).
+func ProviderKey(provider string) Kind { return Kind("provider-key:" + provider) }
+
+// Runner is the owner of the runner's own secrets, which belong to no
+// project: the providers' keys. Its empty URL keeps its entries apart from
+// every project's, whose URL config requires.
+var Runner = config.Project{Key: name.Name, Workspace: config.DefaultWorkspace}
 
 // Kinds are all the kinds of secret p may hold, for removing them.
 func Kinds(p config.Project) []Kind {
@@ -94,7 +104,7 @@ func entry(p config.Project, k Kind) string {
 func (s *Secrets) Get(p config.Project, k Kind) (string, Store, error) {
 	v, st, err := s.get(p, k)
 	if err == nil {
-		redact.Add(cmp.Or(labels[k], "git token"), v) // extra repositories' tokens have no fixed kind
+		redact.Add(label(k), v)
 	}
 	return v, st, err
 }
@@ -103,6 +113,15 @@ func (s *Secrets) Get(p config.Project, k Kind) (string, Store, error) {
 var labels = map[Kind]string{
 	RunnerToken: "runner token", GitToken: "git token",
 	AnthropicCredential: "anthropic key", OpenRouterKey: "openrouter key", OpenAIKey: "openai key", GeminiKey: "gemini key",
+}
+
+// label is the kind's redaction label; extra repositories' tokens and
+// providers' keys have no fixed kind.
+func label(k Kind) string {
+	if strings.HasPrefix(string(k), "provider-key:") {
+		return "provider key"
+	}
+	return cmp.Or(labels[k], "git token")
 }
 
 func (s *Secrets) get(p config.Project, k Kind) (string, Store, error) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -263,5 +264,29 @@ func TestProjectsInTwoWorkspacesDoNotCollide(t *testing.T) {
 	}
 	if _, _, err := s.Get(acme, RunnerToken); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("acme sees the other workspace's token: %v", err)
+	}
+}
+
+// Decision 2026-11-17-local-model-providers: a provider's optional key is
+// one secret for the whole runner, under Runner, never one of a project's
+// kinds, and redacted as a provider key.
+func TestProviderKey(t *testing.T) {
+	if slices.ContainsFunc(Kinds(projectA), func(k Kind) bool { return strings.HasPrefix(string(k), "provider-key:") }) {
+		t.Errorf("Kinds = %q, want no provider key", Kinds(projectA))
+	}
+	keyring.MockInit()
+	s := New(t.TempDir())
+	const v = "sk-local-redactiontest-0123456789"
+	if _, err := s.Set(Runner, ProviderKey("cerebellum"), v); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, err := s.Get(Runner, ProviderKey("cerebellum")); err != nil || got != v {
+		t.Fatalf("Get = %q, %v", got, err)
+	}
+	if _, _, err := s.Get(projectA, ProviderKey("cerebellum")); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a project sees the runner's key: %v", err)
+	}
+	if got := redact.String("key " + v); got != "key [redacted provider key]" {
+		t.Errorf("got %q", got)
 	}
 }

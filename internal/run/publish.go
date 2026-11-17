@@ -27,8 +27,9 @@ const (
 // resolve_conflicts a conflicting base merge is reported as a merge step
 // first. The base merge, push and pull request are tried publishAttempts
 // times. A stop from the poll at any time during the step lets the push and
-// the pull request finish, but the merge is then neither asked for nor
-// waited for, and merge stays null (decision of 2026-11-17).
+// the pull request finish. Before the merge is asked for, it then is not
+// asked for and merge stays null; once asked, it is not waited for and
+// merge is pending: asked, not seen yet (decisions of 2026-11-17).
 func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step, pending **conflict) (*cinderline.LastStep, error) {
 	log := p.Log.With("project", p.Config.Key, "issue", j.ref)
 	author := leadAuthor(j.team)
@@ -87,7 +88,7 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 		last.Merge = ptr("failed") // a conflicted pull request cannot merge
 		return last, nil
 	}
-	if err := j.fg.RequestMerge(ctx, pr); err != nil && !stopped(sctx) {
+	if err := j.fg.RequestMerge(ctx, pr); err != nil {
 		last.Merge, last.Error = ptr("failed"), ptr("asking the forge to merge "+pr.URL+" failed: "+err.Error())
 		return last, nil
 	}
@@ -95,7 +96,7 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 	state, err := p.awaitMerge(sctx, j.fg, j.branch)
 	if stopped(sctx) {
 		log.Info("stopped during the publish, merge not waited for", "pull_request", pr.URL)
-		last.Merge, last.Error = nil, nil
+		last.Merge = ptr(string(forge.MergePending))
 		return last, nil
 	}
 	if err != nil {

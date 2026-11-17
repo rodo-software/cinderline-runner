@@ -20,7 +20,7 @@ var claude = kind{
 	},
 	parse: parseClaude,
 	// Anthropic's API.
-	hosts: func(c *CLI) []string {
+	hosts: func(c *CLI, _ Turn) []string {
 		if c.Credential == "" {
 			return []string{"api.anthropic.com:443", "console.anthropic.com:443", "platform.claude.com:443"}
 		}

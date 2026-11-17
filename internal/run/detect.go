@@ -33,9 +33,13 @@ func allMissingBinary() []cinderline.ReportClient {
 	return r
 }
 
-func detectClients(ctx context.Context, exec workspace.Exec, cfg config.Project, sec *secrets.Secrets, image string, mount tools.Mount, log *slog.Logger) []cinderline.ReportClient {
+// detectClients is each client's state and whether OpenCode can use
+// OpenRouter: its key is set and not known to be invalid. OpenCode is ready
+// when its binary is there and OpenRouter or one of the runner's providers
+// (providers says it has one) is usable; the app checks each agent's provider by name (decision
+// 2026-11-17-local-model-providers). Configured providers are not checked.
+func detectClients(ctx context.Context, exec workspace.Exec, cfg config.Project, providers bool, sec *secrets.Secrets, image string, mount tools.Mount, log *slog.Logger) (res []cinderline.ReportClient, openRouter bool) {
 	log = log.With("project", cfg.Key)
-	var res []cinderline.ReportClient
 	for _, name := range clientNames {
 		v, ok := checkBinary(ctx, exec, mount, image, name)
 		if !ok {
@@ -49,16 +53,22 @@ func detectClients(ctx context.Context, exec workspace.Exec, cfg config.Project,
 		cred, _, err := sec.Get(cfg, kind)
 		if err == nil {
 			state := checkKey(ctx, exec, mount, image, name, cred, cfg, log)
+			if name == "opencode" {
+				openRouter = state == "ready"
+				if providers {
+					state = "ready"
+				}
+			}
 			res = append(res, cinderline.ReportClient{Name: name, State: state, Version: v})
 			continue
 		}
-		if name != "opencode" && loginExists(ctx, exec, cfg.Key, name) {
+		if name == "opencode" && providers || name != "opencode" && loginExists(ctx, exec, cfg.Key, name) {
 			res = append(res, cinderline.ReportClient{Name: name, State: "ready", Version: v})
 			continue
 		}
 		res = append(res, cinderline.ReportClient{Name: name, State: "missing_credential", Version: v})
 	}
-	return res
+	return res, openRouter
 }
 
 // checkBinary runs --version and returns the version string and whether the

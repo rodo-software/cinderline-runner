@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -116,7 +117,7 @@ var issueLabels = []string{"--label", "cinderline.project=CSR", "--label", "cind
 // run's allowlist as its arguments.
 func TestUp(t *testing.T) {
 	d, calls := scripted(nil, nil)
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}, false); err != nil {
 		t.Fatal(err)
 	}
 	want := []execCall{
@@ -135,7 +136,7 @@ func TestUp(t *testing.T) {
 func TestUpFailureLeavesNothing(t *testing.T) {
 	boom := errors.New("boom")
 	d, calls := scripted(nil, map[int]error{1: boom})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil); !errors.Is(err, boom) {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, false); !errors.Is(err, boom) {
 		t.Errorf("up = %v, want boom", err)
 	}
 	if got := (*calls)[len(*calls)-1].Argv; !reflect.DeepEqual(got, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}) {
@@ -147,7 +148,7 @@ func TestUpFailureLeavesNothing(t *testing.T) {
 // issue's later turns still run (decision 2026-11-11-audit-fixes).
 func TestUpRemovesALeftoverNetwork(t *testing.T) {
 	d, calls := scripted(nil, map[int]error{0: errors.New("network already exists")})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, false); err != nil {
 		t.Fatalf("up = %v", err)
 	}
 	var got []string
@@ -694,5 +695,46 @@ func TestAgentOutputIsLoggedAtDebug(t *testing.T) {
 	}
 	if info.Len() != 0 || strings.Count(debug.String(), "agent output") != 2 {
 		t.Errorf("info log %q, debug log %q", info.String(), debug.String())
+	}
+}
+
+// Decision 2026-11-17-local-model-providers point 3: a turn whose provider
+// is on the runner's own machine gets host.docker.internal mapped to the
+// host in the PROXY container only, which allows exactly that port. The
+// agent container still has no route to the host.
+func TestRunReachesALocalProviderThroughTheProxyOnly(t *testing.T) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return nil })
+	s := turn
+	s.Allow = []string{"host.docker.internal:11434"}
+	if _, err := d.Run(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	var proxy, agent []string
+	for _, c := range calls() {
+		a := strings.Join(c.Argv, " ")
+		switch {
+		case strings.Contains(a, "<stdin:"):
+			agent = c.Argv
+		case strings.Contains(a, "--network-alias proxy"):
+			proxy = c.Argv
+		}
+	}
+	if !hasPair(proxy, "--add-host", "host.docker.internal:host-gateway") || proxy[len(proxy)-1] != "host.docker.internal:11434" {
+		t.Errorf("proxy argv = %q, want host.docker.internal mapped and allowed on 11434", proxy)
+	}
+	if agent == nil || slices.Contains(agent, "--add-host") || strings.Contains(strings.Join(agent, " "), "host.docker.internal") {
+		t.Errorf("agent argv maps a host: %q", agent)
+	}
+	// Without a local provider the proxy maps nothing, whatever the
+	// project's allow_hosts say (config refuses the host there too).
+	d, calls, _ = runner(nil, func(context.Context, io.Writer) error { return nil })
+	d.Allow = []string{"host.docker.internal:22"}
+	if _, err := d.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range calls() {
+		if slices.Contains(c.Argv, "--add-host") {
+			t.Errorf("argv maps a host without a local provider: %q", c.Argv)
+		}
 	}
 }

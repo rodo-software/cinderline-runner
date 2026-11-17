@@ -1,3 +1,5 @@
+Second point reversed by decision 2026-11-17-local-model-providers
+
 # No local-model work in the runner
 
 - **Status:** Accepted

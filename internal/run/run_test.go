@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -113,6 +114,11 @@ func TestStepFacts(t *testing.T) {
 		{"turn limit", runNew, func(f *fixture) {
 			f.cl.Runs = []client.RunReply{{Result: client.Result{HitTurnLimit: true}, Err: errors.New("max turns")}}
 		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "turn_limit", Error: ptr("max turns")}},
+		// Decision 2026-11-17-local-model-providers: a turn whose provider the
+		// project lacks is not started, with the client's reason.
+		{"provider missing", runNew, func(f *fixture) {
+			f.cl.Runs = []client.RunReply{{Err: fmt.Errorf("%w: model provider \"x\" is not configured", client.ErrNotStarted)}}
+		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "not_started", Error: ptr(`turn not started: model provider "x" is not configured`)}},
 		{"agent not on the team", strings.Replace(runNew, `"Coder"`, `"Ghost"`, 1), func(*fixture) {},
 			cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Ghost"), Outcome: "not_started", Error: ptr("agent Ghost is not on team Dev")}},
 	} {
@@ -512,8 +518,9 @@ func (s stoppingForge) OpenPullRequest(ctx context.Context, in forge.PullRequest
 	return s.Fake.OpenPullRequest(ctx, in)
 }
 
-// A stop during the publish lets the push and the pull request finish, but
-// the merge is not asked for and merge stays null.
+// A stop during the publish, before the runner asked the forge to merge,
+// lets the push and the pull request finish, but the merge is not asked for
+// and merge stays null.
 func TestAStopDuringThePublishSkipsTheMerge(t *testing.T) {
 	f := newFixture(t)
 	f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
@@ -535,6 +542,39 @@ func TestAStopDuringThePublishSkipsTheMerge(t *testing.T) {
 		if c.Method == "RequestMerge" {
 			t.Error("the merge was asked for after the stop")
 		}
+	}
+}
+
+// stopWhileWaiting stops the run while it waits for the merge it asked for.
+type stopWhileWaiting struct {
+	*forge.Fake
+	stop func()
+}
+
+func (s stopWhileWaiting) MergeState(ctx context.Context, branch string) (forge.MergeState, error) {
+	s.stop()
+	return s.Fake.MergeState(ctx, branch)
+}
+
+// Willem's decision of 2026-11-17: a stop while the runner waits for a
+// merge it has already asked the forge for reports merge "pending" (asked,
+// not seen yet), not null.
+func TestAStopWhileWaitingForTheMergeReportsItPending(t *testing.T) {
+	f := newFixture(t)
+	f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+	f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+	f.fg.Merges = []error{nil}
+	f.fg.MergeStates = []forge.MergeStateReply{{State: forge.MergePending}}
+	f.p.Forge = func(string) (forge.Forge, error) {
+		return stopWhileWaiting{f.fg, func() { f.p.stopTurn("CSR-1") }}, nil
+	}
+	app := &fakeApp{onNext: stepsOf(`{"kind":"publish","merge":true}`)}
+	if _, err := f.run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	want := cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Commit: ptr("abc123"), Merge: ptr("pending")}
+	if lasts := app.lasts(); len(lasts) != 1 || !sameLast(lasts[0], want) {
+		t.Errorf("lasts = %+v", lasts)
 	}
 }
 

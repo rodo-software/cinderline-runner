@@ -45,3 +45,25 @@ func TestProjectHosts(t *testing.T) {
 		t.Errorf("ProjectHosts = %q, want %q", got, want)
 	}
 }
+
+// Decision 2026-11-17-local-model-providers point 3: a provider on the
+// runner's own machine is reached as host.docker.internal on exactly its
+// port; any other provider as it is configured.
+func TestProviderURL(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"http://studio.local:8080/v1":      {"http://studio.local:8080/v1", "studio.local:8080"},
+		"https://LLM.example.com/v1":       {"https://LLM.example.com/v1", "llm.example.com:443"},
+		"http://192.168.1.5:11434/v1":      {"http://192.168.1.5:11434/v1", "192.168.1.5:11434"},
+		"http://localhost:11434/v1":        {"http://host.docker.internal:11434/v1", "host.docker.internal:11434"},
+		"http://LocalHost:11434":           {"http://host.docker.internal:11434", "host.docker.internal:11434"},
+		"http://127.0.0.1:8080/v1":         {"http://host.docker.internal:8080/v1", "host.docker.internal:8080"},
+		"http://[::1]:8080/v1":             {"http://host.docker.internal:8080/v1", "host.docker.internal:8080"},
+		"http://host.docker.internal:1234": {"http://host.docker.internal:1234", "host.docker.internal:1234"},
+		"http://localhost/v1":              {"http://host.docker.internal:80/v1", "host.docker.internal:80"},
+		"https://127.0.0.1/v1":             {"https://host.docker.internal:443/v1", "host.docker.internal:443"},
+	} {
+		if u, hp := ProviderURL(in); u != want[0] || hp != want[1] {
+			t.Errorf("ProviderURL(%q) = %q, %q, want %q, %q", in, u, hp, want[0], want[1])
+		}
+	}
+}

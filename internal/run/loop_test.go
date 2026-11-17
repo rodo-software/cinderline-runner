@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
@@ -71,7 +72,8 @@ func TestThePollRequest(t *testing.T) {
 	polls := runLoop(t, f, app, nil, nil, stopAt(2, answer(t, proj, `"held":[{"ref":"CSR-9","session":"keep"},{"ref":"CSR-8","session":"keep"}],"review":[]`)))
 	first := polls[0]
 	r := first.Report
-	if r.RunnerVersion != "0.0.0-test" || len(r.Clients) != 1 || !slices.Equal(r.Environments, Environments) || r.Errors == nil || len(r.Errors) != 0 || r.RefusedConnections != 1 {
+	if r.RunnerVersion != "0.0.0-test" || len(r.Clients) != 1 || !slices.Equal(r.Environments, Environments) || r.Errors == nil || len(r.Errors) != 0 || r.RefusedConnections != 1 ||
+		r.ModelProviders == nil || len(r.ModelProviders) != 0 {
 		t.Errorf("report = %+v", r)
 	}
 	// Not idle while it asks for the review list: the pass comes first.
@@ -252,8 +254,8 @@ func TestTheOutboxIsReplayedBeforeEachPoll(t *testing.T) {
 func TestNotIdleBeforeDetection(t *testing.T) {
 	f := newFixture(t)
 	f.p.clients = nil
-	f.p.detect = func(context.Context) []cinderline.ReportClient {
-		return []cinderline.ReportClient{{Name: "claude", State: "ready"}}
+	f.p.detect = func(context.Context) ([]cinderline.ReportClient, bool) {
+		return []cinderline.ReportClient{{Name: "claude", State: "ready"}}, false
 	}
 	polls := runLoop(t, f, &fakeApp{}, nil, nil, func(n int, _ cinderline.PollRequest, stop func()) reply {
 		switch n {
@@ -326,7 +328,7 @@ func TestARunExcludesUpkeepAndTidying(t *testing.T) {
 func TestTheFirstDetectionPollsAtOnce(t *testing.T) {
 	f := newFixture(t)
 	f.p.clients, f.p.detected = nil, make(chan struct{})
-	f.p.detect = func(context.Context) []cinderline.ReportClient { return nil }
+	f.p.detect = func(context.Context) ([]cinderline.ReportClient, bool) { return nil, false }
 	old := waitFor
 	t.Cleanup(func() { waitFor = old })
 	waitFor = func(time.Duration) time.Duration { return time.Hour }
@@ -340,5 +342,22 @@ func TestTheFirstDetectionPollsAtOnce(t *testing.T) {
 	})
 	if len(polls) != 2 || polls[0].Idle || !polls[1].Idle {
 		t.Errorf("%d polls; want a second, idle one at once", len(polls))
+	}
+}
+
+// Decision 2026-11-17-local-model-providers point 4: the report names the
+// providers OpenCode agents can use: openrouter when detection found its key
+// usable, then each of the runner's, by name only.
+func TestTheReportNamesModelProviders(t *testing.T) {
+	f := newFixture(t)
+	f.p.Providers = []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}
+	f.p.openRouter = true
+	l := &loop{p: f.p, c: cinderline.New("http://x", "t", "0")}
+	if got := l.report().ModelProviders; !slices.Equal(got, []string{"openrouter", "cerebellum", "lan"}) {
+		t.Errorf("model_providers = %q", got)
+	}
+	f.p.openRouter = false
+	if got := l.report().ModelProviders; !slices.Equal(got, []string{"cerebellum", "lan"}) {
+		t.Errorf("model_providers = %q", got)
 	}
 }

@@ -7,6 +7,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -225,5 +226,64 @@ func TestHTTPToAnUnlistedHostIsRefusedAndLogged(t *testing.T) {
 	}
 	if strings.Contains(log.String(), "payload-marker") {
 		t.Errorf("the log holds request content:\n%s", log)
+	}
+}
+
+// Decision 2026-11-17-local-model-providers: a provider on the runner's own
+// machine is allowed as host.docker.internal on exactly its port, over
+// CONNECT (https) and plain http alike; its other ports stay refused. The
+// name is mapped to loopback here as --add-host maps it to the host.
+func TestHostGatewayEntryAllowsExactlyItsPort(t *testing.T) {
+	saved := dial
+	t.Cleanup(func() { dial = saved })
+	dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, _ := net.SplitHostPort(addr)
+		if host == "host.docker.internal" {
+			addr = net.JoinHostPort("127.0.0.1", port)
+		}
+		return saved(ctx, network, addr)
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "model at "+r.URL.Path)
+	}))
+	t.Cleanup(backend.Close)
+	port := strconv.Itoa(backend.Listener.Addr().(*net.TCPAddr).Port)
+	echo := strconv.Itoa(echoServer(t))
+	proxy, log := startProxy(t, "host.docker.internal:"+port, "host.docker.internal:"+echo)
+
+	resp, err := viaProxy(proxy).Get("http://host.docker.internal:" + port + "/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "model at /v1/models" {
+		t.Errorf("plain http GET = %d %q, want 200 from the provider", resp.StatusCode, body)
+	}
+
+	status, c, r := connect(t, proxy, "host.docker.internal:"+echo)
+	if status != http.StatusOK {
+		t.Fatalf("CONNECT = %d, want 200", status)
+	}
+	if _, err := io.WriteString(c, "ping\n"); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := r.ReadString('\n'); err != nil || line != "ping\n" {
+		t.Errorf("through the tunnel: %q, %v", line, err)
+	}
+
+	if status, _, _ := connect(t, proxy, "host.docker.internal:22"); status != http.StatusForbidden {
+		t.Errorf("CONNECT to another host port = %d, want 403", status)
+	}
+	resp, err = viaProxy(proxy).Get("http://host.docker.internal:22/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("plain http to another host port = %d, want 403", resp.StatusCode)
+	}
+	if got := refusals(t, log.String()); len(got) != 2 {
+		t.Errorf("refusals = %v, want the two other-port attempts", got)
 	}
 }

@@ -72,7 +72,8 @@ func TestPollSendsTheReportAndReadsTheAnswer(t *testing.T) {
 		t.Errorf("request %s, headers %v", s.paths[0], s.header)
 	}
 	body := s.bodies[0]
-	if strings.Contains(body, "secret-value") || !strings.Contains(body, `"running":[]`) || strings.Contains(body, `"held"`) || strings.Contains(body, `"review"`) {
+	// model_providers is never null (decision 2026-11-17-local-model-providers).
+	if strings.Contains(body, "secret-value") || !strings.Contains(body, `"running":[]`) || !strings.Contains(body, `"model_providers":[]`) || strings.Contains(body, `"held"`) || strings.Contains(body, `"review"`) {
 		t.Errorf("body = %s", body)
 	}
 	// An empty review asks for the list.
@@ -259,7 +260,7 @@ func TestRequestsFitTheAppsLimits(t *testing.T) {
 	long := strings.Repeat("é", 3000)
 	conflicts := slices.Repeat([]string{long}, 1200)
 	if _, err := c.Poll(context.Background(), PollRequest{
-		Report:  Report{Errors: []ReportError{{Kind: KindNotStarted, Message: long}}},
+		Report:  Report{Errors: []ReportError{{Kind: KindNotStarted, Message: long}}, ModelProviders: append([]string{strings.Repeat("p", 51)}, refs...)},
 		Running: append([]string{strings.Repeat("R", 60)}, refs...), Held: refs,
 		Review: []ReviewFact{{Ref: "CSR-1", PullRequest: "open", Conflicts: conflicts}},
 	}); err != nil {
@@ -269,7 +270,8 @@ func TestRequestsFitTheAppsLimits(t *testing.T) {
 	_ = json.Unmarshal([]byte(s.bodies[0]), &poll)
 	if len(poll.Running) != maxRunning || poll.Running[0] != "CSR-0" || len(poll.Held) != maxListed || poll.Held[0] != "CSR-0" ||
 		utf8.RuneCountInString(poll.Report.Errors[0].Message) != maxErrorMessage ||
-		len(poll.Review[0].Conflicts) != maxConflicts || utf8.RuneCountInString(poll.Review[0].Conflicts[0]) != maxText {
+		len(poll.Review[0].Conflicts) != maxConflicts || utf8.RuneCountInString(poll.Review[0].Conflicts[0]) != maxText ||
+		len(poll.Report.ModelProviders) != maxProviders || poll.Report.ModelProviders[0] != "CSR-0" {
 		t.Errorf("poll sent running %d, held %d, message %d, conflicts %d", len(poll.Running), len(poll.Held), utf8.RuneCountInString(poll.Report.Errors[0].Message), len(poll.Review[0].Conflicts))
 	}
 

@@ -4,11 +4,13 @@ package run
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
@@ -43,7 +45,7 @@ func TestNewProjectBuildsClientsForKeys(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			p, err := NewProject(cfg, sec, state, &environment.Docker{Project: cfg.Key, Log: discard()}, discard())
+			p, err := NewProject(cfg, nil, sec, state, &environment.Docker{Project: cfg.Key, Log: discard()}, discard())
 			if err != nil {
 				t.Fatalf("NewProject: %v", err)
 			}
@@ -78,7 +80,7 @@ func TestNewProjectCodexFromConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p, err := NewProject(pc, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
+	p, err := NewProject(pc, nil, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
 	if err != nil {
 		t.Fatalf("NewProject: %v", err)
 	}
@@ -104,7 +106,7 @@ func TestNewProjectGeminiFromConfig(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p, err := NewProject(pc, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
+	p, err := NewProject(pc, nil, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
 	if err != nil {
 		t.Fatalf("NewProject: %v", err)
 	}
@@ -126,7 +128,7 @@ func TestNewProjectNeedsGitToken(t *testing.T) {
 	if _, err := sec.Set(cfg, secrets.AnthropicCredential, "k"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewProject(cfg, sec, state, &environment.Docker{Project: cfg.Key, Log: discard()}, discard()); err == nil {
+	if _, err := NewProject(cfg, nil, sec, state, &environment.Docker{Project: cfg.Key, Log: discard()}, discard()); err == nil {
 		t.Fatal("NewProject without a git token: no error")
 	}
 }
@@ -153,7 +155,7 @@ func TestNewProjectForgeByKind(t *testing.T) {
 		if _, err := sec.Set(pc, secrets.GitToken, "git"); err != nil {
 			t.Fatal(err)
 		}
-		p, err := NewProject(pc, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
+		p, err := NewProject(pc, nil, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -187,7 +189,7 @@ func TestNewProjectNamesByWorkspace(t *testing.T) {
 	if _, err := sec.Set(pc, secrets.GitToken, "git"); err != nil {
 		t.Fatal(err)
 	}
-	p, err := NewProject(pc, sec, state, &environment.Docker{Project: pc.ID(), Log: discard()}, discard())
+	p, err := NewProject(pc, nil, sec, state, &environment.Docker{Project: pc.ID(), Log: discard()}, discard())
 	if err != nil {
 		t.Fatalf("NewProject: %v", err)
 	}
@@ -203,5 +205,37 @@ func TestNewProjectNamesByWorkspace(t *testing.T) {
 	}
 	if got, want := workspace.ProjectLabel(pc.ID()), "cinderline.project="+id; got != want {
 		t.Errorf("label %q, want %q", got, want)
+	}
+}
+
+// Decision 2026-11-17-local-model-providers: on a runner with providers
+// every project runs OpenCode without an OpenRouter key, and its client gets
+// each provider's URL and its runner-wide key when one is stored.
+func TestNewProjectOpenCodeProviders(t *testing.T) {
+	keyring.MockInit()
+	state := t.TempDir()
+	sec := secrets.New(state)
+	pc := cfg
+	providers := []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}
+	if _, err := sec.Set(pc, secrets.GitToken, "g"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sec.Set(secrets.Runner, secrets.ProviderKey("cerebellum"), "sk-local"); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewProject(pc, providers, sec, state, &environment.Docker{Project: pc.Key, Log: discard()}, discard())
+	if err != nil {
+		t.Fatalf("NewProject: %v", err)
+	}
+	c, ok := p.Clients["opencode"].(*client.CLI)
+	if !ok {
+		t.Fatalf("opencode client = %T", p.Clients["opencode"])
+	}
+	want := map[string]client.Provider{"cerebellum": {BaseURL: "http://localhost:8080/v1", Key: "sk-local"}, "lan": {BaseURL: "http://studio.lan:1234/v1"}}
+	if c.Credential != "" || !reflect.DeepEqual(c.Providers, want) {
+		t.Errorf("opencode client = %+v", c)
+	}
+	if !slices.Equal(p.Providers, providers) {
+		t.Errorf("project providers = %v", p.Providers)
 	}
 }

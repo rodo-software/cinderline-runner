@@ -73,6 +73,11 @@ func (c *CLI) uninstall(args []string) int {
 			}
 		}
 	}
+	for _, pr := range cfg.Providers {
+		if err := c.Secrets.Delete(secrets.Runner, secrets.ProviderKey(pr.Name)); err != nil {
+			return c.fail(err)
+		}
+	}
 	for _, dir := range []string{c.Paths.Dir, c.Paths.State} {
 		if err := os.RemoveAll(dir); err != nil {
 			return c.fail(err)

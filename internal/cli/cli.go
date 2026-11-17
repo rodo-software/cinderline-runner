@@ -54,10 +54,13 @@ func commands() []command {
 		{"service", "install|uninstall", "install or remove the user-level service that runs " + name.Name + " at login", (*CLI).service},
 		{"uninstall", "[-yes]", "remove the service, containers, volumes, images, config and secrets of " + name.Name, (*CLI).uninstall},
 		{"login", "CLIENT " + projectUsage, "sign a client CLI in with its own login, in a container; the credentials stay on the project's state volume", (*CLI).login},
-		{"key", keyUsage, "list which secrets a project has, or set (read from stdin, hidden on a terminal) or delete its runner-token, git-token or the model key of a client (claude, opencode, codex, gemini), which wins over a login", (*CLI).key},
+		{"key", keyUsage, "list which secrets a project has, or set (read from stdin, hidden on a terminal) or delete its runner-token, git-token or the model key of a client (claude, opencode, codex, gemini), which wins over a login; provider:NAME is the runner-wide API key of a model provider, without --project", (*CLI).key},
 		{"add-repo", projectUsage, "add a repository the project's runs can read, read-only, asking for its URL, ref and git token", (*CLI).addRepo},
 		{"list-repos", projectUsage, "list the project's extra repositories", (*CLI).listRepos},
 		{"remove-repo", projectUsage + " URL|NAME", "remove an extra repository and its git token", (*CLI).removeRepo},
+		{"add-provider", "NAME URL", "add an OpenAI-compatible model provider for the OpenCode agents of every project, which name a model as NAME/<model id>, asking for its optional API key", (*CLI).addProvider},
+		{"list-providers", "", "list the runner's model providers and whether each has a key", (*CLI).listProviders},
+		{"remove-provider", "NAME", "remove a model provider and its key", (*CLI).removeProvider},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

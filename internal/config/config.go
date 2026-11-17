@@ -38,8 +38,12 @@ type Config struct {
 	KeepSessionsFor string `json:"keep_sessions_for,omitempty"`
 	// MinFreeDisk is the free space below which kept sessions are deleted,
 	// oldest first, such as "10GB"; "off" never deletes them for space.
-	MinFreeDisk string    `json:"min_free_disk,omitempty"`
-	Projects    []Project `json:"projects"`
+	MinFreeDisk string `json:"min_free_disk,omitempty"`
+	// Providers are the runner's model providers for OpenCode agents, for
+	// every project; their optional keys are runner-wide secrets (decision
+	// 2026-11-17-local-model-providers).
+	Providers []Provider `json:"providers,omitempty"`
+	Projects  []Project  `json:"projects"`
 }
 
 // Defaults of keep_sessions_for and min_free_disk.
@@ -116,6 +120,37 @@ type Project struct {
 	// mounted read-only (CSR-160). Configured only here, not in Cinderline
 	// (app decision 2026-11-11-extra-repositories-in-runner).
 	ExtraRepositories []ExtraRepository `json:"extra_repositories,omitempty"`
+}
+
+// Provider is an OpenAI-compatible model endpoint an OpenCode agent names
+// as "<Name>/<model id>".
+type Provider struct {
+	Name    string `json:"name"`
+	BaseURL string `json:"base_url"`
+}
+
+// providerName is what a provider's name may be; the report caps names at 50.
+var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
+
+// Validate reports a name that is not lower-case letters, digits and dashes
+// or is openrouter, which OpenCode already has, or a base URL that is not
+// http(s)://host[:port][/path], without user info, query or fragment.
+func (p Provider) Validate() error {
+	if !providerName.MatchString(p.Name) || p.Name == "openrouter" {
+		return fmt.Errorf("provider name %q must be up to 50 lower-case letters, digits and dashes, and not openrouter", p.Name)
+	}
+	u, err := url.Parse(p.BaseURL)
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && u.Opaque == "" &&
+		!strings.ContainsAny(p.BaseURL, "?# \t\r\n") && (hostChars.MatchString(u.Hostname()) || net.ParseIP(u.Hostname()) != nil) &&
+		(u.Port() == "" || validHostPort(net.JoinHostPort("h", u.Port()))) {
+		return nil
+	}
+	s := p.BaseURL
+	if err == nil && u.User != nil {
+		u.User = nil // never a password in an error text
+		s = u.String()
+	}
+	return fmt.Errorf("provider %s: base URL %q must be http or https, a host, an optional port and path such as /v1, without a user name or password", p.Name, s)
 }
 
 // DefaultWorkspace is the slug of a project on a Cinderline that sends no
@@ -281,6 +316,9 @@ func (c *Config) Validate() error {
 	if _, err := parseSize(cmp.Or(c.MinFreeDisk, DefaultMinFreeDisk)); err != nil {
 		return err
 	}
+	if problem := checkProviders(c.Providers); problem != "" {
+		return errors.New(problem)
+	}
 	type id struct{ url, workspace, key string }
 	seen := map[id]bool{}
 	for i, p := range c.Projects {
@@ -295,6 +333,8 @@ func (c *Config) Validate() error {
 			problem = "workspace must be letters, digits, - and _"
 		} else if seen[id{p.URL, p.Workspace, p.Key}] {
 			problem = "another project has the same url, workspace and key"
+		} else if i := slices.IndexFunc(p.AllowHosts, runnersMachine); i >= 0 {
+			problem = fmt.Sprintf("allow_hosts entry %q is the runner's own machine, which allow_hosts never opens; add a model provider instead with `%s add-provider NAME URL`", p.AllowHosts[i], name.Name)
 		} else if i := slices.IndexFunc(p.AllowHosts, func(hp string) bool { return !validHostPort(hp) }); i >= 0 {
 			problem = fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", p.AllowHosts[i])
 		} else {
@@ -322,6 +362,33 @@ func checkExtraRepositories(rs []ExtraRepository) string {
 		names[r.Name()] = true
 	}
 	return ""
+}
+
+// checkProviders reports the first invalid provider or two with one name; "" means none.
+func checkProviders(ps []Provider) string {
+	names := map[string]bool{}
+	for _, p := range ps {
+		if err := p.Validate(); err != nil {
+			return err.Error()
+		}
+		if names[p.Name] {
+			return "two providers are named " + p.Name
+		}
+		names[p.Name] = true
+	}
+	return ""
+}
+
+// runnersMachine says hp names the runner's own machine: localhost, a
+// loopback address or host.docker.internal (decision 2026-11-17-local-model-providers).
+func runnersMachine(hp string) bool {
+	host, _, err := net.SplitHostPort(hp)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	host = strings.ToLower(host)
+	return host == "localhost" || host == "host.docker.internal" || ip != nil && ip.IsLoopback()
 }
 
 // hostChars are what an allow_hosts host may hold: a DNS name or an IPv4

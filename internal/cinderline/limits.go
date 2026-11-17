@@ -25,6 +25,8 @@ const (
 	maxKey           = 30    // a linked project's key
 	maxClients       = 50    // report.clients
 	maxEnvironments  = 10    // report.environments
+	maxProviders     = 50    // report.model_providers
+	maxProviderName  = 50    // a model provider's name; a longer one is left out
 	maxSessions      = 2     // sessions
 	maxPath          = 255   // workspace branch, base and paths
 )
@@ -52,9 +54,14 @@ func refs(s []string, n int) []string {
 	if s == nil {
 		return nil
 	}
+	return fitting(s, n, maxRef)
+}
+
+// fitting is the first n entries of s of at most chars characters; never nil.
+func fitting(s []string, n, chars int) []string {
 	out := []string{}
 	for _, r := range s {
-		if len(out) < n && utf8.RuneCountInString(r) <= maxRef {
+		if len(out) < n && utf8.RuneCountInString(r) <= chars {
 			out = append(out, r)
 		}
 	}

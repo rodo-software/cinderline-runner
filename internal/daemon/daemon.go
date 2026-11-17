@@ -192,7 +192,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			Allow:     environment.ProjectHosts(p.URL, p.AllowHosts),
 			OnRefused: func(string) { proj.AddRefused() },
 		}
-		proj, err = run.NewProject(p, sec, o.Paths.State, env, log)
+		proj, err = run.NewProject(p, cfg.Providers, sec, o.Paths.State, env, log)
 		if err != nil {
 			fail("project not started", err)
 			continue

@@ -2,7 +2,7 @@
 
 The Cinderline runner is a native Go program on a developer's machine that runs agent teams on a Cinderline instance's issues, each turn in its own Docker container, pushes a branch and opens a pull request.
 
-Status: milestones M0 to M5, M7 (Codex, Gemini CLI, `cinderline login`, client detection, errors reported to Cinderline), M8 (network allowlist) and M9 (the app decides each step) are built. Of M6, the per-project environment (`docker`) is built; the existing setup (`existing`) is decided (decision 2026-11-08-m6-environments) but not built. See [docs/runner-rewrite-plan.md](docs/runner-rewrite-plan.md).
+Status: milestones M0 to M5, M7 (Codex, Gemini CLI, `cinderline login`, client detection, errors reported to Cinderline), M8 (network allowlist) and M9 (the app decides each step) are built. Of M6, the per-project environment (`docker`) is built. See [docs/runner-rewrite-plan.md](docs/runner-rewrite-plan.md).
 
 Cinderline decides, the runner does the mechanics and reports facts (decision 2026-11-16-runner-protocol-v2). The runner sends three requests: every `poll_after` seconds a poll, with its report (client states, errors) and what it holds, which gets the project's settings, the issue to run when it is idle, the runs to stop, what to do with kept sessions and the Review branches to keep current; at every step of a run `POST /runs/{ref}/next`, which reports the step just done and gets the next one from a closed set (run an agent, resolve a merge conflict, run the project's check command, publish, stop, done); and the download of an attachment a step names. Which issue runs, which agent works on which issue or sub-issue, the prompts, the budget, every comment and every status move are Cinderline's; the runner keeps the containers, git, the forge, the agent CLIs, sessions and its own safety checks, and writes nothing on an issue.
 
@@ -88,7 +88,7 @@ Where Forgejo offers tokens limited to chosen repositories, they allow repositor
 
 The runner never merges on Bitbucket: its API cannot merge when builds pass, so you merge yourself.
 
-Last, `add` asks for the project's model keys, each optional (press Enter to skip): an Anthropic API key or `claude setup-token` token for Claude Code, an OpenRouter key for OpenCode, an OpenAI API key for Codex and a Gemini API key (or a Vertex AI express-mode key, see `gemini_vertex` below) for Gemini CLI. Prefer a spend-limited API key to a subscription. OpenCode runs only with an OpenRouter key. Like the tokens, keys are typed in plain text and stored in the keychain; none is printed back.
+Last, `add` asks for the project's model keys, each optional (press Enter to skip): an Anthropic API key or `claude setup-token` token for Claude Code, an OpenRouter key for OpenCode, an OpenAI API key for Codex and a Gemini API key (or a Vertex AI express-mode key, see `gemini_vertex` below) for Gemini CLI. Prefer a spend-limited API key to a subscription. OpenCode runs with an OpenRouter key, a model provider of the runner (see "Local models"), or both. Like the tokens, keys are typed in plain text and stored in the keychain; none is printed back.
 
 `cinderline key set CLIENT --project KEY` (CLIENT is `claude`, `opencode`, `codex` or `gemini`) sets or replaces one key later, read from stdin, e.g. `cinderline key set opencode --project WEB`, then paste the key and press Enter; `cinderline key delete CLIENT --project KEY` deletes it. Add `-url URL` when projects on several instances share the key.
 
@@ -102,6 +102,28 @@ A run can read other repositories of the project, read-only. `cinderline add-rep
 
 Before each run the runner fetches them in a git container that alone gets their tokens and mounts them read-only at `/extra/NAME` in the agent's container; it tells Cinderline which it fetched, and Cinderline's prompt lists them. One that fails to fetch is left out, and the runner tells Cinderline, which says so in a progress update. Cinderline knows nothing about them (app decision 2026-11-11-extra-repositories-in-runner).
 
+### Local models
+
+An OpenCode agent can run on a model you host, on any server with an OpenAI-compatible API (llama.cpp, Ollama, LM Studio, vLLM and so on). Add the server to the runner once as a named provider; every project on the runner can then use it, simply by giving an agent in Cinderline the model `<provider>/<model id>`, the id as the server knows it; `openrouter/...` keeps using OpenRouter. The runner gives OpenCode the provider's URL and key for that turn only, and the turn's proxy allows exactly that host and port. A turn whose provider this runner does not have is not started. The runner tells Cinderline the names of its providers, never their URLs or keys.
+
+`cinderline add-provider NAME URL` adds one: NAME is lower-case letters, digits and dashes (not `openrouter`), URL the server's base URL with its port and path, such as `http://studio.local:8080/v1`. It asks for an API key; press Enter when the server needs none. The key is one secret for the whole runner, kept with the other secrets. `cinderline key set provider:NAME` changes it and `cinderline key delete provider:NAME` removes it, both without `--project`. `cinderline list-providers` lists the providers and whether each has a key, and `cinderline remove-provider NAME` removes one with its key. Providers are in the top-level `providers` list of `config.json`, not in a project.
+
+A server on another machine, say a Mac Studio at `studio.local` running llama.cpp's `llama-server --host 0.0.0.0 --port 8080`:
+
+```sh
+cinderline add-provider cerebellum http://studio.local:8080/v1
+```
+
+and an agent with the model `cerebellum/qwen3-coder-30b`. The runner's machine must reach that address; the agent reaches it only through the proxy.
+
+A server on the runner's own machine, say Ollama on its default port:
+
+```sh
+cinderline add-provider ollama http://localhost:11434/v1
+```
+
+and an agent with the model `ollama/qwen3-coder:30b`. A URL with `localhost`, `127.0.0.1`, `[::1]` or `host.docker.internal` is reached as `host.docker.internal` on exactly its port: only the run's proxy maps that name to the host, so the agent itself still has no route to the host and no other host port. On Docker Desktop (macOS, Windows) a server listening on `127.0.0.1` works. On Docker Engine on Linux the name maps to the Docker bridge address, so the server must listen on that address or on all addresses (`OLLAMA_HOST=0.0.0.0`, `llama-server --host 0.0.0.0`); one that listens only on `127.0.0.1` is not reachable. An `https` server on the same machine must have a certificate for `host.docker.internal`. A provider is the only way to reach the runner's own machine: a project's `allow_hosts` refuses `localhost`, loopback addresses and `host.docker.internal`.
+
 ### Linked projects
 
 A project can link to another one in Cinderline: "A may reach B", one way, never chained (decision 2026-11-11-project-links). Links are managed in Cinderline; the runner only reads them. A run of A can then read and edit B's issues over MCP, and, when B is also added on this runner (same Cinderline URL and key), read all of B's repositories: B's own repository at its base branch and B's extra repositories, mounted read-only at `/linked/KEY/NAME`. They are fetched before every run, resume and follow-up, each with the token stored for its URL, and Cinderline's prompt lists those the runner fetched. All changes still go into A's own repository; the runner never pushes to B's. When B is not added on this runner, the run goes on without its code and Cinderline says so in a progress update; `cinderline add` it to give runs its code. A repository that fails to fetch is left out and reported, as above.
@@ -112,7 +134,7 @@ Files attached to an issue in Cinderline (at most 5, 10 MB in total) reach its r
 
 ### Sign a client in instead of storing a key
 
-`cinderline login claude --project KEY`, `cinderline login codex --project KEY` or `cinderline login gemini --project KEY` runs the CLI's own sign-in (`claude auth login`, `codex login --device-auth`, Gemini CLI's own Google sign-in) in a container. Open the link it prints and paste the code back. The credentials stay on that project's state volume of that client, which only that client's runs mount; the runner never reads them. When the keychain holds no Anthropic, OpenAI or Gemini key for the project, runs then use this login; a stored key still wins. OpenCode uses the project's OpenRouter key only. After `login gemini`, type `/quit` once it says "Authentication succeeded": the interactive Gemini CLI stays open after signing in.
+`cinderline login claude --project KEY`, `cinderline login codex --project KEY` or `cinderline login gemini --project KEY` runs the CLI's own sign-in (`claude auth login`, `codex login --device-auth`, Gemini CLI's own Google sign-in) in a container. Open the link it prints and paste the code back. The credentials stay on that project's state volume of that client, which only that client's runs mount; the runner never reads them. When the keychain holds no Anthropic, OpenAI or Gemini key for the project, runs then use this login; a stored key still wins. OpenCode uses the project's OpenRouter key or the runner's model providers. After `login gemini`, type `/quit` once it says "Authentication succeeded": the interactive Gemini CLI stays open after signing in.
 
 The daemon reports each client's state (ready, missing the binary, missing a credential, or the provider refused the key) in its runner report, so the Cinderline instance can show what a project is set up for. Logins on the state volume count as configured but are not tested, so an expired login only fails on the first run.
 
@@ -128,24 +150,25 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 
 - `keep_sessions_for`: how long a finished run's agent session and worktree are kept after its last run, so that moving the issue back to To do continues the same session with its full context; days such as `"7d"` or hours such as `"36h"`, `"7d"` by default, `"off"` for no age limit. Sessions of Done, Cancelled or archived issues are always deleted.
 - `min_free_disk`: when free space on Docker's disk (where the worktree and session volumes are) is below this, kept sessions are deleted oldest first; such as `"10GB"`, in `MB`, `GB` or `TB`, `"10GB"` by default, `"off"` to never delete them for space. The runner applies both limits, per project, to the sessions Cinderline says it may expire (those of issues no run needs now), at start, after each run and every ten minutes while idle; a worktree with unpushed commits is never deleted. A follow-up whose session was deleted starts fresh, and Cinderline says so on the issue.
-- Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"); `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key; `extra_repositories`, which `add-repo` writes (see "Extra repositories").
+- `providers`: the runner's model providers for OpenCode, for every project, which `add-provider` writes (see "Local models").
+- Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"), never `localhost`, a loopback address or `host.docker.internal`; `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key; `extra_repositories`, which `add-repo` writes (see "Extra repositories").
 
-Unknown fields are refused. `add`, `key set`, `key delete`, `login`, `add-repo` and `remove-repo` make a running runner reload the file, which aborts its runs in flight: at the next poll Cinderline moves their issues to Blocked with a note naming the branch, and a person moves them back to To do to run them again. `cinderline stop --drain` lets a run in flight finish first. `remove` reloads it too. After a hand edit, restart the runner.
+Unknown fields are refused. `add`, `key set`, `key delete` (also of a provider's key), `login`, `add-repo`, `remove-repo`, `add-provider` and `remove-provider` make a running runner reload the file, which aborts its runs in flight: at the next poll Cinderline moves their issues to Blocked with a note naming the branch, and a person moves them back to To do to run them again. `cinderline stop --drain` lets a run in flight finish first. `remove` reloads it too. After a hand edit, restart the runner.
 
 ## Network
 
 Each issue runs on its own internal Docker network with an egress proxy, its only way out (decision 2026-11-09-network-allowlist). The proxy allows exact `host:port` pairs, no wildcards:
 
-- the model provider of the run's client only (`api.anthropic.com`, `openrouter.ai`, `api.openai.com` or the `openai_base_url` host, `generativelanguage.googleapis.com` or `aiplatform.googleapis.com`), plus that provider's sign-in hosts when the run uses a sign-in;
+- the model provider of the run's client only (`api.anthropic.com`, `openrouter.ai`, `api.openai.com` or the `openai_base_url` host, `generativelanguage.googleapis.com` or `aiplatform.googleapis.com`, or for OpenCode the host and port of the runner's provider the agent's model names), plus that provider's sign-in hosts when the run uses a sign-in;
 - the project's Cinderline host, for MCP;
 - the package registries: `repo.packagist.org`, `packagist.org`, `codeload.github.com`, `api.github.com`, `registry.npmjs.org`, `proxy.golang.org`, `sum.golang.org`, on port 443;
-- the project's `allow_hosts`.
+- the project's `allow_hosts`, which refuses `localhost`, loopback addresses and `host.docker.internal`.
 
-No forge (git fetch and push run in a separate helper container) and never `host.docker.internal`. The run's log names each refused host, and the runner report counts them.
+No forge (git fetch and push run in a separate helper container), and `host.docker.internal` only on the port of a provider on the runner's own machine, for a turn that uses it (see "Local models"). The run's log names each refused host, and the runner report counts them.
 
 ## Environments
 
-A project runs in the default environment unless an admin sets its environment to `docker` in Cinderline: the default image (PHP 8.4, Composer, Node 22, git) on the network above, with no other service and no database. With `docker`, each turn runs in the project's own compose file, read from the base branch only (`.cinderline/compose.yml` by default, path and agent service set in Cinderline), so a pull request cannot change what runs for its own issue. The agent runs in the agent service's image (`agent` by default), pulled or built, with that service's environment, hardened as in the default environment; the other services start beside it with `docker compose up --wait` on the run's internal network, behind the same egress proxy, and everything is removed after the turn. The agent service's own command, entrypoint, user and mounts are not used. This needs `docker compose`; it runs with only the variables the docker CLI needs, so the file cannot read the runner's environment.
+A project runs in the default environment unless an admin sets its environment to `docker` in Cinderline: the default image (PHP 8.4, Composer, Node 22, git, and for now Go with staticcheck, govulncheck, gcc and libc6-dev) on the network above, with no other service and no database. With `docker`, each turn runs in the project's own compose file, read from the base branch only (`.cinderline/compose.yml` by default, path and agent service set in Cinderline), so a pull request cannot change what runs for its own issue. The agent runs in the agent service's image (`agent` by default), pulled or built, with that service's environment, hardened as in the default environment; the other services start beside it with `docker compose up --wait` on the run's internal network, behind the same egress proxy, and everything is removed after the turn. The agent service's own command, entrypoint, user and mounts are not used. This needs `docker compose`; it runs with only the variables the docker CLI needs, so the file cannot read the runner's environment.
 
 A project that needs a database brings it in that file. For a Laravel project with MySQL 8, as `.cinderline/compose.yml`:
 

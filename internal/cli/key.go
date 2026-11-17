@@ -24,7 +24,7 @@ var modelKeys = []struct{ client, label string }{
 	{"gemini", "Gemini API key"},
 }
 
-const keyUsage = "list|set NAME|delete NAME " + projectUsage
+const keyUsage = "list|set NAME|delete NAME " + projectUsage + " | set|delete provider:NAME"
 
 // key lists which secrets a project has, or sets or deletes one: its runner
 // token, its git token or a client's model key. A new value is read as one
@@ -37,6 +37,9 @@ func (c *CLI) key(args []string) int {
 	if len(args) < 2 || (args[0] != "set" && args[0] != "delete") {
 		c.flags("key", keyUsage).Usage()
 		return 2
+	}
+	if pr, ok := strings.CutPrefix(args[1], "provider:"); ok {
+		return c.providerKey(args[0], pr, args[2:])
 	}
 	cfg, i, _, code := c.repoFlags("key", keyUsage, args[2:], 0)
 	if code != 0 {
@@ -76,6 +79,39 @@ func (c *CLI) key(args []string) int {
 		}
 	}
 	if err := c.storeKey(p, kind, label, v); err != nil {
+		return c.fail(err)
+	}
+	c.reload()
+	return 0
+}
+
+// providerKey sets or deletes the runner-wide key of the runner's provider
+// pr (decision 2026-11-17-local-model-providers); it takes no --project.
+func (c *CLI) providerKey(verb, pr string, args []string) int {
+	cfg, _, code := c.providerFlags("key", keyUsage, args, 0)
+	if code != 0 {
+		return code
+	}
+	if _, err := providerIndex(cfg, pr); err != nil {
+		return c.fail(err)
+	}
+	kind, label := secrets.ProviderKey(pr), "the key of "+pr
+	if verb == "delete" {
+		if err := c.Secrets.Delete(secrets.Runner, kind); err != nil {
+			return c.fail(err)
+		}
+		fmt.Fprintf(c.Stdout, "Deleted %s\n", label)
+		c.reload()
+		return 0
+	}
+	v, err := c.secretAsk("API key for " + pr + ": ")
+	if err != nil {
+		return c.fail(err)
+	}
+	if v == "" {
+		return c.fail(errors.New("empty value; nothing was stored"))
+	}
+	if err := c.storeKey(secrets.Runner, kind, label, v); err != nil {
 		return c.fail(err)
 	}
 	c.reload()

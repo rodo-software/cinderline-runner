@@ -19,7 +19,7 @@ var codex = kind{
 	},
 	parse: parseCodex,
 	// OpenAI's API, or the configured base URL's.
-	hosts: func(c *CLI) []string {
+	hosts: func(c *CLI, _ Turn) []string {
 		if c.BaseURL != "" {
 			if hp := environment.HostPort(c.BaseURL); hp != "" {
 				return []string{hp}

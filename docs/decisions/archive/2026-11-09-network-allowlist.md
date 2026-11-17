@@ -1,3 +1,5 @@
+Point 3 amended by decision 2026-11-17-local-model-providers
+
 # The network allowlist of agent containers
 
 - **Status:** Accepted

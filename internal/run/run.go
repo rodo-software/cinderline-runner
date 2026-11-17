@@ -393,6 +393,9 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 	if ctx.Err() != nil {
 		return last, res, ctx.Err()
 	}
+	if errors.Is(err, client.ErrNotStarted) {
+		return notStarted(err)
+	}
 	res.SessionID = cmp.Or(res.SessionID, turn.SessionID)
 	h.turned(issue, agent.Name, res.SessionID, res.Report)
 	last.Usage = usage(issue, agent.Name, turn.Model, res.Usage)
