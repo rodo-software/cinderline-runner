@@ -91,14 +91,14 @@ func TestStepFacts(t *testing.T) {
 		// Decision 2026-11-17-open-questions-answered, point 2: a known secret
 		// stops the push, at once and without retries; a shape only warns.
 		{"stop secret", `{"kind":"stop"}`, func(f *fixture) {
-			f.ws.Pushes = []error{secretErr}
+			f.ws.Pushes = []error{errSecret}
 			f.ws.Found = [][]workspace.Secret{{knownSecret, shapeSecret}}
-		}, cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "secret", Commit: ptr("abc123"), Error: ptr(secretErr.Error()), Secrets: stepSecrets([]workspace.Secret{knownSecret, shapeSecret})}},
+		}, cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "secret", Commit: ptr("abc123"), Error: ptr(errSecret.Error()), Secrets: stepSecrets([]workspace.Secret{knownSecret, shapeSecret})}},
 		{"publish secret", `{"kind":"publish","merge":true}`, func(f *fixture) {
 			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
-			f.ws.Pushes = []error{secretErr}
+			f.ws.Pushes = []error{errSecret}
 			f.ws.Found = [][]workspace.Secret{{knownSecret}}
-		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "secret", Commit: ptr("abc123"), Error: ptr(secretErr.Error()), Secrets: stepSecrets([]workspace.Secret{knownSecret})}},
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "secret", Commit: ptr("abc123"), Error: ptr(errSecret.Error()), Secrets: stepSecrets([]workspace.Secret{knownSecret})}},
 		{"publish warns", `{"kind":"publish"}`, func(f *fixture) {
 			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
 			f.ws.Found = [][]workspace.Secret{{shapeSecret}}
@@ -159,7 +159,7 @@ func TestStepFacts(t *testing.T) {
 }
 
 var (
-	secretErr   = fmt.Errorf("push cinderline/CSR-1: %w: git token in c1 a.go", workspace.ErrSecret)
+	errSecret   = fmt.Errorf("push cinderline/CSR-1: %w: git token in c1 a.go", workspace.ErrSecret)
 	knownSecret = workspace.Secret{Kind: "git token", Commit: "c1", Path: "a.go", Known: true}
 	shapeSecret = workspace.Secret{Kind: "private key block", Commit: "c1"}
 )
