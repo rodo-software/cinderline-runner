@@ -87,7 +87,7 @@ func (c *CLI) add(args []string) int {
 	}
 	say("Project %s: %s", proj.Key, proj.Name)
 	p := config.Project{URL: instance, Key: proj.Key, Workspace: proj.WorkspaceSlug()}
-	p.LocalID = p.Label() // fixed from now on, whatever the key becomes (CLR-191)
+	p.LocalID = p.Label() // stays until `rename`, whatever the key becomes in the app
 	for _, q := range cfg.Projects {
 		if q.URL == p.URL && q.Key == p.Key && q.Workspace == p.Workspace {
 			return c.fail(fmt.Errorf("%s at %s is already added, in workspace %s; run `%s remove -url %s -workspace %s %s` first", p.Key, p.URL, q.Workspace, name.Name, q.URL, q.Workspace, q.Key))

@@ -43,6 +43,16 @@ func (c *CLI) remove(args []string) int {
 	if err := cfg.Save(c.Paths.File); err != nil {
 		return c.fail(err)
 	}
+	c.dropLocal(cfg, p)
+	fmt.Fprintf(c.Stdout, "Removed %s at %s\n", p.Key, p.URL)
+	return 0
+}
+
+// dropLocal makes a running runner reload, then removes what is named by
+// p's ID and is not in the config or the keychain: its Docker containers,
+// networks and volumes, its session notes and its outbox. cfg is the saved
+// config, without p or with p under another ID. It only warns.
+func (c *CLI) dropLocal(cfg *config.Config, p config.Project) {
 	// Before Docker: the reload ends the project's runs, which hold its volumes.
 	c.reload()
 	// Docker names carry only the ID, so a namesake on another instance still uses them.
@@ -59,8 +69,6 @@ func (c *CLI) remove(args []string) int {
 	if err := os.Remove(run.OutboxFile(c.Paths.State, p)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintln(c.Stderr, "warning:", err)
 	}
-	fmt.Fprintf(c.Stdout, "Removed %s at %s\n", p.Key, p.URL)
-	return 0
 }
 
 // projectFlags adds -url and -workspace, which choose between projects that share a key.

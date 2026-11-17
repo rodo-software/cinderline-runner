@@ -107,11 +107,12 @@ func parseSize(s string) (int64, error) {
 
 // Project is one Cinderline project, identified by URL, Workspace and Key (CSR-97).
 type Project struct {
-	// LocalID is the fixed local name ID returns, set once, so a key renamed
-	// in the app renames nothing on this machine (CLR-191).
+	// LocalID is the local name ID returns. A key renamed in the app changes
+	// nothing on this machine until `rename` moves it to the new key's name
+	// (decision 2026-11-17-rename-moves-local-names).
 	LocalID string `json:"id,omitempty"`
 	URL     string `json:"url"`
-	// Key is the project's key in the app, a label only: `rename` updates it.
+	// Key is the project's key in the app: `rename` updates it, and LocalID with it.
 	Key string `json:"key"`
 	// Workspace is the slug of the project's workspace from GET project.
 	Workspace  string `json:"workspace"`

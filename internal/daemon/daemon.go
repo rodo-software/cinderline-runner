@@ -176,7 +176,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 	running := map[string]bool{} // by ID
 	for _, p := range cfg.Projects {
 		id := p.ID()
-		st := localapi.ProjectStatus{Project: p.Label()} // the key, which follows a rename; the ID does not (CLR-191)
+		st := localapi.ProjectStatus{Project: p.Label()} // the key: the ID is another name for an entry of an older runner
 		fail := func(msg string, err error) {
 			log.Error(msg, "project", p.Key, "err", err)
 			st.LastError, st.LastErrorAt = err.Error(), time.Now()
