@@ -88,6 +88,22 @@ func TestStepFacts(t *testing.T) {
 			cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "pushed", Commit: ptr("abc123")}},
 		{"stop not pushed", `{"kind":"stop"}`, func(f *fixture) { f.ws.Pushes = []error{errors.New("denied")} },
 			cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "not_pushed", Commit: ptr("abc123"), Error: ptr("denied")}},
+		// Decision 2026-11-17-open-questions-answered, point 2: a known secret
+		// stops the push, at once and without retries; a shape only warns.
+		{"stop secret", `{"kind":"stop"}`, func(f *fixture) {
+			f.ws.Pushes = []error{secretErr}
+			f.ws.Found = [][]workspace.Secret{{knownSecret, shapeSecret}}
+		}, cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "secret", Commit: ptr("abc123"), Error: ptr(secretErr.Error()), Secrets: stepSecrets([]workspace.Secret{knownSecret, shapeSecret})}},
+		{"publish secret", `{"kind":"publish","merge":true}`, func(f *fixture) {
+			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+			f.ws.Pushes = []error{secretErr}
+			f.ws.Found = [][]workspace.Secret{{knownSecret}}
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "secret", Commit: ptr("abc123"), Error: ptr(secretErr.Error()), Secrets: stepSecrets([]workspace.Secret{knownSecret})}},
+		{"publish warns", `{"kind":"publish"}`, func(f *fixture) {
+			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+			f.ws.Found = [][]workspace.Secret{{shapeSecret}}
+			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Commit: ptr("abc123"), Secrets: stepSecrets([]workspace.Secret{shapeSecret})}},
 		{"publish unchanged", `{"kind":"publish"}`, func(f *fixture) { f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}} },
 			cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "unchanged", Commit: ptr("abc123")}},
 		{"publish merged", `{"kind":"publish","merge":true}`, func(f *fixture) {
@@ -142,6 +158,12 @@ func TestStepFacts(t *testing.T) {
 	}
 }
 
+var (
+	secretErr   = fmt.Errorf("push cinderline/CSR-1: %w: git token in c1 a.go", workspace.ErrSecret)
+	knownSecret = workspace.Secret{Kind: "git token", Commit: "c1", Path: "a.go", Known: true}
+	shapeSecret = workspace.Secret{Kind: "private key block", Commit: "c1"}
+)
+
 type exitError int
 
 func (e exitError) Error() string { return "exit status 1" }
@@ -151,7 +173,11 @@ func sameLast(a, b cinderline.LastStep) bool { return show(a) == show(b) }
 
 func show(l cinderline.LastStep) string {
 	s := func(p *string) string { return deref(p) }
-	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ",")}, "|")
+	var found []string
+	for _, f := range l.Secrets {
+		found = append(found, fmt.Sprint(f.Kind, "@", f.Commit, ":", s(f.Path), "/", f.Known))
+	}
+	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ","), strings.Join(found, ",")}, "|")
 }
 
 // A step the runner cannot do, and a failure in its own code, end the run

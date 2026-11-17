@@ -70,3 +70,18 @@ func TestHandlerRedactsMessageAttrsErrorsAndGroups(t *testing.T) {
 		t.Errorf("log line %s", buf.String())
 	}
 }
+
+func TestFind(t *testing.T) {
+	Add("git token", "find-me-0123456789abcdef")
+	for _, s := range []string{
+		"token: find-me-0123456789abcdef",
+		"Basic " + base64.StdEncoding.EncodeToString([]byte("x:find-me-0123456789abcdef")),
+	} {
+		if got, ok := Find(s); !ok || got != "git token" {
+			t.Errorf("Find(%q) = %q, %v; want git token", s, got, ok)
+		}
+	}
+	if got, ok := Find("nothing to see here, find-me-01234"); ok {
+		t.Errorf("Find found %q in text without a value", got)
+	}
+}

@@ -118,27 +118,40 @@ func (d *Docker) Fetch(ctx context.Context) error {
 }
 
 // Push fetches branch from the agent's clone at dir, mounted read-only and
-// without the token, into the helper's clone, then pushes it from there. No
-// git runs inside the agent's clone with the token, so its hooks and config
-// can't run with it or redirect it.
-func (d *Docker) Push(ctx context.Context, dir, branch string) error {
+// without the token, into the helper's clone, scans the branch's commits for
+// secrets, then pushes it from there. No git runs inside the agent's clone
+// with the token, so its hooks and config can't run with it or redirect it.
+// It returns what the scan found; a secret the runner knows stops the push
+// with ErrSecret, and the clone stays as it is.
+func (d *Docker) Push(ctx context.Context, dir, branch string) ([]Secret, error) {
 	if err := checkDir(dir); err != nil {
-		return fmt.Errorf("push %s: %w", branch, err)
+		return nil, fmt.Errorf("push %s: %w", branch, err)
 	}
 	labels := d.labels(strings.TrimPrefix(branch, name.Name+"/"))
 	scratch := "refs/push/" + branch
 	// The clone belongs to the agent's UID, so git needs it named safe; only
 	// that exact path.
 	if err := d.helper(ctx, labels, false, true, "-c", "safe.directory="+dir, "-C", RepoPath, "fetch", "--quiet", "--no-tags", dir, "+refs/heads/"+branch+":"+scratch); err != nil {
-		return err
+		return nil, err
+	}
+	// shortcut: the whole log is held in memory, fine for an agent's
+	// commits; stream it if a run ever commits hundreds of megabytes.
+	log, err := d.helperOutput(ctx, labels, false, false, scanArgs(scratch, branch)...)
+	if err != nil {
+		return nil, err
+	}
+	found := scan(log)
+	if hasKnown(found) {
+		return found, fmt.Errorf("push %s: %w: %s", branch, ErrSecret, describe(found))
 	}
 	if err := d.helper(ctx, labels, true, false, "-C", RepoPath, "push", "--quiet", d.Repository, scratch+":refs/heads/"+branch); err != nil {
-		return err
+		return found, err
 	}
 	// Record what was pushed in the clone so "ahead of the remote" is exact
-	// without a fetch (decision 2026-11-07-publish-resilience).
-	_, err := d.git(ctx, dir, "update-ref", "refs/remotes/origin/"+branch, "refs/heads/"+branch)
-	return err
+	// without a fetch (decision 2026-11-07-publish-resilience); after a hit,
+	// the agent squashes its unpushed commits onto it.
+	_, err = d.git(ctx, dir, "update-ref", "refs/remotes/origin/"+branch, "refs/heads/"+branch)
+	return found, err
 }
 
 // helper runs git with args in a throwaway helper container with the repo
@@ -146,6 +159,12 @@ func (d *Docker) Push(ctx context.Context, dir, branch string) error {
 // does the container get the token, by name: its value travels in the docker
 // command's environment, never in argv.
 func (d *Docker) helper(ctx context.Context, labels []string, token, runs bool, args ...string) error {
+	_, err := d.helperOutput(ctx, labels, token, runs, args...)
+	return err
+}
+
+// helperOutput is helper, returning git's standard output.
+func (d *Docker) helperOutput(ctx context.Context, labels []string, token, runs bool, args ...string) (string, error) {
 	argv := append([]string{"docker", "run", "--rm"}, labels...)
 	var env []string
 	if token {
@@ -157,7 +176,7 @@ func (d *Docker) helper(ctx context.Context, labels []string, token, runs bool, 
 		argv = append(argv, "-v", d.volume("runs")+":"+RunsPath+":ro")
 	}
 	argv = append(argv, "--entrypoint", "sh", GitImage, "-c", askpassScript, "sh", "git")
-	return d.run(ctx, env, append(argv, args...)...)
+	return d.output(ctx, env, append(argv, args...)...)
 }
 
 func (d *Docker) run(ctx context.Context, env []string, argv ...string) error {

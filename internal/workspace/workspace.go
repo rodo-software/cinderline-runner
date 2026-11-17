@@ -35,7 +35,10 @@ type Workspace interface {
 	// Log returns the one-line log of the commits on the clone's branch that
 	// are not on base.
 	Log(ctx context.Context, dir, base string) (string, error)
-	Push(ctx context.Context, dir, branch string) error
+	// Push scans the commits of the clone's branch that no other remote
+	// branch has for secrets and pushes the branch. It returns what the scan
+	// found; one the runner knows stops the push with ErrSecret.
+	Push(ctx context.Context, dir, branch string) ([]Secret, error)
 	// Head returns the commit the clone's branch is on.
 	Head(ctx context.Context, dir string) (string, error)
 	// Stranded lists the clones whose branch has commits that no remote

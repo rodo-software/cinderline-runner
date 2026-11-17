@@ -268,7 +268,7 @@ func (p *Project) keepWork(ctx context.Context, ref, author, message string) err
 		case c.Branch != branch:
 			return fmt.Errorf("the issue's clone has unpushed commits on %s, not %s, so it is kept", c.Branch, branch)
 		default:
-			if err := p.Workspace.Push(ctx, dir, branch); err != nil {
+			if _, err := p.Workspace.Push(ctx, dir, branch); err != nil {
 				return fmt.Errorf("the issue's clone has unpushed commits, kept: %w", err)
 			}
 			p.Log.Info("unpushed work pushed", "project", p.Config.Key, "issue", ref, "branch", branch)

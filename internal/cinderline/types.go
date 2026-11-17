@@ -200,6 +200,19 @@ type LastStep struct {
 	PullRequest *string  `json:"pull_request"` // its URL
 	Merge       *string  `json:"merge"`        // merged, closed, pending or failed; nil when not asked
 	Commit      *string  `json:"commit"`
+
+	// What the push scan found, at publish and stop: a known one comes with
+	// the outcome secret, nothing pushed; the others are warnings.
+	Secrets []StepSecret `json:"secrets,omitempty"`
+}
+
+// StepSecret is a secret the push scan found: its kind and place, never its
+// value (decision 2026-11-17-open-questions-answered, point 2).
+type StepSecret struct {
+	Kind   string  `json:"kind"` // such as "anthropic key" or "private key block"
+	Commit string  `json:"commit"`
+	Path   *string `json:"path"` // nil: in the commit's message or author
+	Known  bool    `json:"known"`
 }
 
 // Usage is the tokens and cost of one agent turn.

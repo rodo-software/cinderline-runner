@@ -29,6 +29,7 @@ const (
 	maxProviderName  = 50    // a model provider's name; a longer one is left out
 	maxSessions      = 2     // sessions
 	maxPath          = 255   // workspace branch, base and paths
+	maxSecrets       = 50    // last.secrets
 )
 
 // clip is s cut to its first n characters, as the app counts them (runes).

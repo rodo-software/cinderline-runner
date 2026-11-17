@@ -91,6 +91,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - No secret enters an agent container except the one model credential the turn needs and its scoped token. (AGENTS.md)
 - Every secret the runner holds (runner token, git tokens, model and provider keys, scoped agent tokens) is replaced by a marker in log lines, in everything sent to the app, and in pull request titles and bodies, also base64, hex and URL-encoded. Values under 16 characters are skipped. It is a second line of defence only. (2026-11-11-secret-redaction; 2026-11-17-local-model-providers)
 - The runner never reads the sign-in files on the state volumes. (2026-11-11-secret-redaction)
+- Every push is scanned first: a value the runner holds, in any redacted form, in the header, message or added lines of a commit no other remote branch has stops the push and keeps the clone; a well-known shape of secret only warns. `publish` and `stop` report it with the outcome `secret` and the list `secrets` (kind, commit, path, never the value); the agent rewrites its unpushed commits. (2026-11-17-open-questions-answered, point 2; 2026-11-17-push-scan)
 
 ## Agent clients and the tools volume
 
@@ -131,10 +132,10 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 
 ## To do and to build
 
-- Build the push scan: before a push, look for the secrets the runner knows; a hit stops the push and the issue is blocked with a note naming the kind of secret and the place. A match on a well-known shape of unknown secret only warns. After a hit the clone and session are kept. (CSR-190; 2026-11-11-secret-redaction; Willem 2026-11-17, answer 20; 2026-11-17-open-questions-answered, point 2)
+- The app accepts the push scan's outcome `secret` and list `secrets` and writes the note and warnings; then copy the contract here and merge CLR-190. (2026-11-17-push-scan)
 - Slim the default image back to PHP 8.4, Composer, Node 22 and git, then publish and pin it again. (2026-11-16-project-toolchains; Willem 2026-11-17, answer 21)
 - Force Docker's built-in seccomp profile on every agent container and on a project's compose services (`--security-opt seccomp=builtin`), so isolation does not depend on the machine's Docker settings. (2026-11-17-open-questions-answered, point 1)
 
 ## Known gaps between the rules and the code
 
-None known on 2026-11-17.
+- Until the app has the push scan's contract change, it refuses a step reported with the outcome `secret` (`422`). (2026-11-17-push-scan)

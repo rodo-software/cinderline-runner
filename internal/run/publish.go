@@ -2,12 +2,14 @@ package run
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // The publish step's retries of the base merge, push and pull request.
@@ -53,13 +55,22 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 	var pr forge.PullRequest
 	var conflicts []string
 	var unchanged bool
+	var found []workspace.Secret
 	for attempt, wait := 1, publishBackoff; ; attempt, wait = attempt+1, wait*2 {
 		var err error
-		if conflicts, unchanged, pr, err = p.attempt(ctx, j, title); err == nil {
+		if conflicts, unchanged, pr, found, err = p.attempt(ctx, j, title); err == nil {
 			break
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if errors.Is(err, workspace.ErrSecret) {
+			// Not tried again: the scan would find the same commits. The
+			// clone stays as it is (decision 2026-11-17-open-questions-answered).
+			log.Warn("push stopped by the secret scan", "err", err)
+			last.Outcome, last.Error, last.Secrets = "secret", ptr(err.Error()), stepSecrets(found)
+			last.Commit = p.head(ctx, j)
+			return last, nil
 		}
 		if attempt == publishAttempts {
 			last.Outcome, last.Error = "failed", ptr(err.Error())
@@ -71,7 +82,7 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 			return nil, err
 		}
 	}
-	last.Commit = p.head(ctx, j)
+	last.Commit, last.Secrets = p.head(ctx, j), stepSecrets(found)
 	if unchanged {
 		last.Outcome = "unchanged"
 		return last, nil
@@ -108,20 +119,20 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 
 // attempt is one try of the publish: the base merge, the check whether the
 // branch has anything the base lacks, the push and the pull request.
-func (p *Project) attempt(ctx context.Context, j *job, title string) (conflicts []string, unchanged bool, pr forge.PullRequest, err error) {
+func (p *Project) attempt(ctx context.Context, j *job, title string) (conflicts []string, unchanged bool, pr forge.PullRequest, found []workspace.Secret, err error) {
 	// Branch protection may block outdated pull requests.
 	if conflicts, err = p.Workspace.MergeBase(ctx, j.dir, j.base, leadAuthor(j.team)); err != nil {
-		return nil, false, pr, err
+		return nil, false, pr, nil, err
 	}
 	if unchanged, err = p.Workspace.IsAncestor(ctx, j.dir, "HEAD", j.base); err != nil || unchanged {
-		return conflicts, unchanged, pr, err
+		return conflicts, unchanged, pr, nil, err
 	}
 	// Built here from the ref, never passed in, so the push can never target the base.
-	if err = p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
-		return nil, false, pr, err
+	if found, err = p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
+		return nil, false, pr, found, err
 	}
 	pr, err = j.fg.OpenPullRequest(ctx, forge.PullRequestInput{Branch: j.branch, Base: j.base, Title: title, Body: pullRequestBody(j.ref, j.body)})
-	return conflicts, false, pr, err
+	return conflicts, false, pr, found, err
 }
 
 // awaitMerge polls the branch's pull request every mergeEvery until it is

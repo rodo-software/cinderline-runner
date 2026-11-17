@@ -72,14 +72,18 @@ func TestDockerFetch(t *testing.T) {
 
 func TestDockerPush(t *testing.T) {
 	d, calls := recorder(nil)
-	if err := d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29"); err != nil {
-		t.Fatal(err)
+	if found, err := d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29"); err != nil || found != nil {
+		t.Fatal(found, err)
 	}
 	want := []execCall{
 		// The agent's clone is read only and the fetch from it has no token.
 		{nil, helperArgv(issueLabels, noTokenEnv, runsMount,
 			"-c", "safe.directory=/runs/CSR-29", "-C", "/repo", "fetch", "--quiet", "--no-tags",
 			"/runs/CSR-29", "+refs/heads/cinderline/CSR-29:refs/push/cinderline/CSR-29")},
+		// The scan: every commit no other remote branch has, with what it adds.
+		{nil, helperArgv(issueLabels, noTokenEnv, repoMount,
+			"-C", "/repo", "log", "-p", "--text", "--no-color", "--no-textconv", "--no-ext-diff", "--diff-merges=remerge", "--pretty=medium", "--no-decorate",
+			"refs/push/cinderline/CSR-29", "--not", "--exclude=refs/heads/cinderline/CSR-29", "--glob=refs/heads/*")},
 		{tokenVar, helperArgv(issueLabels, tokenEnv, repoMount,
 			"-C", "/repo", "push", "--quiet", "https://git.example.com/o/r.git", "refs/push/cinderline/CSR-29:refs/heads/cinderline/CSR-29")},
 		// After the push, the clone's remote-tracking ref is updated so "ahead of
@@ -96,7 +100,7 @@ func TestDockerPush(t *testing.T) {
 func TestDockerPushRefusesDirOutsideRuns(t *testing.T) {
 	for _, dir := range []string{"/repo", "/runs", "/runs/", "/runs/../repo", "--upload-pack=x", "runs/CSR-29"} {
 		d, calls := recorder(nil)
-		if err := d.Push(context.Background(), dir, "cinderline/CSR-29"); err == nil {
+		if _, err := d.Push(context.Background(), dir, "cinderline/CSR-29"); err == nil {
 			t.Errorf("Push(%q) = nil, want an error", dir)
 		}
 		if len(*calls) != 0 {
@@ -108,7 +112,7 @@ func TestDockerPushRefusesDirOutsideRuns(t *testing.T) {
 func TestDockerStopsAtFirstFailure(t *testing.T) {
 	boom := errors.New("boom")
 	d, calls := recorder(map[int]error{0: boom})
-	if err := d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29"); !errors.Is(err, boom) {
+	if _, err := d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29"); !errors.Is(err, boom) {
 		t.Errorf("Push = %v, want boom", err)
 	}
 	if len(*calls) != 1 {

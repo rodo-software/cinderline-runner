@@ -100,6 +100,28 @@ func TestNextRedactsWhatItSends(t *testing.T) {
 	}
 }
 
+// The push scan's list is cut to the app's limit, its known secrets first
+// as the scan orders them, and a file name that holds a value is redacted.
+func TestNextSecretsFitAndAreRedacted(t *testing.T) {
+	redact.Add("test secret", "secret-value-1234567890")
+	s := &server{status: []int{200}, body: `{"state":"x","step":{"kind":"done"}}`}
+	c := s.client(t)
+	path := "keys/secret-value-1234567890.txt"
+	found := slices.Repeat([]StepSecret{{Kind: "private key block", Commit: "c1", Path: &path}}, 60)
+	found[0].Known = true
+	if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Last: &LastStep{Step: "stop", Outcome: "secret", Secrets: found}}); err != nil {
+		t.Fatal(err)
+	}
+	var next NextRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &next)
+	if got := next.Last.Secrets; len(got) != maxSecrets || !got[0].Known || got[1].Path == nil || *got[1].Path != "keys/[redacted test secret].txt" {
+		t.Errorf("sent %s", s.bodies[0])
+	}
+	if path != "keys/secret-value-1234567890.txt" {
+		t.Error("the caller's text was changed")
+	}
+}
+
 func TestErrorsAreTyped(t *testing.T) {
 	for _, tc := range []struct {
 		status      int

@@ -189,6 +189,15 @@ func redacted(r NextRequest) NextRequest {
 			l.Tail = &v
 		}
 		l.Conflicts = clipAll(l.Conflicts, maxConflicts, maxText)
+		if l.Secrets != nil {
+			found := make([]StepSecret, 0, min(len(l.Secrets), maxSecrets))
+			for _, f := range first(l.Secrets, maxSecrets) {
+				// A file's name is the agent's text, so it may hold a value too.
+				f.Kind, f.Commit, f.Path = clip(f.Kind, maxName), clip(f.Commit, maxCommit), text(f.Path, maxText)
+				found = append(found, f)
+			}
+			l.Secrets = found
+		}
 		l.Issue, l.Agent = clip(l.Issue, maxIssue), text(l.Agent, maxName)
 		if u := l.Usage; u != nil {
 			v := *u

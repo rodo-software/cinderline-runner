@@ -93,7 +93,7 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 	}
 	open := state == forge.MergePending || state == forge.MergeFailed
 	if i := slices.IndexFunc(stranded, func(c workspace.Clone) bool { return c.Branch == branch }); i >= 0 && (open || state == "") {
-		if err := p.Workspace.Push(ctx, stranded[i].Dir, branch); err != nil {
+		if _, err := p.Workspace.Push(ctx, stranded[i].Dir, branch); err != nil {
 			// The unpushed work must not be replaced by a fresh clone.
 			log.Warn("stranded branch not pushed", "err", err)
 			fact.PullRequest = pullRequestState[state]
@@ -159,7 +159,7 @@ func (p *Project) updateReviewBranch(ctx context.Context, it cinderline.ReviewIt
 		return false, files, err
 	}
 	// Never the base branch: the target is always the issue's own.
-	if err := ws.Push(ctx, dir, branch); err != nil {
+	if _, err := ws.Push(ctx, dir, branch); err != nil {
 		return false, nil, err
 	}
 	p.Log.Info("base merged in", "project", p.Config.Key, "issue", ref, "base", base, "branch", branch)

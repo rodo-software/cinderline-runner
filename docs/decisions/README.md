@@ -15,3 +15,4 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-17-local-model-providers](2026-11-17-local-model-providers.md): model providers for OpenCode agents.
 - [2026-11-17-project-key-rename](2026-11-17-project-key-rename.md): a fixed local `id` per project; `rename` takes a renamed key by hand; old config fields are ignored.
 - [2026-11-17-open-questions-answered](2026-11-17-open-questions-answered.md): Willem's answers after the clean-up: seccomp forced on agent containers; the push scan's rules.
+- [2026-11-17-push-scan](2026-11-17-push-scan.md): the push scan, and the contract change the app makes first.

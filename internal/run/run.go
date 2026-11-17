@@ -18,6 +18,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // sleep waits d or until ctx is done; a variable so tests need not wait.
@@ -256,27 +257,46 @@ func (p *Project) keepResumed(j *job, h *held) {
 // pause ends a run the app does not follow: the work is pushed and the
 // lead's session kept as paused.
 func (p *Project) pause(ctx context.Context, j *job, h *held) {
-	if s := p.stop(ctx, j); s.Outcome == "not_pushed" {
+	if s := p.stop(ctx, j); s.Outcome != "pushed" {
 		p.Log.Warn("work not pushed", "project", p.Config.Key, "issue", j.ref, "err", deref(s.Error))
 	}
 	p.keepLead(j, h, "paused")
 }
 
-// stop commits and pushes what the clone holds.
+// stop commits and pushes what the clone holds. A secret the runner knows
+// in its commits is the outcome secret: nothing is pushed and the clone
+// stays as it is.
 func (p *Project) stop(ctx context.Context, j *job) cinderline.LastStep {
 	last := cinderline.LastStep{Step: "stop", Issue: j.ref}
+	var found []workspace.Secret
 	_, err := p.Workspace.Commit(ctx, j.dir, leadAuthor(j.team), j.ref+": "+j.title)
 	if err == nil {
-		err = p.Workspace.Push(ctx, j.dir, j.branch)
+		found, err = p.Workspace.Push(ctx, j.dir, j.branch)
 	}
 	if head, herr := p.Workspace.Head(ctx, j.dir); herr == nil {
 		last.Commit = &head
 	}
-	last.Outcome = "pushed"
-	if err != nil {
+	last.Outcome, last.Secrets = "pushed", stepSecrets(found)
+	switch {
+	case errors.Is(err, workspace.ErrSecret):
+		last.Outcome, last.Error = "secret", ptr(err.Error())
+	case err != nil:
 		last.Outcome, last.Error = "not_pushed", ptr(err.Error())
 	}
 	return last
+}
+
+// stepSecrets is what the push scan found, for a step's report.
+func stepSecrets(found []workspace.Secret) []cinderline.StepSecret {
+	var out []cinderline.StepSecret
+	for _, f := range found {
+		s := cinderline.StepSecret{Kind: f.Kind, Commit: f.Commit, Known: f.Known}
+		if f.Path != "" {
+			s.Path = &f.Path
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // subRef is what follows the parent's ref in a sub-issue's.
@@ -306,7 +326,7 @@ func (p *Project) runStep(ctx context.Context, c *cinderline.Client, j *job, h *
 		return last, err
 	}
 	// A failed push only logs; the final push reports a lasting problem.
-	if err := p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
+	if _, err := p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
 		p.Log.Warn("push failed", "project", p.Config.Key, "issue", issue, "err", err)
 	}
 	return last, nil
@@ -502,7 +522,7 @@ func (p *Project) checkStep(ctx context.Context, c *cinderline.Client, j *job, h
 	if _, err := p.Workspace.Commit(ctx, j.dir, gitAuthor(j.team, agent), issue+": "+title); err != nil {
 		return fail(err)
 	}
-	if err := p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
+	if _, err := p.Workspace.Push(ctx, j.dir, j.branch); err != nil {
 		p.Log.Warn("push failed", "project", p.Config.Key, "issue", issue, "err", err)
 	}
 	cctx, end := p.stoppable(ctx, j.ref)

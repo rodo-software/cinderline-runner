@@ -87,6 +87,24 @@ func String(s string) string {
 	return s
 }
 
+// Find returns the label of a registered value that s holds in any of its
+// forms, the longest when it holds several; ok is false when it holds none.
+// The push scan uses it (decision 2026-11-17-open-questions-answered, point 2).
+func Find(s string) (label string, ok bool) {
+	if String(s) == s { // the replacer is the fast path; most lines hold nothing
+		return "", false
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	best := ""
+	for f := range patterns {
+		if len(f) > len(best) && strings.Contains(s, f) {
+			best = f
+		}
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(patterns[best], "[redacted "), "]"), true
+}
+
 // Handler wraps h so the message and every string, error and Stringer
 // attribute of each record are redacted. The daemon's log goes through it;
 // agent output reaches it one complete line at a time, so a value split over

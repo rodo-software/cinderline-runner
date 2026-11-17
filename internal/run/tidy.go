@@ -65,7 +65,7 @@ func (p *Project) held(ctx context.Context) (refs []string, stranded []workspace
 func (p *Project) tidy(ctx context.Context, asked []string, items []cinderline.HeldItem, stranded []workspace.Clone) {
 	for _, c := range stranded {
 		ref, _ := strings.CutPrefix(c.Branch, name.Name+"/")
-		if err := p.Workspace.Push(ctx, c.Dir, c.Branch); err != nil {
+		if _, err := p.Workspace.Push(ctx, c.Dir, c.Branch); err != nil {
 			p.Log.Warn("stranded branch not pushed", "project", p.Config.Key, "issue", ref, "err", err)
 			continue
 		}

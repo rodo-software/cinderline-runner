@@ -83,7 +83,8 @@ type Fake struct {
 	Commits      []CommitReply
 	MergeBases   []MergeBaseReply
 	Ancestors    []IsAncestorReply
-	Pushes       []error // replies to Push
+	Pushes       []error    // replies to Push
+	Found        [][]Secret // what each Push found, in order; none when empty
 	Heads        []HeadReply
 	Cleans       []BoolReply
 	Markers      []BoolReply // replies to ConflictMarkers
@@ -145,9 +146,15 @@ func (f *Fake) IsAncestor(_ context.Context, dir, ancestor, descendant string) (
 	return r.Yes, cmp.Or(err, r.Err)
 }
 
-func (f *Fake) Push(_ context.Context, dir, branch string) error {
+func (f *Fake) Push(_ context.Context, dir, branch string) ([]Secret, error) {
 	r, err := pop(f, &f.Pushes, "Push", dir, branch)
-	return cmp.Or(err, r)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var found []Secret
+	if len(f.Found) > 0 {
+		found, f.Found = f.Found[0], f.Found[1:]
+	}
+	return found, cmp.Or(err, r)
 }
 
 func (f *Fake) Head(_ context.Context, dir string) (string, error) {
