@@ -252,7 +252,7 @@ func TestPollAtStart(t *testing.T) {
 	}
 	delete(r, "clients")
 	got, _ := json.Marshal(r)
-	if want := `{"environments":["default","docker"],"errors":[],"model_providers":[],"refused_connections":0,"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
+	if want := `{"environments":["default","docker"],"errors":[],"model_providers":[],"provider_models":[],"refused_connections":0,"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
 		t.Errorf("report = %s, want Bearer tok-A with %s", a.polls[0], want)
 	}
 }

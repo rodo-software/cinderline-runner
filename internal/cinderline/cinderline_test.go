@@ -72,8 +72,9 @@ func TestPollSendsTheReportAndReadsTheAnswer(t *testing.T) {
 		t.Errorf("request %s, headers %v", s.paths[0], s.header)
 	}
 	body := s.bodies[0]
-	// model_providers is never null (decision 2026-11-17-local-model-providers).
-	if strings.Contains(body, "secret-value") || !strings.Contains(body, `"running":[]`) || !strings.Contains(body, `"model_providers":[]`) || strings.Contains(body, `"held"`) || strings.Contains(body, `"review"`) {
+	// model_providers and provider_models are never null (decisions
+	// 2026-11-17-local-model-providers and 2026-11-17-provider-models).
+	if strings.Contains(body, "secret-value") || !strings.Contains(body, `"running":[]`) || !strings.Contains(body, `"model_providers":[]`) || !strings.Contains(body, `"provider_models":[]`) || strings.Contains(body, `"held"`) || strings.Contains(body, `"review"`) {
 		t.Errorf("body = %s", body)
 	}
 	// An empty review asks for the list.
@@ -268,6 +269,37 @@ func TestAQueuedRequestWaitsOutAnOutage(t *testing.T) {
 	}
 	if len(c.queued) != 1 || c.queued[0].ServerErrors != 0 {
 		t.Errorf("outbox = %+v", c.queued)
+	}
+}
+
+// Decision 2026-11-17-provider-models: at most 50 providers and 200 model
+// ids each; an id the app would refuse in a typed model is left out.
+func TestProviderModelsFitTheAppsLimits(t *testing.T) {
+	s := &server{status: []int{200}, body: `{"poll_after":30}`}
+	c := s.client(t)
+	ids := []string{"bad id", "badé", strings.Repeat("m", 151), "", strings.Repeat("m", 150), "llama3.1:8b", "org/model_v-2"}
+	for i := range 250 {
+		ids = append(ids, "m"+strconv.Itoa(i))
+	}
+	providers := []ProviderModels{{Provider: strings.Repeat("p", 51), Models: []string{"x"}}, {Provider: "studio", Models: ids}, {Provider: "down"}}
+	for i := range 60 {
+		providers = append(providers, ProviderModels{Provider: "p" + strconv.Itoa(i), Models: []string{}})
+	}
+	if _, err := c.Poll(context.Background(), PollRequest{Report: Report{ProviderModels: providers}, Running: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	var poll PollRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &poll)
+	pm := poll.Report.ProviderModels
+	if len(pm) != maxProviders || pm[0].Provider != "studio" || pm[1].Provider != "down" || pm[1].Models == nil || len(pm[1].Models) != 0 {
+		t.Fatalf("provider_models = %d entries, first %+v", len(pm), pm[:min(2, len(pm))])
+	}
+	got := pm[0].Models
+	if len(got) != maxModels || got[0] != strings.Repeat("m", 150) || got[1] != "llama3.1:8b" || got[2] != "org/model_v-2" || got[3] != "m0" {
+		t.Errorf("studio's models: %d, first %q", len(got), got[:min(4, len(got))])
+	}
+	if !strings.Contains(s.bodies[0], `"models":[]`) || len(providers[1].Models) != 257 {
+		t.Errorf("an empty list must be sent as [] and the caller's list stay: %s", s.bodies[0][:200])
 	}
 }
 

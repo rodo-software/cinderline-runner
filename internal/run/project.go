@@ -52,6 +52,8 @@ type Project struct {
 	State     string                  // the host state folder (config.Paths.State)
 	Env       environment.Environment // where the project's turns run
 	Log       *slog.Logger
+	// Models are the providers' models, fetched once for the runner; nil: none.
+	Models *Models
 
 	Clients   map[string]client.Client // by agent client name
 	Workspace workspace.Workspace

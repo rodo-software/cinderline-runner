@@ -174,6 +174,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 	projects := make([]localapi.ProjectStatus, 0, len(cfg.Projects))
 	live := make([]*run.Project, 0, len(cfg.Projects))
 	running := map[string]bool{} // by ID
+	models := &run.Models{}      // one fetch of the providers' models for all projects
 	for _, p := range cfg.Projects {
 		id := p.ID()
 		st := localapi.ProjectStatus{Project: p.Label()} // the key: the ID is another name for an entry of an older runner
@@ -208,7 +209,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			fail("project not started", err)
 			continue
 		}
-		proj.KeepFor, proj.MinFree, proj.Others = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects
+		proj.KeepFor, proj.MinFree, proj.Others, proj.Models = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, models
 		detectCtx, stopDetect := context.WithCancel(ctx)
 		wg.Go(func() {
 			defer stopDetect() // a drained loop ends its detection too
@@ -228,6 +229,11 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		projects = append(projects, st)
 		live = append(live, proj)
 		running[id] = true
+	}
+	if len(running) > 0 && len(cfg.Providers) > 0 {
+		// Not in wg: a drain waits for wg until the loops are done, and the
+		// daemon cancels ctx right after.
+		go models.Watch(ctx, cfg.Providers, sec, log)
 	}
 	d.mu.Lock()
 	d.projects, d.live = projects, live

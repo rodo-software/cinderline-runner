@@ -24,6 +24,17 @@ type Report struct {
 	// ModelProviders are the providers OpenCode agents can use here:
 	// openrouter, then the runner's own (decision 2026-11-17-local-model-providers).
 	ModelProviders []string `json:"model_providers"`
+	// ProviderModels are the model ids each of the runner's own providers
+	// served at its last fetch; openrouter is not among them (decision
+	// 2026-11-17-provider-models).
+	ProviderModels []ProviderModels `json:"provider_models"`
+}
+
+// ProviderModels is the model ids one provider serves; empty when it did
+// not answer with a model list.
+type ProviderModels struct {
+	Provider string   `json:"provider"`
+	Models   []string `json:"models"`
 }
 
 // ReportClient is the state of one agent CLI on this machine: ready,

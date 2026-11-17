@@ -1,6 +1,9 @@
 package cinderline
 
-import "unicode/utf8"
+import (
+	"regexp"
+	"unicode/utf8"
+)
 
 // The app's limits on what the runner sends (app/Rules/RunnerRules.php in
 // the app repository). A request over one is refused for good, so the
@@ -27,10 +30,15 @@ const (
 	maxEnvironments  = 10    // report.environments
 	maxProviders     = 50    // report.model_providers
 	maxProviderName  = 50    // a model provider's name; a longer one is left out
+	maxModels        = 200   // report.provider_models[].models
 	maxSessions      = 2     // sessions
 	maxPath          = 255   // workspace branch, base and paths
 	maxSecrets       = 50    // last.secrets
 )
+
+// modelID is a model id the app accepts in a typed model
+// (AgentClient::TYPED_MODEL); any other id is left out.
+var modelID = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,150}$`)
 
 // clip is s cut to its first n characters, as the app counts them (runes).
 func clip(s string, n int) string {

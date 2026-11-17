@@ -135,6 +135,19 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 	r.Report.Clients = clients
 	r.Report.Environments = first(r.Report.Environments, maxEnvironments)
 	r.Report.ModelProviders = fitting(r.Report.ModelProviders, maxProviders, maxProviderName)
+	models := []ProviderModels{}
+	for _, pm := range r.Report.ProviderModels {
+		if len(models) < maxProviders && utf8.RuneCountInString(pm.Provider) <= maxProviderName {
+			ids := []string{}
+			for _, id := range pm.Models {
+				if len(ids) < maxModels && modelID.MatchString(id) {
+					ids = append(ids, id)
+				}
+			}
+			models = append(models, ProviderModels{Provider: pm.Provider, Models: ids})
+		}
+	}
+	r.Report.ProviderModels = models
 	r.Running = refs(r.Running, maxRunning)
 	r.Held = refs(r.Held, maxListed)
 	if r.Review != nil {
