@@ -153,9 +153,10 @@ The daemon reports each client's state (ready, missing the binary, missing a cre
 - `keep_sessions_for`: how long a finished run's agent session and worktree are kept after its last run, so that moving the issue back to To do continues the same session with its full context; days such as `"7d"` or hours such as `"36h"`, `"7d"` by default, `"off"` for no age limit. Sessions of Done, Cancelled or archived issues are always deleted.
 - `min_free_disk`: when free space on Docker's disk (where the worktree and session volumes are) is below this, kept sessions are deleted oldest first; such as `"10GB"`, in `MB`, `GB` or `TB`, `"10GB"` by default, `"off"` to never delete them for space. The runner applies both limits, per project, to the sessions Cinderline says it may expire (those of issues no run needs now), at start, after each run and every ten minutes while idle; a worktree with unpushed commits is never deleted. A follow-up whose session was deleted starts fresh, and Cinderline says so on the issue.
 - `providers`: the runner's model providers for OpenCode, for every project, which `add-provider` writes (see "Local models").
+- `strict_hosts`: `true` keeps Cinderline from opening a host for any project's runs, which `cinderline strict-hosts on|off` sets (see "Network"); off by default.
 - Per project: `allow_hosts`, extra `host:port` entries its agents may reach (see "Network"), never `localhost`, a loopback address or `host.docker.internal`; `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key; `extra_repositories`, which `add-repo` writes (see "Extra repositories").
 
-Unknown fields are refused, except those an older runner wrote (`names_by_key`, `allow_existing`, `merge_poll_seconds`, `build_image`): they are ignored with a warning and left out the next time the file is written. `add`, `rename`, `key set`, `key delete` (also of a provider's key), `login`, `add-repo`, `remove-repo`, `add-provider` and `remove-provider` make a running runner reload the file, which aborts its runs in flight: at the next poll Cinderline moves their issues to Blocked with a note naming the branch, and a person moves them back to To do to run them again. `cinderline stop --drain` lets a run in flight finish first. `remove` reloads it too. After a hand edit, restart the runner.
+Unknown fields are refused, except those an older runner wrote (`names_by_key`, `allow_existing`, `merge_poll_seconds`, `build_image`): they are ignored with a warning and left out the next time the file is written. `add`, `rename`, `key set`, `key delete` (also of a provider's key), `login`, `add-repo`, `remove-repo`, `add-provider`, `remove-provider` and `strict-hosts on|off` make a running runner reload the file, which aborts its runs in flight: at the next poll Cinderline moves their issues to Blocked with a note naming the branch, and a person moves them back to To do to run them again. `cinderline stop --drain` lets a run in flight finish first. `remove` reloads it too. After a hand edit, restart the runner.
 
 ## Network
 
@@ -164,9 +165,14 @@ Each issue runs on its own internal Docker network with an egress proxy, its onl
 - the model provider of the run's client only (`api.anthropic.com`, `openrouter.ai`, `api.openai.com` or the `openai_base_url` host, `generativelanguage.googleapis.com` or `aiplatform.googleapis.com`, or for OpenCode the host and port of the runner's provider the agent's model names), plus that provider's sign-in hosts when the run uses a sign-in;
 - the project's Cinderline host, for MCP;
 - the package registries: `repo.packagist.org`, `packagist.org`, `codeload.github.com`, `api.github.com`, `registry.npmjs.org`, `proxy.golang.org`, `sum.golang.org`, on port 443;
-- the project's `allow_hosts`, which refuses `localhost`, loopback addresses and `host.docker.internal`.
+- the project's `allow_hosts`, which refuses `localhost`, loopback addresses and `host.docker.internal`;
+- the hosts a person allowed for the issue in Cinderline, unless strict host blocking is on (below).
 
 No forge (git fetch and push run in a separate helper container), and `host.docker.internal` only on the port of a provider on the runner's own machine, for a turn that uses it (see "Local models"). The run's log names each refused host, and the runner report counts them.
+
+After each turn and each check, the runner tells Cinderline which hosts the proxy refused during it (decision 2026-11-17-hosts-from-cinderline). Cinderline names them on the issue and asks a person whether to open them: *Yes, this run* opens a host for that issue's next runs only, checked as an `allow_hosts` entry is, so never the runner's own machine. To open a host for every run, add it to the project's `allow_hosts`; only `config.json` does that.
+
+With strict host blocking on (`cinderline strict-hosts on`, for every project of the runner), the runner ignores every host Cinderline allows and tells Cinderline so, which then does not ask: the agent goes on without the host. `cinderline strict-hosts` shows whether it is on.
 
 ## Environments
 

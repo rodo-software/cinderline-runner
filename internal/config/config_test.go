@@ -560,3 +560,32 @@ func TestLoadDropsOldFields(t *testing.T) {
 		t.Error("an unknown field that no runner wrote loaded, want an error")
 	}
 }
+
+// CLR-193: a host a person allowed in Cinderline passes as an allow_hosts
+// entry would: host:port, never the runner's own machine.
+func TestAllowedHost(t *testing.T) {
+	for _, hp := range []string{"pypi.org:443", "Files.PythonHosted.org:443", "192.168.1.5:8080"} {
+		if !AllowedHost(hp) {
+			t.Errorf("%s refused", hp)
+		}
+	}
+	for _, hp := range []string{"", "pypi.org", "pypi.org:0", "pypi.org:65536", "*.pypi.org:443", "a b:1", "localhost:8080", "127.0.0.1:1", "[::1]:80", "HOST.DOCKER.INTERNAL:11434", "u@h:1", "h:443/x"} {
+		if AllowedHost(hp) {
+			t.Errorf("%s allowed", hp)
+		}
+	}
+}
+
+// CLR-193: strict_hosts is runner-wide, off unless set.
+func TestStrictHostsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := (&Config{StrictHosts: true}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Load(path); err != nil || !got.StrictHosts {
+		t.Errorf("strict_hosts = %v, %v; want true", got, err)
+	}
+	if got, err := Load(writeFile(t, `{"version": 1, "projects": []}`)); err != nil || got.StrictHosts {
+		t.Errorf("strict_hosts unset = %v, %v; want false", got, err)
+	}
+}

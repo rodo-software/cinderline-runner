@@ -211,6 +211,16 @@ func redacted(r NextRequest) NextRequest {
 			}
 			l.Secrets = found
 		}
+		if l.RefusedHosts != nil {
+			hosts := []string{}
+			for _, h := range l.RefusedHosts {
+				// Left out rather than redacted or clipped: each one must stay a host:port.
+				if len(hosts) < maxRefusedHosts && utf8.RuneCountInString(h) <= maxHostPort && redact.String(h) == h {
+					hosts = append(hosts, h)
+				}
+			}
+			l.RefusedHosts = hosts
+		}
 		l.Issue, l.Agent = clip(l.Issue, maxIssue), text(l.Agent, maxName)
 		if u := l.Usage; u != nil {
 			v := *u

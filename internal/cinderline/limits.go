@@ -34,6 +34,8 @@ const (
 	maxSessions      = 2     // sessions
 	maxPath          = 255   // workspace branch, base and paths
 	maxSecrets       = 50    // last.secrets
+	maxRefusedHosts  = 20    // last.refused_hosts
+	maxHostPort      = 260   // one refused host:port; a longer one is left out
 )
 
 // modelID is a model id the app accepts in a typed model

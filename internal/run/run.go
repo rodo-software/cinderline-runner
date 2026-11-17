@@ -201,6 +201,14 @@ func (p *Project) step(ctx context.Context, c *cinderline.Client, j *job, h *hel
 	}()
 	cf := *pending
 	*pending = nil
+	if step.Kind == "run" || step.Kind == "resolve" || step.Kind == "check" {
+		p.takeRefused() // what an earlier step left is not this one's
+		defer func() {
+			if last != nil {
+				last.RefusedHosts = p.takeRefused()
+			}
+		}()
+	}
 	switch step.Kind {
 	case "run":
 		return p.runStep(ctx, c, j, h, step)
@@ -375,7 +383,7 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Outcome, last.Error = "not_started", ptr(err.Error())
 		return last, client.Result{}, nil
 	}
-	turn := client.Turn{Dir: j.dir, Prompt: step.Prompt, MaxTurns: j.team.MaxTurns, MaxMinutes: j.team.MaxMinutes, Ponytail: j.team.Ponytail, Idle: j.idle}
+	turn := client.Turn{Dir: j.dir, Prompt: step.Prompt, MaxTurns: j.team.MaxTurns, MaxMinutes: j.team.MaxMinutes, Ponytail: j.team.Ponytail, Idle: j.idle, Allow: p.allowHosts(issue, step.AllowHosts)}
 	switch step.Session {
 	case "new":
 	case "resume":
@@ -526,7 +534,7 @@ func (p *Project) checkStep(ctx context.Context, c *cinderline.Client, j *job, h
 		p.Log.Warn("push failed", "project", p.Config.Key, "issue", issue, "err", err)
 	}
 	cctx, end := p.stoppable(ctx, j.ref)
-	failed, tail, err := p.runCheck(cctx, j.dir, j.check, j.team.MaxMinutes)
+	failed, tail, err := p.runCheck(cctx, j.dir, j.check, j.team.MaxMinutes, p.allowHosts(issue, step.AllowHosts))
 	switch {
 	case ctx.Err() != nil:
 		end()

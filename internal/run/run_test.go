@@ -356,7 +356,8 @@ func TestAPublishConflictIsResolvedAndVerified(t *testing.T) {
 		f.ws.Markers = []workspace.BoolReply{{}}
 		f.ws.Resets = []error{nil}
 		f.cl.Runs = []client.RunReply{ok("r1", "Merged.")}
-		app := &fakeApp{onNext: stepsOf(`{"kind":"publish","resolve_conflicts":true}`, `{"kind":"resolve","agent":"Coder","session":"new","token":null,"prompt":"Resolve."}`)}
+		f.p.Clients["claude"] = refusingClient{f.cl, func() { f.p.AddRefused("proxy.golang.org:80") }}
+		app := &fakeApp{onNext: stepsOf(`{"kind":"publish","resolve_conflicts":true}`, `{"kind":"resolve","agent":"Coder","session":"new","token":null,"prompt":"Resolve.","allow_hosts":["pypi.org:443"]}`)}
 		if _, err := f.run(t, app); err != nil {
 			t.Fatal(err)
 		}
@@ -367,6 +368,10 @@ func TestAPublishConflictIsResolvedAndVerified(t *testing.T) {
 		want := map[bool]string{true: "finished", false: "not_verified"}[verified]
 		if lasts[1].Step != "resolve" || lasts[1].Outcome != want {
 			t.Errorf("verified %v: resolve = %+v", verified, lasts[1])
+		}
+		// CLR-193: a resolve step opens its allowed hosts and reports its refused ones.
+		if !slices.Equal(lasts[1].RefusedHosts, []string{"proxy.golang.org:80"}) || !slices.Equal(turns(f.cl)[0].Allow, []string{"pypi.org:443"}) {
+			t.Errorf("resolve refused %q, turn allowed %q", lasts[1].RefusedHosts, turns(f.cl)[0].Allow)
 		}
 		if undone := slices.Contains(methods(f.ws), "Reset"); undone == verified {
 			t.Errorf("verified %v: reset %v", verified, undone)

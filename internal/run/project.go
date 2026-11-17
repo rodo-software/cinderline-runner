@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -67,6 +68,9 @@ type Project struct {
 	KeepFor time.Duration
 	MinFree int64
 
+	// StrictHosts is config's strict_hosts: a step's allow_hosts are ignored.
+	StrictHosts bool
+
 	// Set only by NewProject; nil in tests.
 	deleteSession func(ctx context.Context, ref, session string) error                  // a session's files on the state volume
 	prepare       func(ctx context.Context, proj cinderline.Project, base string) error // the environment and the tools mount
@@ -80,6 +84,7 @@ type Project struct {
 	mu      sync.Mutex
 	clients []cinderline.ReportClient // the last detection; nil before the first
 	refused int                       // connections the egress proxy refused since start
+	hosts   []string                  // the host:port pairs it refused since takeRefused, once each
 	status  localapi.ProjectStatus
 	stopRun context.CancelCauseFunc // ends the agent turn in flight; nil while none runs
 	stopRef string                  // the run whose turn stopRun ends
@@ -232,11 +237,52 @@ func (p *Project) hasClients() bool {
 	return p.clients != nil
 }
 
-// AddRefused counts one connection the egress proxy refused, for the report.
-func (p *Project) AddRefused() {
+// AddRefused counts one connection the egress proxy refused, for the
+// report, and keeps its host:port for the step's facts: once, in lower case
+// as the allowlist writes it, and only a well-formed one.
+func (p *Project) AddRefused(hostPort string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.refused++
+	hp := strings.ToLower(hostPort)
+	if config.ValidHostPort(hp) && !slices.Contains(p.hosts, hp) {
+		p.hosts = append(p.hosts, hp)
+	}
+}
+
+// takeRefused returns the hosts refused since its last call and forgets them.
+func (p *Project) takeRefused() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	hosts := p.hosts
+	p.hosts = nil
+	return hosts
+}
+
+// allowHosts are the hosts a person allowed in Cinderline for issue's runs,
+// for a step's allowlist: none on a strict runner, and only those that pass
+// as an allow_hosts entry; the app's answer opens nothing else.
+func (p *Project) allowHosts(issue string, hosts []string) []string {
+	if len(hosts) == 0 {
+		return nil
+	}
+	log := p.Log.With("project", p.Config.Key, "issue", issue)
+	if p.StrictHosts {
+		log.Info("hosts allowed in Cinderline ignored: strict host blocking is on", "hosts", hosts)
+		return nil
+	}
+	var out []string
+	for _, hp := range hosts {
+		if !config.AllowedHost(hp) {
+			log.Warn("host allowed in Cinderline dropped: not host:port, or the runner's own machine", "host", hp)
+			continue
+		}
+		out = append(out, strings.ToLower(hp))
+	}
+	if out != nil {
+		log.Info("hosts allowed in Cinderline opened for this step", "hosts", out)
+	}
+	return out
 }
 
 // Status is what the CLI shows of the project.

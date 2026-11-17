@@ -175,7 +175,7 @@ func TestClaudeRunFresh(t *testing.T) {
 			return "", nil
 		},
 	}
-	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Idle: 10 * time.Minute, Model: "m", Author: "Dev / Coder", Token: "tok"})
+	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Idle: 10 * time.Minute, Model: "m", Author: "Dev / Coder", Token: "tok", Allow: []string{"pypi.org:443"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestClaudeRunFresh(t *testing.T) {
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
 		Idle:    10 * time.Minute,
-		Allow:   []string{"api.anthropic.com:443"},
+		Allow:   []string{"api.anthropic.com:443", "pypi.org:443"}, // CLR-193: the provider, then the turn's own
 	}
 	if !reflect.DeepEqual(s, want) {
 		t.Errorf("Spec =\n%+v\nwant\n%+v", s, want)

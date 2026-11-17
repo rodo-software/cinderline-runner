@@ -106,7 +106,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
 		Idle:    t.Idle,
-		Allow:   k.hosts(c, t),
+		Allow:   slices.Concat(k.hosts(c, t), t.Allow),
 	})
 	res := k.parse(out)
 	res.SessionID = cmp.Or(res.SessionID, t.SessionID)

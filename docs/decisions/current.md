@@ -83,7 +83,8 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 
 ## Network and the proxy
 
-- Agents reach only exact `host:port` pairs through the run's egress proxy: their own client's provider (plus its sign-in hosts on a stored login), the project's Cinderline host, the listed package registries on 443, and the project's `allow_hosts`. Never a forge. Only local config extends the list. (2026-11-09-network-allowlist)
+- Agents reach only exact `host:port` pairs through the run's egress proxy: their own client's provider (plus its sign-in hosts on a stored login), the project's Cinderline host, the listed package registries on 443, and the project's `allow_hosts`. Never a forge. Only local config opens a host for every run. (2026-11-09-network-allowlist; 2026-11-17-hosts-from-cinderline)
+- A person's *Yes, this run* in Cinderline opens a refused host for one issue's runs: its `run`, `resolve` and `check` steps carry `allow_hosts`, each checked as a local `allow_hosts` entry, an invalid one dropped. Strict host blocking (`strict_hosts`, runner-wide, off by default, reported in every poll) ignores them. Each of those steps reports the hosts the proxy refused during it as `last.refused_hosts`. (2026-11-17-hosts-from-cinderline)
 - `host.docker.internal` is reachable only on the port of a model provider on the runner's own machine, for a turn that uses it, through the proxy only. `allow_hosts` refuses `localhost`, loopback addresses and `host.docker.internal`. (2026-11-17-local-model-providers; Willem 2026-11-17, extras)
 
 ## Secrets and redaction

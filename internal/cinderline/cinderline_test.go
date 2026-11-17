@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -120,6 +121,32 @@ func TestNextSecretsFitAndAreRedacted(t *testing.T) {
 	}
 	if path != "keys/secret-value-1234567890.txt" {
 		t.Error("the caller's text was changed")
+	}
+}
+
+// CLR-193: the refused hosts are cut to the app's limits, the first 20 that
+// fit 260 characters; a host that holds a secret is left out, not redacted,
+// so every entry stays a host:port. None leaves the key out.
+func TestNextRefusedHostsFit(t *testing.T) {
+	redact.Add("test secret", "secret-value-1234567890")
+	s := &server{status: []int{200, 200}, body: `{"state":"x","step":{"kind":"done"}}`}
+	c := s.client(t)
+	hosts := []string{strings.Repeat("a", 259) + ":1", "secret-value-1234567890.evil.example:443"}
+	for i := range 25 {
+		hosts = append(hosts, fmt.Sprintf("h%d.example:443", i))
+	}
+	for _, last := range []*LastStep{{Step: "run", RefusedHosts: hosts}, {Step: "run"}} {
+		if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Last: last}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var next NextRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &next)
+	if got := next.Last.RefusedHosts; len(got) != maxRefusedHosts || got[0] != "h0.example:443" || got[19] != "h19.example:443" {
+		t.Errorf("sent %v", got)
+	}
+	if strings.Contains(s.bodies[1], "refused_hosts") {
+		t.Errorf("sent %s, want no refused_hosts", s.bodies[1])
 	}
 }
 

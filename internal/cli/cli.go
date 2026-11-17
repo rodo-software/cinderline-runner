@@ -62,6 +62,7 @@ func commands() []command {
 		{"add-provider", "NAME URL", "add an OpenAI-compatible model provider for the OpenCode agents of every project, which name a model as NAME/<model id>, asking for its optional API key", (*CLI).addProvider},
 		{"list-providers", "", "list the runner's model providers and whether each has a key", (*CLI).listProviders},
 		{"remove-provider", "NAME", "remove a model provider and its key", (*CLI).removeProvider},
+		{"strict-hosts", "[on|off]", "turn strict host blocking on or off for every project, or show it: when on, a person's answer in Cinderline cannot open a host the egress proxy refused, only allow_hosts in config.json can", (*CLI).strictHosts},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

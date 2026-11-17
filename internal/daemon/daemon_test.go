@@ -252,19 +252,19 @@ func TestPollAtStart(t *testing.T) {
 	}
 	delete(r, "clients")
 	got, _ := json.Marshal(r)
-	if want := `{"environments":["default","docker"],"errors":[],"model_providers":[],"provider_models":[],"refused_connections":0,"runner_version":"1.2.3"}`; auth != "Bearer tok-A" || string(got) != want {
+	if want := `{"environments":["default","docker"],"errors":[],"model_providers":[],"provider_models":[],"refused_connections":0,"runner_version":"1.2.3","strict_hosts":false}`; auth != "Bearer tok-A" || string(got) != want {
 		t.Errorf("report = %s, want Bearer tok-A with %s", a.polls[0], want)
 	}
 }
 
 // Decision 2026-11-17-local-model-providers: the runner's providers reach
-// the report of every project.
+// the report of every project, and so does its strict host blocking.
 func TestEveryProjectReportsTheRunnersProviders(t *testing.T) {
 	keyring.MockInit()
 	a, b := newApp(t), newApp(t)
 	p := paths(t)
 	pa, pb := project(a.url, "A"), project(b.url, "B")
-	cfg := &config.Config{Projects: []config.Project{pa, pb}, Providers: []config.Provider{{Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}}
+	cfg := &config.Config{Projects: []config.Project{pa, pb}, Providers: []config.Provider{{Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}, StrictHosts: true}
 	if err := cfg.Save(p.File); err != nil {
 		t.Fatal(err)
 	}
@@ -276,8 +276,8 @@ func TestEveryProjectReportsTheRunnersProviders(t *testing.T) {
 		app.mu.Lock()
 		poll := app.polls[0]
 		app.mu.Unlock()
-		if !strings.Contains(poll, `"model_providers":["lan"]`) {
-			t.Errorf("report %s, want lan", poll)
+		if !strings.Contains(poll, `"model_providers":["lan"]`) || !strings.Contains(poll, `"strict_hosts":true`) {
+			t.Errorf("report %s, want lan and strict hosts (CLR-193)", poll)
 		}
 	}
 }

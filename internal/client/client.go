@@ -39,6 +39,10 @@ type Turn struct {
 	// Ponytail loads the ponytail plugin, for teams that enable it
 	// (2026-11-03-per-team-ponytail-plugin). Claude Code only.
 	Ponytail bool
+	// Allow is the host:port pairs a person allowed in Cinderline for the
+	// turn's issue, which the caller has checked, for the run's allowlist
+	// next to the provider's (decision 2026-11-17-hosts-from-cinderline).
+	Allow []string
 }
 
 // Result is the parsed outcome of a turn.

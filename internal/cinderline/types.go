@@ -28,6 +28,9 @@ type Report struct {
 	// served at its last fetch; openrouter is not among them (decision
 	// 2026-11-17-provider-models).
 	ProviderModels []ProviderModels `json:"provider_models"`
+	// StrictHosts says the runner ignores the allow_hosts of a step, so the
+	// app does not ask a person to open a host (decision 2026-11-17-hosts-from-cinderline).
+	StrictHosts bool `json:"strict_hosts"`
 }
 
 // ProviderModels is the model ids one provider serves; empty when it did
@@ -215,6 +218,10 @@ type LastStep struct {
 	// What the push scan found, at publish and stop: a known one comes with
 	// the outcome secret, nothing pushed; the others are warnings.
 	Secrets []StepSecret `json:"secrets,omitempty"`
+	// RefusedHosts are the host:port pairs the egress proxy refused during
+	// a run, resolve or check step, once each, in lower case (decision
+	// 2026-11-17-hosts-from-cinderline). Untrusted: the agent chose them.
+	RefusedHosts []string `json:"refused_hosts,omitempty"`
 }
 
 // StepSecret is a secret the push scan found: its kind and place, never its
@@ -246,8 +253,8 @@ type NextAnswer struct {
 
 // Step is one step of the closed set, flat: Kind says which fields it has.
 // Nothing in it is ever run, or used as a path or argument, except Prompt
-// as the agent's prompt, Token as its MCP token and an attachment's Name
-// once it is one safe file name.
+// as the agent's prompt, Token as its MCP token, an attachment's Name once
+// it is one safe file name and AllowHosts once each is a valid host:port.
 type Step struct {
 	Kind        string           `json:"kind"`
 	Issue       *StepIssue       `json:"issue"`       // run and check
@@ -256,6 +263,10 @@ type Step struct {
 	Token       *string          `json:"token"`       // run and resolve
 	Prompt      string           `json:"prompt"`      // run and resolve
 	Attachments []StepAttachment `json:"attachments"` // run; nil leaves the folder as it is
+	// AllowHosts are host:port pairs a person allowed for the issue's runs
+	// (run, resolve and check): checked as allow_hosts entries, and ignored
+	// on a strict runner, before they join the step's allowlist.
+	AllowHosts []string `json:"allow_hosts"`
 	// publish
 	ResolveConflicts bool   `json:"resolve_conflicts"`
 	Merge            bool   `json:"merge"`

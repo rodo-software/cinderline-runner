@@ -202,14 +202,14 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		env := &environment.Docker{
 			Project: id, Log: log, Exec: workspace.RunCommand,
 			Allow:     environment.ProjectHosts(p.URL, p.AllowHosts),
-			OnRefused: func(string) { proj.AddRefused() },
+			OnRefused: func(hp string) { proj.AddRefused(hp) },
 		}
 		proj, err = run.NewProject(p, cfg.Providers, sec, o.Paths.State, env, log)
 		if err != nil {
 			fail("project not started", err)
 			continue
 		}
-		proj.KeepFor, proj.MinFree, proj.Others, proj.Models = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, models
+		proj.KeepFor, proj.MinFree, proj.Others, proj.Models, proj.StrictHosts = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, models, cfg.StrictHosts
 		detectCtx, stopDetect := context.WithCancel(ctx)
 		wg.Go(func() {
 			defer stopDetect() // a drained loop ends its detection too

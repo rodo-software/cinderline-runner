@@ -64,7 +64,8 @@ func stopAt(n int, r reply) func(int, cinderline.PollRequest, func()) reply {
 func TestThePollRequest(t *testing.T) {
 	f := newFixture(t)
 	f.p.clients = []cinderline.ReportClient{{Name: "claude", State: "ready"}}
-	f.p.AddRefused()
+	f.p.AddRefused("evil.example:443")
+	f.p.StrictHosts = true
 	f.p.saveNote("CSR-9", Note{Dir: "/runs/CSR-9", Session: "s", Client: "claude", Origin: "kept"})
 	f.ws.Strandeds = []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"}}}}
 	f.ws.Clones = []string{"/runs/CSR-8"}
@@ -72,7 +73,7 @@ func TestThePollRequest(t *testing.T) {
 	polls := runLoop(t, f, app, nil, nil, stopAt(2, answer(t, proj, `"held":[{"ref":"CSR-9","session":"keep"},{"ref":"CSR-8","session":"keep"}],"review":[]`)))
 	first := polls[0]
 	r := first.Report
-	if r.RunnerVersion != "0.0.0-test" || len(r.Clients) != 1 || !slices.Equal(r.Environments, Environments) || r.Errors == nil || len(r.Errors) != 0 || r.RefusedConnections != 1 ||
+	if r.RunnerVersion != "0.0.0-test" || len(r.Clients) != 1 || !slices.Equal(r.Environments, Environments) || r.Errors == nil || len(r.Errors) != 0 || r.RefusedConnections != 1 || !r.StrictHosts ||
 		r.ModelProviders == nil || len(r.ModelProviders) != 0 {
 		t.Errorf("report = %+v", r)
 	}

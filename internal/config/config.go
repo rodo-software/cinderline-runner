@@ -43,7 +43,11 @@ type Config struct {
 	// every project; their optional keys are runner-wide secrets (decision
 	// 2026-11-17-local-model-providers).
 	Providers []Provider `json:"providers,omitempty"`
-	Projects  []Project  `json:"projects"`
+	// StrictHosts keeps Cinderline from opening hosts: the allow_hosts of
+	// a step are ignored, and every poll says so. Runner-wide, off by
+	// default (decision 2026-11-17-hosts-from-cinderline).
+	StrictHosts bool      `json:"strict_hosts,omitempty"`
+	Projects    []Project `json:"projects"`
 	// Dropped names the fields an older runner wrote that Load dropped, for
 	// a warning; the next Save leaves them out (CLR-191).
 	Dropped []string `json:"-"`
@@ -122,7 +126,8 @@ type Project struct {
 	// GeminiVertex says the Gemini key is a Vertex AI express-mode key; false means the Gemini API.
 	GeminiVertex bool `json:"gemini_vertex,omitempty"`
 	// AllowHosts are extra host:port pairs this project's runs may reach.
-	// Only local config extends the allowlist (decision 2026-11-09-network-allowlist).
+	// Only local config opens a host for every run; Cinderline opens one
+	// for an issue's runs (decision 2026-11-17-hosts-from-cinderline).
 	AllowHosts []string `json:"allow_hosts,omitempty"`
 	// ExtraRepositories are other repositories the project's runs may read,
 	// mounted read-only (CSR-160). Configured only here, not in Cinderline
@@ -150,7 +155,7 @@ func (p Provider) Validate() error {
 	u, err := url.Parse(p.BaseURL)
 	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.User == nil && u.Opaque == "" &&
 		!strings.ContainsAny(p.BaseURL, "?# \t\r\n") && (hostChars.MatchString(u.Hostname()) || net.ParseIP(u.Hostname()) != nil) &&
-		(u.Port() == "" || validHostPort(net.JoinHostPort("h", u.Port()))) {
+		(u.Port() == "" || ValidHostPort(net.JoinHostPort("h", u.Port()))) {
 		return nil
 	}
 	s := p.BaseURL
@@ -395,7 +400,7 @@ func (c *Config) Validate() error {
 			problem = "another project has the same url, workspace and key"
 		} else if i := slices.IndexFunc(p.AllowHosts, runnersMachine); i >= 0 {
 			problem = fmt.Sprintf("allow_hosts entry %q is the runner's own machine, which allow_hosts never opens; add a model provider instead with `%s add-provider NAME URL`", p.AllowHosts[i], name.Name)
-		} else if i := slices.IndexFunc(p.AllowHosts, func(hp string) bool { return !validHostPort(hp) }); i >= 0 {
+		} else if i := slices.IndexFunc(p.AllowHosts, func(hp string) bool { return !ValidHostPort(hp) }); i >= 0 {
 			problem = fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", p.AllowHosts[i])
 		} else {
 			problem = checkExtraRepositories(p.ExtraRepositories)
@@ -451,12 +456,17 @@ func runnersMachine(hp string) bool {
 	return host == "localhost" || host == "host.docker.internal" || ip != nil && ip.IsLoopback()
 }
 
+// AllowedHost says hp may join a run's allowlist as an allow_hosts entry
+// would: host:port, and not the runner's own machine.
+func AllowedHost(hp string) bool { return ValidHostPort(hp) && !runnersMachine(hp) }
+
 // hostChars are what an allow_hosts host may hold: a DNS name or an IPv4
 // address. The egress proxy matches it exactly.
 var hostChars = regexp.MustCompile(`(?i)^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
-// validHostPort says hp is a host and a port in 1-65535.
-func validHostPort(hp string) bool {
+// ValidHostPort says hp is a host and a port in 1-65535, as the egress proxy
+// matches it.
+func ValidHostPort(hp string) bool {
 	host, port, err := net.SplitHostPort(hp)
 	n, perr := strconv.Atoi(port)
 	return err == nil && hostChars.MatchString(host) && perr == nil && n >= 1 && n <= 65535 && strconv.Itoa(n) == port

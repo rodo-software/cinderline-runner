@@ -245,7 +245,7 @@ func (l *loop) report() cinderline.Report {
 	if l.notStarted != nil {
 		errs = append(errs, *l.notStarted)
 	}
-	return cinderline.Report{RunnerVersion: l.c.Version(), Clients: clients, Environments: Environments, Errors: errs, RefusedConnections: refused, ModelProviders: providers, ProviderModels: p.Models.Get()}
+	return cinderline.Report{RunnerVersion: l.c.Version(), Clients: clients, Environments: Environments, Errors: errs, RefusedConnections: refused, ModelProviders: providers, ProviderModels: p.Models.Get(), StrictHosts: p.StrictHosts}
 }
 
 // runningRefs are the run in flight and the runs whose report waits in the outbox.

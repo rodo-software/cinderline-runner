@@ -18,3 +18,4 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-17-open-questions-answered](2026-11-17-open-questions-answered.md): Willem's answers after the clean-up: seccomp forced on agent containers; the push scan's rules.
 - [2026-11-17-push-scan](2026-11-17-push-scan.md): the push scan, and the contract change the app makes first.
 - [2026-11-17-provider-models](2026-11-17-provider-models.md): the models of the runner's own providers in the poll, and the contract change for the app.
+- [2026-11-17-hosts-from-cinderline](2026-11-17-hosts-from-cinderline.md): a person's answer in Cinderline opens a refused host for one issue's runs; refused hosts per step; strict host blocking. Supersedes point 2 of 2026-11-09-network-allowlist.

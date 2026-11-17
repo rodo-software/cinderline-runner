@@ -12,10 +12,10 @@ import (
 )
 
 // runCheck runs check in dir, with the agent's clone mounts but without its
-// client state, tools or credentials, limited to maxMinutes. failed is a
-// check that ran and failed, with the tail of its output; err is a stop or
-// a check that could not run.
-func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int) (failed bool, tail string, err error) {
+// client state, tools or credentials, limited to maxMinutes; it reaches the
+// project's hosts and allow. failed is a check that ran and failed, with
+// the tail of its output; err is a stop or a check that could not run.
+func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int, allow []string) (failed bool, tail string, err error) {
 	out, err := p.Env.Run(ctx, environment.Spec{
 		Issue: path.Base(dir),
 		Dir:   dir,
@@ -25,6 +25,7 @@ func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes in
 		},
 		Cmd:     []string{"sh", "-c", check},
 		Timeout: time.Duration(maxMinutes) * time.Minute,
+		Allow:   allow,
 	})
 	var exit interface{ ExitCode() int }
 	switch {
