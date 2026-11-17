@@ -43,7 +43,7 @@ const detectInterval = time.Hour
 type daemon struct {
 	mu       sync.Mutex
 	projects []localapi.ProjectStatus // the config's projects; one that does not run carries its error
-	live     map[string]*run.Project  // the projects that run, by ID
+	live     []*run.Project           // per entry of projects, the one that runs; nil when it does not
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -109,6 +109,7 @@ func Run(ctx context.Context, o Options) error {
 		log.Error("config failed to load", "err", err)
 		return err
 	}
+	warnDropped(log, cfg)
 	log.Info("started", "version", o.Version, "socket", o.Paths.Socket)
 	var reply chan error
 	var reloadErr error
@@ -146,12 +147,20 @@ func Run(ctx context.Context, o Options) error {
 				log.Error("config failed to reload, keeping the old one", "err", err)
 			} else {
 				cfg = next
+				warnDropped(log, cfg)
 			}
 			reloadErr = err
 			cancel()
 			wg.Wait()
 			log.Info("projects stopped")
 		}
+	}
+}
+
+// warnDropped warns of the old fields Load dropped from the config file.
+func warnDropped(log *slog.Logger, cfg *config.Config) {
+	if len(cfg.Dropped) > 0 {
+		log.Warn("config fields of an older runner ignored; the next change to the config leaves them out", "fields", cfg.Dropped)
 	}
 }
 
@@ -163,18 +172,20 @@ func Run(ctx context.Context, o Options) error {
 func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger, o Options, cfg *config.Config, drain <-chan struct{}) int {
 	sec := secrets.New(o.Paths.State)
 	projects := make([]localapi.ProjectStatus, 0, len(cfg.Projects))
-	live := map[string]*run.Project{}
+	live := make([]*run.Project, 0, len(cfg.Projects))
+	running := map[string]bool{} // by ID
 	for _, p := range cfg.Projects {
 		id := p.ID()
-		st := localapi.ProjectStatus{Project: id}
+		st := localapi.ProjectStatus{Project: p.Label()} // the key, which follows a rename; the ID does not (CLR-191)
 		fail := func(msg string, err error) {
-			log.Error(msg, "project", id, "err", err)
+			log.Error(msg, "project", p.Key, "err", err)
 			st.LastError, st.LastErrorAt = err.Error(), time.Now()
 			projects = append(projects, st)
+			live = append(live, nil)
 		}
 		// Volumes, containers and networks are named by the ID, so two
 		// projects with one ID would share them.
-		if live[id] != nil {
+		if running[id] {
 			fail("another project has the same key, project not started", errors.New("another project has key "+id+": only the first one runs; remove one of them"))
 			continue
 		}
@@ -184,7 +195,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			continue
 		}
 		c := cinderline.New(p.URL, token, o.Version)
-		c.Log = log.With("project", id)
+		c.Log = log.With("project", p.Key)
 		c.Outbox = run.OutboxFile(o.Paths.State, p)
 		var proj *run.Project
 		env := &environment.Docker{
@@ -215,12 +226,13 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 			}
 		})
 		projects = append(projects, st)
-		live[id] = proj
+		live = append(live, proj)
+		running[id] = true
 	}
 	d.mu.Lock()
 	d.projects, d.live = projects, live
 	d.mu.Unlock()
-	return len(live)
+	return len(running)
 }
 
 // status lists the config's projects in order, with their loops' facts for those that run.
@@ -230,7 +242,7 @@ func (d *daemon) status() []localapi.ProjectStatus {
 	out := make([]localapi.ProjectStatus, len(d.projects))
 	for i, p := range d.projects {
 		// One with its own error does not run, also when a namesake does.
-		if live := d.live[p.Project]; live != nil && p.LastError == "" {
+		if live := d.live[i]; live != nil && p.LastError == "" {
 			p = live.Status()
 		}
 		out[i] = p

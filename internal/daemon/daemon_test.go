@@ -469,3 +469,23 @@ func TestDrain(t *testing.T) {
 		t.Errorf("Status after drain = %v, want ErrNotRunning", err)
 	}
 }
+
+// CLR-191: a project renamed with `rename` runs under its old ID, so its
+// token is found, and shows its new key.
+func TestRenamedProjectShowsItsKey(t *testing.T) {
+	keyring.MockInit()
+	a := newApp(t)
+	p := paths(t)
+	renamed := project(a.url, "CLR")
+	renamed.LocalID = "CSR"
+	writeConfig(t, p, renamed)
+	setToken(t, p, renamed)
+	c, _ := start(t, p)
+	waitFor(t, "CLR to poll", func() bool {
+		s, err := c.Status(ctxT(t))
+		return err == nil && len(s.Projects) == 1 && s.Projects[0].Connected
+	})
+	if s, err := c.Status(ctxT(t)); err != nil || s.Projects[0].Project != "CLR" {
+		t.Errorf("status %+v, %v; want project CLR", s, err)
+	}
+}

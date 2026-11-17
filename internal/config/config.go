@@ -44,6 +44,9 @@ type Config struct {
 	// 2026-11-17-local-model-providers).
 	Providers []Provider `json:"providers,omitempty"`
 	Projects  []Project  `json:"projects"`
+	// Dropped names the fields an older runner wrote that Load dropped, for
+	// a warning; the next Save leaves them out (CLR-191).
+	Dropped []string `json:"-"`
 }
 
 // Defaults of keep_sessions_for and min_free_disk.
@@ -104,7 +107,11 @@ func parseSize(s string) (int64, error) {
 
 // Project is one Cinderline project, identified by URL, Workspace and Key (CSR-97).
 type Project struct {
-	URL string `json:"url"`
+	// LocalID is the fixed local name ID returns, set once, so a key renamed
+	// in the app renames nothing on this machine (CLR-191).
+	LocalID string `json:"id,omitempty"`
+	URL     string `json:"url"`
+	// Key is the project's key in the app, a label only: `rename` updates it.
 	Key string `json:"key"`
 	// Workspace is the slug of the project's workspace from GET project.
 	Workspace  string `json:"workspace"`
@@ -158,9 +165,16 @@ func (p Provider) Validate() error {
 const DefaultWorkspace = "default"
 
 // ID names the project's Docker volumes, containers, networks and labels,
-// its keychain entries and its state files: "<workspace>-<KEY>", or the key
-// alone in the default workspace (decision 2026-11-15-workspace-in-project-identity).
+// its keychain entries and its state files: LocalID, or Label for an entry
+// that has none yet.
 func (p Project) ID() string {
+	return cmp.Or(p.LocalID, p.Label())
+}
+
+// Label is how the project is shown: "<workspace>-<KEY>", or the key alone
+// in the default workspace (decision 2026-11-15-workspace-in-project-identity).
+// It was the ID before CLR-191, and is still a new entry's ID.
+func (p Project) Label() string {
 	if p.Workspace == DefaultWorkspace {
 		return p.Key
 	}
@@ -294,9 +308,19 @@ func Load(path string) (*Config, error) {
 	defer f.Close()
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()
-	var cfg Config
-	if err := dec.Decode(&cfg); err != nil {
+	var old oldConfig
+	if err := dec.Decode(&old); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	cfg := old.Config
+	cfg.Projects = make([]Project, len(old.Projects))
+	cfg.Dropped = old.dropped()
+	for i, op := range old.Projects {
+		cfg.Projects[i] = op.Project
+		if op.NamesByKey && op.LocalID == "" {
+			cfg.Projects[i].LocalID = op.Key // its names were the key alone
+		}
+		cfg.Projects[i].LocalID = cfg.Projects[i].ID() // pinned before anyone edits the key
 	}
 	if cfg.Version != Version {
 		return nil, fmt.Errorf("%s: version %d is not supported by this build (wants %d); update %s", path, cfg.Version, Version, name.Name)
@@ -305,6 +329,39 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// oldConfig is Config with the fields an older runner wrote: Load drops them
+// instead of refusing the file (CLR-191). Any other unknown field is still
+// refused, so a typo does not pass silently.
+type oldConfig struct {
+	Config
+	MergePollSeconds json.RawMessage `json:"merge_poll_seconds"`
+	BuildImage       json.RawMessage `json:"build_image"`
+	Projects         []oldProject    `json:"projects"`
+}
+
+type oldProject struct {
+	Project
+	NamesByKey    bool            `json:"names_by_key"`
+	AllowExisting json.RawMessage `json:"allow_existing"`
+}
+
+// dropped names the old fields the file held, once each.
+func (c oldConfig) dropped() []string {
+	var out []string
+	add := func(name string, present bool) {
+		if present && !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	add("merge_poll_seconds", c.MergePollSeconds != nil)
+	add("build_image", c.BuildImage != nil)
+	for _, p := range c.Projects {
+		add("names_by_key", p.NamesByKey)
+		add("allow_existing", p.AllowExisting != nil)
+	}
+	return out
 }
 
 // Validate reports an invalid limit or the first invalid project. Zero
@@ -327,6 +384,8 @@ func (c *Config) Validate() error {
 			problem = "url must be an absolute http or https URL"
 		} else if p.Key == "" || strings.IndexFunc(p.Key, unicode.IsSpace) >= 0 {
 			problem = "key must be non-empty without whitespace"
+		} else if strings.IndexFunc(p.LocalID, unicode.IsSpace) >= 0 {
+			problem = "id must be without whitespace"
 		} else if err := CheckRepositoryURL(p.Repository); err != nil {
 			problem = "repository " + err.Error()
 		} else if !workspaceSlug.MatchString(p.Workspace) {

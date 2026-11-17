@@ -163,18 +163,27 @@ func (c *CLI) secretAsk(prompt string) (string, error) {
 
 // checkRunnerToken checks v against p's instance, as add does, and that it is p's.
 func (c *CLI) checkRunnerToken(p config.Project, v string) error {
-	proj, err := cinderline.New(p.URL, v, c.Version).Project(context.Background())
-	var apiErr *cinderline.APIError
-	if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
-		return errors.New("the instance rejected this runner token")
-	}
+	proj, err := c.tokenProject(p, v)
 	if err != nil {
-		return fmt.Errorf("%s could not be reached: %w", p.URL, err)
+		return err
 	}
 	if proj.Key != p.Key || proj.WorkspaceSlug() != p.Workspace {
 		return fmt.Errorf("this runner token is for %s in workspace %s, not %s in %s", proj.Key, proj.WorkspaceSlug(), p.Key, p.Workspace)
 	}
 	return nil
+}
+
+// tokenProject asks p's instance which project runner token v is for.
+func (c *CLI) tokenProject(p config.Project, v string) (cinderline.Project, error) {
+	proj, err := cinderline.New(p.URL, v, c.Version).Project(context.Background())
+	var apiErr *cinderline.APIError
+	if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
+		return proj, errors.New("the instance rejected this runner token")
+	}
+	if err != nil {
+		return proj, fmt.Errorf("%s could not be reached: %w", p.URL, err)
+	}
+	return proj, nil
 }
 
 // storeKey stores v as p's secret of kind and says where, never what.

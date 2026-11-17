@@ -242,7 +242,7 @@ func (p *Project) Status() localapi.ProjectStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st := p.status
-	st.Project = p.Config.ID()
+	st.Project = p.Config.Label()
 	return st
 }
 

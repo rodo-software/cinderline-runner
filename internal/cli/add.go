@@ -87,13 +87,14 @@ func (c *CLI) add(args []string) int {
 	}
 	say("Project %s: %s", proj.Key, proj.Name)
 	p := config.Project{URL: instance, Key: proj.Key, Workspace: proj.WorkspaceSlug()}
+	p.LocalID = p.Label() // fixed from now on, whatever the key becomes (CLR-191)
 	for _, q := range cfg.Projects {
 		if q.URL == p.URL && q.Key == p.Key && q.Workspace == p.Workspace {
 			return c.fail(fmt.Errorf("%s at %s is already added, in workspace %s; run `%s remove -url %s -workspace %s %s` first", p.Key, p.URL, q.Workspace, name.Name, q.URL, q.Workspace, q.Key))
 		}
 		// Docker volumes are named by the ID (decision 2026-11-11-audit-fixes, CSR-97).
 		if q.ID() == p.ID() {
-			return c.fail(fmt.Errorf("a project with key %s is already added, at %s; two projects with one key would share their Docker volumes", p.ID(), q.URL))
+			return c.fail(fmt.Errorf("%s at %s already names its Docker volumes and secrets %s, perhaps its key before a rename; two projects with one name would share them", q.Key, q.URL, p.ID()))
 		}
 	}
 

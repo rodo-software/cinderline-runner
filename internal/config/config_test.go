@@ -45,6 +45,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	want := twoProjects()
 	want.Version = 1
+	want.Projects[0].LocalID, want.Projects[1].LocalID = "WEB", "acme-WEB" // Load pins the ID
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -128,6 +129,7 @@ func TestValidate(t *testing.T) {
 		{"ssh repository", []Project{with(func(p *Project) { p.Repository = "git@g.example.com:acme/web.git" })}, "project 1 (WEB): repository"},
 		{"repository with a password", []Project{with(func(p *Project) { p.Repository = "https://u:tok@g.example.com/acme/web.git" })}, "project 1 (WEB): repository \"https://g.example.com/acme/web.git\" must"},
 		{"duplicate", []Project{ok, ok}, "project 2 (WEB): "},
+		{"id with space", []Project{with(func(p *Project) { p.LocalID = "W EB" })}, "project 1 (WEB): id"},
 		{"no workspace", []Project{with(func(p *Project) { p.Workspace = "" })}, "project 1 (WEB): workspace"},
 		// CSR-63, Willem's decision (option C): extra allowlist entries come from local config only, as exact host:port.
 		{"allow hosts", []Project{with(func(p *Project) { p.AllowHosts = []string{"mirror.example.com:443", "api.example.com:8443"} })}, ""},
@@ -386,8 +388,9 @@ func TestProjectID(t *testing.T) {
 		p    Project
 		want string
 	}{
-		{Project{Key: "APP", Workspace: "default"}, "APP"},   // a Cinderline without workspaces
-		{Project{Key: "APP", Workspace: "acme"}, "acme-APP"}, // added with a workspace
+		{Project{Key: "APP", Workspace: "default"}, "APP"},                 // a Cinderline without workspaces
+		{Project{Key: "APP", Workspace: "acme"}, "acme-APP"},               // added with a workspace
+		{Project{LocalID: "CSR", Key: "CLR", Workspace: "default"}, "CSR"}, // renamed in the app (CLR-191)
 	}
 	for _, tt := range tests {
 		if got := tt.p.ID(); got != tt.want {
@@ -503,5 +506,57 @@ func TestAllowHostsRefusesTheRunnersMachine(t *testing.T) {
 	p.AllowHosts = []string{"studio.lan:1234", "192.168.1.5:8080", "localhost.example.com:443"}
 	if err := (&Config{Projects: []Project{p}}).Validate(); err != nil {
 		t.Errorf("ordinary hosts: %v", err)
+	}
+}
+
+// CLR-191: a key renamed after Load keeps every local name.
+func TestLoadPinsTheID(t *testing.T) {
+	path := writeFile(t, `{"version": 1, "projects": [
+		{"url": "https://a.example.com", "key": "CSR", "workspace": "acme", "repository": "https://g.example.com/r.git"},
+		{"id": "OLD", "url": "https://a.example.com", "key": "CL", "workspace": "acme", "repository": "https://g.example.com/r.git"}]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Projects[0].Key = "CLR"
+	if got := cfg.Projects[0].ID(); got != "acme-CSR" {
+		t.Errorf("renamed entry: ID %q, want acme-CSR", got)
+	}
+	if got := cfg.Projects[1].ID(); got != "OLD" {
+		t.Errorf("entry with an id: ID %q, want OLD", got)
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err = Load(path); err != nil || cfg.Projects[0].ID() != "acme-CSR" || cfg.Projects[0].Key != "CLR" {
+		t.Errorf("after save: %+v, %v; want key CLR with ID acme-CSR", cfg, err)
+	}
+}
+
+// CLR-191: fields an older runner wrote are dropped and named, not refused;
+// names_by_key keeps the key-only names it stood for.
+func TestLoadDropsOldFields(t *testing.T) {
+	path := writeFile(t, `{"version": 1, "merge_poll_seconds": 30, "build_image": true, "projects": [
+		{"url": "https://a.example.com", "key": "CSR", "workspace": "acme", "names_by_key": true, "allow_existing": true, "repository": "https://g.example.com/r.git"},
+		{"url": "https://b.example.com", "key": "WEB", "workspace": "acme", "names_by_key": true, "repository": "https://g.example.com/w.git"}]}`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"merge_poll_seconds", "build_image", "names_by_key", "allow_existing"}; !slices.Equal(cfg.Dropped, want) {
+		t.Errorf("dropped %q, want %q", cfg.Dropped, want)
+	}
+	if got := cfg.Projects[0].ID(); got != "CSR" {
+		t.Errorf("names_by_key entry: ID %q, want CSR", got)
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if s := string(data); strings.Contains(s, "names_by_key") || strings.Contains(s, "build_image") {
+		t.Errorf("saved file keeps an old field:\n%s", s)
+	}
+	if _, err := Load(writeFile(t, `{"version": 1, "projects": [], "nmaes_by_key": true}`)); err == nil {
+		t.Error("an unknown field that no runner wrote loaded, want an error")
 	}
 }

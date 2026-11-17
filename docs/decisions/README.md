@@ -13,4 +13,5 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-16-runner-protocol-v2](2026-11-16-runner-protocol-v2.md): the runner API contract, the same record in both repositories, with [`docs/runner-api/openapi.yaml`](../runner-api/openapi.yaml).
 - [2026-11-17-second-audit-decisions](2026-11-17-second-audit-decisions.md): a stop during publishing; no agent header.
 - [2026-11-17-local-model-providers](2026-11-17-local-model-providers.md): model providers for OpenCode agents.
+- [2026-11-17-project-key-rename](2026-11-17-project-key-rename.md): a fixed local `id` per project; `rename` takes a renamed key by hand; old config fields are ignored.
 - [2026-11-17-open-questions-answered](2026-11-17-open-questions-answered.md): Willem's answers after the clean-up: seccomp forced on agent containers; the push scan's rules.

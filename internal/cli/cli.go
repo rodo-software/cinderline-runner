@@ -46,6 +46,7 @@ func commands() []command {
 	return []command{
 		{"add", "", "add a project, asking for its details", (*CLI).add},
 		{"remove", "[-url URL] [-workspace SLUG] KEY", "remove a project and its secrets", (*CLI).remove},
+		{"rename", projectUsage, "set a project's key to the one Cinderline gives it after a rename there; its secrets, volumes and sessions keep their names", (*CLI).rename},
 		{"run", "[-v]", "run in the foreground until Ctrl-C; -v also logs to stderr, with Debug lines", (*CLI).run},
 		{"status", "", "show the running " + name.Name + " and its projects", (*CLI).status},
 		{"logs", "[-n LINES]", "print the log's last lines, then follow it", (*CLI).logs},
@@ -141,6 +142,9 @@ func (c *CLI) loadConfig() (*config.Config, error) {
 	cfg, err := config.Load(c.Paths.File)
 	if errors.Is(err, fs.ErrNotExist) {
 		return &config.Config{}, nil
+	}
+	if err == nil && len(cfg.Dropped) > 0 {
+		fmt.Fprintf(c.Stderr, "warning: %s holds %s, which an older %s wrote and this one ignores\n", c.Paths.File, strings.Join(cfg.Dropped, ", "), name.Name)
 	}
 	return cfg, err
 }

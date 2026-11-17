@@ -176,7 +176,7 @@ func TestAddHappyPath(t *testing.T) {
 	if code := c.Run([]string{"add"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
-	want := config.Project{URL: u, Key: "WEB", Repository: repoURL, Workspace: "default"}
+	want := config.Project{LocalID: "WEB", URL: u, Key: "WEB", Repository: repoURL, Workspace: "default"}
 	if got := projects(t, c); !reflect.DeepEqual(got, []config.Project{want}) {
 		t.Fatalf("config projects %+v, want %+v", got, want)
 	}
@@ -300,7 +300,8 @@ func TestAddSameKeyInAnotherWorkspace(t *testing.T) {
 	if code := c.Run([]string{"add"}); code != 0 {
 		t.Fatalf("code %d, stderr %q\n%s", code, errb.String(), out.String())
 	}
-	beta := config.Project{URL: u, Key: "WEB", Repository: repoURL, Workspace: "beta"}
+	beta := config.Project{LocalID: "beta-WEB", URL: u, Key: "WEB", Repository: repoURL, Workspace: "beta"}
+	acme.LocalID = "acme-WEB" // Load pins it
 	if got := projects(t, c); !reflect.DeepEqual(got, []config.Project{acme, beta}) {
 		t.Fatalf("projects %+v", got)
 	}
@@ -338,7 +339,7 @@ func TestAddRefusesSameKeyOnAnotherInstance(t *testing.T) {
 	if code := c.Run([]string{"add"}); code != 1 {
 		t.Fatalf("code %d, want 1", code)
 	}
-	if !strings.Contains(errb.String(), "key WEB is already added, at https://other.example.com") {
+	if !strings.Contains(errb.String(), "WEB at https://other.example.com already names its Docker volumes and secrets WEB") {
 		t.Errorf("stderr %q", errb.String())
 	}
 	if got := projects(t, c); len(got) != 1 {
@@ -408,9 +409,9 @@ func TestAddCopiesModelCredentials(t *testing.T) {
 }
 
 func TestRemove(t *testing.T) {
-	a := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
-	b := config.Project{Workspace: "default", URL: "https://b.example.com", Key: "WEB", Repository: "https://git.example.com/o/b"}
-	api := config.Project{Workspace: "default", URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
+	a := config.Project{LocalID: "WEB", Workspace: "default", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a"}
+	b := config.Project{LocalID: "WEB", Workspace: "default", URL: "https://b.example.com", Key: "WEB", Repository: "https://git.example.com/o/b"}
+	api := config.Project{LocalID: "API", Workspace: "default", URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
 	kinds := []secrets.Kind{secrets.RunnerToken, secrets.GitToken, secrets.AnthropicCredential, secrets.OpenRouterKey, secrets.OpenAIKey, secrets.GeminiKey}
 	setup := func() (*CLI, *bytes.Buffer, *bytes.Buffer) {
 		c, out, errb := newCLI(t, "")
@@ -502,9 +503,9 @@ func TestRemove(t *testing.T) {
 // workspaces with -workspace, and remove deletes only that workspace's Docker
 // resources, by its own label.
 func TestRemoveWithWorkspace(t *testing.T) {
-	acme := config.Project{URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a", Workspace: "acme"}
+	acme := config.Project{LocalID: "acme-WEB", URL: "https://a.example.com", Key: "WEB", Repository: "https://git.example.com/o/a", Workspace: "acme"}
 	beta := acme
-	beta.Workspace = "beta"
+	beta.LocalID, beta.Workspace = "beta-WEB", "beta"
 	c, _, errb := newCLI(t, "")
 	saveConfig(t, c, acme, beta)
 	for _, p := range []config.Project{acme, beta} {
