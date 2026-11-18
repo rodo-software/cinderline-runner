@@ -237,6 +237,10 @@ func (d *Docker) log() *slog.Logger {
 	return d.Log
 }
 
+// OutputMsg is the message of each logged line of container output. The
+// daemon's log handler finds it by this message and cleans its "line".
+const OutputMsg = "agent output"
+
 // lines keeps all output, which the clients parse whole, and logs it a line
 // at a time at Debug: a turn prints far more than the log should keep. The stream writes
 // from one goroutine at a time.
@@ -258,14 +262,14 @@ func (l *lines) Write(p []byte) (int, error) {
 		if i < 0 {
 			return len(p), nil
 		}
-		l.log.Debug("agent output", "line", string(l.pending[:i]))
+		l.log.Debug(OutputMsg, "line", string(l.pending[:i]))
 		l.pending = l.pending[i+1:]
 	}
 }
 
 func (l *lines) flush() {
 	if len(l.pending) > 0 {
-		l.log.Debug("agent output", "line", string(l.pending))
+		l.log.Debug(OutputMsg, "line", string(l.pending))
 		l.pending = nil
 	}
 }

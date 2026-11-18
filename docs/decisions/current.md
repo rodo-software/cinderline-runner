@@ -122,6 +122,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 
 - Logging is `log/slog`, one structured line per event, tagged with project and issue. (AGENTS.md)
 - The daemon's log rotates at 10 MB keeping 3; `cinderline logs` prints the tail and follows; `/logs` sends the last 100 lines. The socket folder is 0700, and a held socket is detected by dialing. (2026-11-05-reload-config; 2026-11-05-runner-rewrite-details)
+- Container output is logged at Debug one line at a time, cleaned to printable text: `run -v` prints it as `time ISSUE │ line` with only its colour codes kept, and only on a terminal; the log file keeps the plain text. (2026-11-18-verbose-agent-output)
 - Errors reach the app only in the poll's report and in `next`; the runner posts no comments. (2026-11-16-runner-protocol-v2)
 
 ## Testing and CI

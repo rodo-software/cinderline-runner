@@ -20,10 +20,11 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
-	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
+
+	"golang.org/x/term"
 )
 
 // Options configure Run.
@@ -64,13 +65,8 @@ func Run(ctx context.Context, o Options) error {
 	}
 	lf := &logFile{path: o.Paths.Log, max: maxLogSize}
 	defer lf.Close()
-	var log *slog.Logger
-	if o.Verbose != nil {
-		debug := &slog.HandlerOptions{Level: slog.LevelDebug}
-		log = slog.New(redact.Handler(slog.NewMultiHandler(slog.NewJSONHandler(lf, debug), slog.NewTextHandler(o.Verbose, debug))))
-	} else {
-		log = slog.New(redact.Handler(slog.NewJSONHandler(lf, nil)))
-	}
+	f, isFile := o.Verbose.(*os.File)
+	log := logger(lf, o.Verbose, isFile && term.IsTerminal(int(f.Fd())))
 	d := &daemon{}
 
 	reloads := make(chan chan error)
