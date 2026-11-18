@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -199,7 +200,7 @@ func agentArgv(git ...string) []string {
 		"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs",
 		"-w", dir, "--entrypoint", "git", GitImage,
 		"-c", "safe.directory=/repo", "-c", "core.autocrlf=false", "-c", "core.fileMode=true",
-		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderline runner", "-c", "user.email=runner@cinderline.invalid"}
+		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderline runner", "-c", "user.email=" + Email}
 	return append(argv, git...)
 }
 
@@ -211,25 +212,36 @@ func agentArgvGit(dir, issue string, git ...string) []string {
 		"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs",
 		"-w", dir, "--entrypoint", "git", GitImage,
 		"-c", "safe.directory=/repo", "-c", "core.autocrlf=false", "-c", "core.fileMode=true",
-		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderline runner", "-c", "user.email=runner@cinderline.invalid"}
+		"-c", "core.hooksPath=/dev/null", "-c", "user.name=cinderline runner", "-c", "user.email=" + Email}
 	return append(argv, git...)
 }
 
 // asAuthor is agent-side argv with "Solo / Coder" as author and committer,
 // the -e flags right after the labels.
 func asAuthor(argv []string) []string {
-	ident := []string{"-e", "GIT_AUTHOR_NAME=Solo / Coder", "-e", "GIT_AUTHOR_EMAIL=runner-csr@runner.invalid",
-		"-e", "GIT_COMMITTER_NAME=Solo / Coder", "-e", "GIT_COMMITTER_EMAIL=runner-csr@runner.invalid"}
+	ident := []string{"-e", "GIT_AUTHOR_NAME=Solo / Coder", "-e", "GIT_AUTHOR_EMAIL=" + Email,
+		"-e", "GIT_COMMITTER_NAME=Solo / Coder", "-e", "GIT_COMMITTER_EMAIL=" + Email}
 	return slices.Concat(argv[:7], ident, argv[7:])
 }
 
+// TestEmail: commits carry cinderline-runner@ the runner's host (CLR-196).
+func TestEmail(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		host = "localhost"
+	}
+	if want := "cinderline-runner@" + host; Email != want {
+		t.Errorf("Email = %q, want %q", Email, want)
+	}
+}
+
 func TestIdentity(t *testing.T) {
-	want := []string{"GIT_AUTHOR_NAME=Opus 5.5 Solo / Feature Coder", "GIT_AUTHOR_EMAIL=runner-csr@runner.invalid",
-		"GIT_COMMITTER_NAME=Opus 5.5 Solo / Feature Coder", "GIT_COMMITTER_EMAIL=runner-csr@runner.invalid"}
-	if got := Identity("CSR", "Opus 5.5 Solo / Feature Coder"); !reflect.DeepEqual(got, want) {
+	want := []string{"GIT_AUTHOR_NAME=Opus 5.5 Solo / Feature Coder", "GIT_AUTHOR_EMAIL=" + Email,
+		"GIT_COMMITTER_NAME=Opus 5.5 Solo / Feature Coder", "GIT_COMMITTER_EMAIL=" + Email}
+	if got := Identity("Opus 5.5 Solo / Feature Coder"); !reflect.DeepEqual(got, want) {
 		t.Errorf("Identity = %q, want %q", got, want)
 	}
-	if got := Identity("CSR", ""); got != nil {
+	if got := Identity(""); got != nil {
 		t.Errorf("Identity without an author = %q, want none", got)
 	}
 }

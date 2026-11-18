@@ -159,7 +159,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	if err := json.Unmarshal([]byte(get(t, ctx, forgejoURL+"/api/v1/repos/it/repo/commits?sha="+branch+"&limit=2&stat=false&files=false", token)), &commits); err != nil || len(commits) != 2 {
 		t.Fatalf("commits on %s = %+v, %v; want the runner's and the agent's", branch, commits, err)
 	}
-	who := struct{ Name, Email string }{"Dev / Coder", "runner-" + strings.ToLower(project) + "@runner.invalid"}
+	who := struct{ Name, Email string }{"Dev / Coder", workspace.Email}
 	for i, c := range commits {
 		if c.Commit.Author != who || c.Commit.Committer != who {
 			t.Errorf("commit %d on %s by %+v, committed by %+v; want %+v", i, branch, c.Commit.Author, c.Commit.Committer, who)

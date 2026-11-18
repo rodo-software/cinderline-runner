@@ -101,7 +101,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		Issue:   path.Base(t.Dir), // the clone is RunsPath/<REF>
 		Dir:     t.Dir,
 		Mounts:  agentMounts(c.Project, c.Name, c.Tools),
-		Env:     slices.Concat(c.Tools.Env, libs, k.env(c, t), workspace.Identity(c.Project, t.Author)),
+		Env:     slices.Concat(c.Tools.Env, libs, k.env(c, t), workspace.Identity(t.Author)),
 		Cmd:     k.cmd(c, t, session),
 		Stdin:   t.Prompt,
 		Timeout: time.Duration(t.MaxMinutes) * time.Minute,

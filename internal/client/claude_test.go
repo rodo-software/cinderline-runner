@@ -12,6 +12,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // claudeArgs gives a worker no MCP server at all.
@@ -155,9 +156,9 @@ func TestParseClaudeRecordedError(t *testing.T) {
 	}
 }
 
-// wantIdentity is the git identity of a turn by "Dev / Coder" in project
-// CSR, which every client puts last in the agent's environment (CSR-169).
-var wantIdentity = []string{"GIT_AUTHOR_NAME=Dev / Coder", "GIT_AUTHOR_EMAIL=runner-csr@runner.invalid", "GIT_COMMITTER_NAME=Dev / Coder", "GIT_COMMITTER_EMAIL=runner-csr@runner.invalid"}
+// wantIdentity is the git identity of a turn by "Dev / Coder", which every
+// client puts last in the agent's environment (CSR-169).
+var wantIdentity = []string{"GIT_AUTHOR_NAME=Dev / Coder", "GIT_AUTHOR_EMAIL=" + workspace.Email, "GIT_COMMITTER_NAME=Dev / Coder", "GIT_COMMITTER_EMAIL=" + workspace.Email}
 
 // Run: a fresh turn gets a session ID of its own, runs the tools volume's
 // claude in the issue's clone with the prompt on stdin, only its own

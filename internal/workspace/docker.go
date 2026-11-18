@@ -234,7 +234,19 @@ var gitConfig = [][2]string{
 	{"core.fileMode", "true"},
 	{"core.hooksPath", "/dev/null"},
 	{"user.name", name.Name + " runner"},
-	{"user.email", "runner@" + name.Name + ".invalid"},
+	{"user.email", Email},
+}
+
+// Email is the address of every commit the runner and its agents make:
+// cinderline-runner@ the host the runner runs on (CLR-196). A host without a
+// name gives localhost, so git always gets an address.
+var Email = name.Name + "-runner@" + hostname()
+
+func hostname() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "localhost"
 }
 
 var (
@@ -292,15 +304,13 @@ func (d *Docker) Prepare(ctx context.Context, branch, base string) (string, erro
 }
 
 // Identity is the git environment that makes author the author and
-// committer of a project's commits, with the address of the project's runner
-// user in Cinderline: fixed and non-routable, never a person's (CSR-169).
-// An empty author is none.
-func Identity(project, author string) []string {
+// committer of a commit, with the runner's Email, never a person's address
+// (CSR-169). An empty author is none.
+func Identity(author string) []string {
 	if author == "" {
 		return nil
 	}
-	email := "runner-" + strings.ToLower(project) + "@runner.invalid"
-	return []string{"GIT_AUTHOR_NAME=" + author, "GIT_AUTHOR_EMAIL=" + email, "GIT_COMMITTER_NAME=" + author, "GIT_COMMITTER_EMAIL=" + email}
+	return []string{"GIT_AUTHOR_NAME=" + author, "GIT_AUTHOR_EMAIL=" + Email, "GIT_COMMITTER_NAME=" + author, "GIT_COMMITTER_EMAIL=" + Email}
 }
 
 // Commit commits everything in the clone as author, without hooks.
@@ -436,7 +446,7 @@ func (d *Docker) gitAs(ctx context.Context, dir, author string, args ...string) 
 		return "", err
 	}
 	argv := append([]string{"docker", "run", "--rm"}, d.labels(path.Base(dir))...)
-	for _, kv := range Identity(d.Project, author) {
+	for _, kv := range Identity(author) {
 		argv = append(argv, "-e", kv)
 	}
 	argv = append(argv, "--network", "none", "--user", AgentUser,
