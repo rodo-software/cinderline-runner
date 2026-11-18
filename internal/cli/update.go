@@ -71,7 +71,7 @@ func (c *CLI) update(args []string) int {
 		return c.fail(fmt.Errorf("update --refresh: %w", err))
 	}
 
-	err = c.drainAndWait(ctx)
+	err = c.drainAndWait(ctx, true)
 	if errors.Is(err, localapi.ErrNotRunning) {
 		return 0 // a runner someone stopped stays stopped
 	}

@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"slices"
+	"strings"
+	"syscall"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
@@ -168,9 +173,47 @@ func cmpRef(ref string) string {
 	return ref
 }
 
-// reload makes a running daemon read the config again; it only warns.
+// reload makes a running daemon read the config again; it only warns. A
+// reload cuts the runs in flight, so while there are any it drains the
+// daemon instead, as stop --drain, and starts the service again (decision 2026-11-18-drain-before-reload).
 func (c *CLI) reload() {
-	if err := (localapi.Client{Socket: c.Paths.Socket}).Reload(context.Background()); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
+	cl := localapi.Client{Socket: c.Paths.Socket}
+	st, err := cl.Status(context.Background())
+	if err == nil {
+		if issues := inFlight(st); len(issues) > 0 {
+			c.drainAndStart(issues)
+			return
+		}
+		err = cl.Reload(context.Background())
+	}
+	if err != nil && !errors.Is(err, localapi.ErrNotRunning) {
 		fmt.Fprintf(c.Stdout, "Warning: daemon reload failed: %v.\n", err)
+	}
+}
+
+// drainAndStart lets the daemon finish issues, or stops it at once when the
+// person asks, and then starts the service again, which reads the new config.
+func (c *CLI) drainAndStart(issues []string) {
+	fmt.Fprintf(c.Stdout, "%s runs %s; it takes the change once they have finished, by stopping and starting again.\n", name.Name, strings.Join(issues, ", "))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := c.drainAndWait(ctx, true); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
+		fmt.Fprintf(c.Stdout, "Warning: stopped waiting (%v): %s still stops once its runs have finished and is not started again; start it then with `%s run` or its service.\n", err, name.Name, name.Name)
+		return
+	}
+	exe, start := c.exe, c.startService
+	if start == nil {
+		start = startService
+	}
+	if exe == "" {
+		exe, _ = os.Executable() // the service only needs it to install, not to start
+	}
+	switch installed, err := start(exe); {
+	case err != nil:
+		fmt.Fprintf(c.Stdout, "Warning: starting the %s service failed: %v.\n", name.Name, err)
+	case installed:
+		fmt.Fprintf(c.Stdout, "Started the %s service again with the change\n", name.Name)
+	default:
+		fmt.Fprintf(c.Stdout, "The running %s stopped; start it again with `%s run`\n", name.Name, name.Name)
 	}
 }
