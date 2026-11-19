@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -197,7 +198,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		var proj *run.Project
 		env := &environment.Docker{
 			Project: id, Log: log, Exec: workspace.RunCommand,
-			Allow:     environment.ProjectHosts(p.URL, p.AllowHosts),
+			Allow:     environment.ProjectHosts(p.URL, slices.Concat(cfg.AllowHosts, p.AllowHosts)),
 			OnRefused: func(issue, hp string) { proj.AddRefused(issue, hp) },
 		}
 		proj, err = run.NewProject(p, cfg.Providers, sec, o.Paths.State, env, log)

@@ -597,3 +597,31 @@ func TestStrictHostsRoundTrip(t *testing.T) {
 		t.Errorf("strict_hosts unset = %v, %v; want false", got, err)
 	}
 }
+
+// CLR-212: runner-wide allow_hosts applies to every current and future
+// project and follows the same host:port and local-machine rules.
+func TestConfigAllowHosts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := (&Config{AllowHosts: []string{"pypi.org:443", "192.168.1.5:8080"}}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := []string{"pypi.org:443", "192.168.1.5:8080"}; !slices.Equal(got.AllowHosts, want) {
+		t.Errorf("AllowHosts = %q, want %q", got.AllowHosts, want)
+	}
+	for _, bad := range []string{"pypi.org", "*.example.com:443", "x.example:0", ":443"} {
+		err := (&Config{AllowHosts: []string{bad}}).Validate()
+		if err == nil || !strings.Contains(err.Error(), "allow_hosts") {
+			t.Errorf("%q: err = %v, want allow_hosts error", bad, err)
+		}
+	}
+	for _, machine := range []string{"localhost:8080", "127.0.0.1:11434", "[::1]:8080", "host.docker.internal:8080"} {
+		err := (&Config{AllowHosts: []string{machine}}).Validate()
+		if err == nil || !strings.Contains(err.Error(), "add-provider") {
+			t.Errorf("%q: err = %v, want add-provider error", machine, err)
+		}
+	}
+}

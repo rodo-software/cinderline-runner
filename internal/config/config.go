@@ -46,8 +46,11 @@ type Config struct {
 	// StrictHosts keeps Cinderline from opening hosts: the allow_hosts of
 	// a step are ignored, and every poll says so. Runner-wide, off by
 	// default (decision 2026-11-17-hosts-from-cinderline).
-	StrictHosts bool      `json:"strict_hosts,omitempty"`
-	Projects    []Project `json:"projects"`
+	StrictHosts bool `json:"strict_hosts,omitempty"`
+	// AllowHosts are extra host:port pairs runs of every current and future
+	// project on this runner may reach (CLR-212).
+	AllowHosts []string  `json:"allow_hosts,omitempty"`
+	Projects   []Project `json:"projects"`
 	// Dropped names the fields an older runner wrote that Load dropped, for
 	// a warning; the next Save leaves them out (CLR-191).
 	Dropped []string `json:"-"`
@@ -395,6 +398,9 @@ func (c *Config) Validate() error {
 	if problem := checkProviders(c.Providers); problem != "" {
 		return errors.New(problem)
 	}
+	if problem := checkAllowHosts(c.AllowHosts); problem != "" {
+		return errors.New(problem)
+	}
 	type id struct{ url, workspace, key string }
 	seen := map[id]bool{}
 	for i, p := range c.Projects {
@@ -411,10 +417,8 @@ func (c *Config) Validate() error {
 			problem = "workspace must be letters, digits, - and _"
 		} else if seen[id{p.URL, p.Workspace, p.Key}] {
 			problem = "another project has the same url, workspace and key"
-		} else if i := slices.IndexFunc(p.AllowHosts, runnersMachine); i >= 0 {
-			problem = fmt.Sprintf("allow_hosts entry %q is the runner's own machine, which allow_hosts never opens; add a model provider instead with `%s add-provider NAME URL`", p.AllowHosts[i], name.Name)
-		} else if i := slices.IndexFunc(p.AllowHosts, func(hp string) bool { return !ValidHostPort(hp) }); i >= 0 {
-			problem = fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", p.AllowHosts[i])
+		} else if errMsg := checkAllowHosts(p.AllowHosts); errMsg != "" {
+			problem = errMsg
 		} else {
 			problem = checkExtraRepositories(p.ExtraRepositories)
 		}
@@ -424,6 +428,17 @@ func (c *Config) Validate() error {
 		seen[id{p.URL, p.Workspace, p.Key}] = true
 	}
 	return nil
+}
+
+// checkAllowHosts reports the first invalid allow_hosts entry; "" means none.
+func checkAllowHosts(allowHosts []string) string {
+	if i := slices.IndexFunc(allowHosts, runnersMachine); i >= 0 {
+		return fmt.Sprintf("allow_hosts entry %q is the runner's own machine, which allow_hosts never opens; add a model provider instead with `%s add-provider NAME URL`", allowHosts[i], name.Name)
+	}
+	if i := slices.IndexFunc(allowHosts, func(hp string) bool { return !ValidHostPort(hp) }); i >= 0 {
+		return fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", allowHosts[i])
+	}
+	return ""
 }
 
 // checkExtraRepositories reports the first invalid extra repository or two

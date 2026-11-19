@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +21,7 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
@@ -490,5 +493,42 @@ func TestRenamedProjectShowsItsKey(t *testing.T) {
 	})
 	if s, err := c.Status(ctxT(t)); err != nil || s.Projects[0].Project != "CLR" {
 		t.Errorf("status %+v, %v; want project CLR", s, err)
+	}
+}
+
+// CLR-212: runner-wide allow_hosts reach every project's environment allowlist
+// alongside that project's own allow_hosts.
+func TestRunnerAllowHostsReachEveryProject(t *testing.T) {
+	keyring.MockInit()
+	a, b := newApp(t), newApp(t)
+	p := paths(t)
+	pa := project(a.url, "A")
+	pa.AllowHosts = []string{"only-a.example.com:443"}
+	pb := project(b.url, "B")
+	setToken(t, p, pa)
+	setToken(t, p, pb)
+
+	cfg := &config.Config{
+		AllowHosts: []string{"global.example.com:443"},
+		Projects:   []config.Project{pa, pb},
+	}
+	d := &daemon{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var wg sync.WaitGroup
+	n := d.start(ctx, &wg, slog.New(slog.DiscardHandler), Options{Paths: p, Version: "1.2.3"}, cfg, make(chan struct{}))
+	wg.Wait()
+	if n != 2 {
+		t.Fatalf("started %d projects, want 2", n)
+	}
+	allowA := d.live[0].Env.(*environment.Docker).Allow
+	allowB := d.live[1].Env.(*environment.Docker).Allow
+	for _, want := range []string{"global.example.com:443", "only-a.example.com:443"} {
+		if !slices.Contains(allowA, want) {
+			t.Errorf("project A allow = %q, missing %q", allowA, want)
+		}
+	}
+	if !slices.Contains(allowB, "global.example.com:443") || slices.Contains(allowB, "only-a.example.com:443") {
+		t.Errorf("project B allow = %q, want global only", allowB)
 	}
 }

@@ -61,7 +61,7 @@ func commands() []command {
 		{"add-repo", projectUsage, "add a repository the project's runs can read, read-only, asking for its URL, ref and git token", (*CLI).addRepo},
 		{"list-repos", projectUsage, "list the project's extra repositories", (*CLI).listRepos},
 		{"remove-repo", projectUsage + " URL|NAME", "remove an extra repository and its git token", (*CLI).removeRepo},
-		{"allow-host", allowHostUsage, "add, list or remove an extra host:port the project's runs may reach (its allow_hosts in config.json), never the runner's own machine", (*CLI).allowHost},
+		{"allow-host", allowHostUsage, "add, list or remove an extra host:port a project's runs may reach (its allow_hosts in config.json), or all current and future projects when --project is omitted, never the runner's own machine", (*CLI).allowHost},
 		{"add-provider", "NAME URL", "add an OpenAI-compatible model provider for the OpenCode agents of every project, which name a model as NAME/<model id>, asking for its optional API key", (*CLI).addProvider},
 		{"list-providers", "", "list the runner's model providers and whether each has a key", (*CLI).listProviders},
 		{"remove-provider", "NAME", "remove a model provider and its key", (*CLI).removeProvider},
