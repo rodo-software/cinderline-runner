@@ -39,8 +39,17 @@ type FindReply struct {
 
 // MergeStateReply is one scripted reply to MergeState.
 type MergeStateReply struct {
-	State MergeState
-	Err   error
+	State   MergeState
+	Head    string
+	Running bool
+	Failed  []Check
+	Err     error
+}
+
+// CheckLogReply is one scripted reply to CheckLog.
+type CheckLogReply struct {
+	Log string
+	Err error
 }
 
 // Fake is a scripted Forge. Fill the queues before use; each call pops the
@@ -52,6 +61,7 @@ type Fake struct {
 	Finds           []FindReply
 	Merges          []error // replies to RequestMerge
 	MergeStates     []MergeStateReply
+	CheckLogs       []CheckLogReply
 
 	mu    sync.Mutex
 	calls []Call
@@ -116,14 +126,26 @@ func (f *Fake) RequestMerge(_ context.Context, pr PullRequest) error {
 	return err
 }
 
-func (f *Fake) MergeState(_ context.Context, branch string) (MergeState, error) {
+func (f *Fake) MergeState(_ context.Context, branch string) (PullState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("MergeState", branch)
 	if len(f.MergeStates) == 0 {
-		return "", fmt.Errorf("%w for MergeState", ErrNotScripted)
+		return PullState{}, fmt.Errorf("%w for MergeState", ErrNotScripted)
 	}
 	r := f.MergeStates[0]
 	f.MergeStates = f.MergeStates[1:]
-	return r.State, r.Err
+	return PullState{State: r.State, Head: r.Head, Running: r.Running, Failed: r.Failed}, r.Err
+}
+
+func (f *Fake) CheckLog(_ context.Context, c Check) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("CheckLog", c)
+	if len(f.CheckLogs) == 0 {
+		return "", fmt.Errorf("%w for CheckLog", ErrNotScripted)
+	}
+	r := f.CheckLogs[0]
+	f.CheckLogs = f.CheckLogs[1:]
+	return r.Log, r.Err
 }

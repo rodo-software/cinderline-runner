@@ -64,21 +64,22 @@ Each project entry has an `id`, set at `add` as that same name, which names ever
 | Metadata: read (always granted) | finding the default branch when the project names no base branch | no run starts |
 | Contents: read and write | clone, fetch, push | no run starts, or its branch is not pushed |
 | Pull requests: read and write | opening and finding the pull request, auto-merge (squash, GraphQL `enablePullRequestAutoMerge`) for trusted teams *(not checked: the docs name no permission for the mutation)* | the branch is pushed but no pull request is opened or merged |
-| Checks: read | merge status: failed check runs on the pull request's head *(not checked: GitHub's docs disagree on whether fine-grained tokens can call this endpoint on github.com)* | the issue's merge status is not updated |
+| Checks: read | merge status: failed check runs on the pull request's head, and their names, summaries and links for Cinderline *(not checked: GitHub's docs disagree on whether fine-grained tokens can call this endpoint on github.com)* | the issue's merge status is not updated, and failed CI is not sent back to the agent |
+| Actions: read | the end of the log of a failed GitHub Actions job, sent to Cinderline with the failed check | the failed check is sent without its log |
 | Workflows: read and write (optional) | pushing commits that change `.github/workflows/` | GitHub refuses that push |
 
 A classic token needs `repo`, plus `workflow` if agents may change workflows. It reaches every repository you can, so prefer the fine-grained one. Auto-merge also needs "Allow auto-merge" turned on in the repository's settings.
 
 **GitLab (gitlab.com and self-managed):** a project access token, or a personal access token, with the scope `api`. No narrower scope works: `write_repository` covers git but not the API, so it cannot open merge requests. `api` covers both. The role matters too:
 
-- Developer: clone, fetch and push `cinderline/` branches, open merge requests, read their pipeline status.
+- Developer: clone, fetch and push `cinderline/` branches, open merge requests, read their pipeline status and the failed jobs' logs.
 - The role the default branch's protection allows to merge, Maintainer by default: auto-merge (squash, remove the source branch once the pipeline succeeds). With a lower role, GitLab refuses the merge request.
 
 **Forgejo and Gitea:** an access token (Settings → Applications) with:
 
 | Scope | Used for | Without it |
 |---|---|---|
-| `write:repository` | clone, fetch, push, opening and finding pull requests, merge when checks succeed (squash, delete the branch), merge status from the commit status | no run starts, or its pull request is not opened or merged |
+| `write:repository` | clone, fetch, push, opening and finding pull requests, merge when checks succeed (squash, delete the branch), merge status and failed checks from the commit status, and the end of a failed Forgejo Actions job's log *(not checked: whether this scope reads the Actions API)*. The log needs the Actions jobs API, which Forgejo 17 has and Forgejo 15 does not; without it the failed check is sent without its log | no run starts, or its pull request is not opened or merged |
 
 Where Forgejo offers tokens limited to chosen repositories, they allow repository and issue scopes, which is enough to run issues.
 
@@ -86,7 +87,9 @@ Where Forgejo offers tokens limited to chosen repositories, they allow repositor
 
 | Permission | Used for | Without it |
 |---|---|---|
-| Pull requests: Write (`pullrequest:write`, includes `repository:write` and `repository`) | clone, fetch, push, default branch, opening and finding pull requests, merge status from the head commit's build statuses | no run starts, or its pull request is not opened |
+| Pull requests: Write (`pullrequest:write`, includes `repository:write` and `repository`) | clone, fetch, push, default branch, opening and finding pull requests, merge status and failed checks from the head commit's build statuses | no run starts, or its pull request is not opened |
+
+The runner does not read Bitbucket Pipelines logs: a failed check goes to Cinderline without its log.
 
 The runner never merges on Bitbucket: its API cannot merge when builds pass, so you merge yourself.
 

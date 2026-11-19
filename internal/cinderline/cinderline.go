@@ -113,8 +113,8 @@ func New(baseURL, token, version string) *Client {
 func (c *Client) Version() string { return c.version }
 
 // Poll sends the runner's report and what it holds, and returns what to do.
-// Report error messages are redacted, and everything is cut to the app's
-// limits: the first entries of a list are sent.
+// Report error messages and the texts of failed checks are redacted, and
+// everything is cut to the app's limits: the first entries of a list are sent.
 func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 	errs := make([]ReportError, 0, len(r.Report.Errors)) // a copy: the caller's slice stays
 	for _, e := range first(r.Report.Errors, maxErrors) {
@@ -155,6 +155,7 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 		for _, f := range r.Review {
 			if len(review) < maxListed && utf8.RuneCountInString(f.Ref) <= maxRef {
 				f.Conflicts = clipAll(f.Conflicts, maxConflicts, maxText)
+				f.Checks = checks(f.Checks)
 				review = append(review, f)
 			}
 		}
@@ -202,6 +203,7 @@ func redacted(r NextRequest) NextRequest {
 			l.Tail = &v
 		}
 		l.Conflicts = clipAll(l.Conflicts, maxConflicts, maxText)
+		l.Checks = checks(l.Checks)
 		if l.Secrets != nil {
 			found := make([]StepSecret, 0, min(len(l.Secrets), maxSecrets))
 			for _, f := range first(l.Secrets, maxSecrets) {

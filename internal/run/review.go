@@ -12,6 +12,12 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
+// headChecks are the failed checks of one head commit.
+type headChecks struct {
+	head   string
+	checks []cinderline.FailedCheck
+}
+
 // pullRequestState is a forge's merge state as the poll's review facts name it.
 var pullRequestState = map[forge.MergeState]string{
 	"":                 "none",
@@ -28,8 +34,9 @@ var pullRequestState = map[forge.MergeState]string{
 // when that merge conflicts (aborted, nothing pushed); asks the forge to
 // merge again when the item allows it and the branch was updated, as a
 // forge drops a scheduled merge when the head gets new commits; and records
-// where the pull request stands. An item that fails is logged and left
-// out; a failure of the whole pass only logs.
+// where the pull request stands, with the failed checks of a head whose CI
+// failed and finished, read once per head. An item that fails is logged
+// and left out; a failure of the whole pass only logs.
 func (p *Project) upkeep(ctx context.Context, proj cinderline.Project, items []cinderline.ReviewItem) (facts []cinderline.ReviewFact) {
 	facts = []cinderline.ReviewFact{}
 	defer func() {
@@ -63,6 +70,14 @@ func (p *Project) upkeep(ctx context.Context, proj cinderline.Project, items []c
 	if err != nil {
 		return fail(err)
 	}
+	// Only the listed issues keep their checks.
+	known := p.reviewChecks
+	p.reviewChecks = map[string]headChecks{}
+	for _, it := range items {
+		if c, ok := known[it.Ref]; ok {
+			p.reviewChecks[it.Ref] = c
+		}
+	}
 	for _, it := range items {
 		// The ref becomes a branch and a folder.
 		if !workspace.IssueRef.MatchString(it.Ref) {
@@ -86,11 +101,12 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 	fact := cinderline.ReviewFact{Ref: it.Ref, Conflicts: []string{}}
 	// shortcut: one forge request per Review issue and pass, no cache of
 	// pull requests that stay the same; keep one if a forge's rate limit bites.
-	state, err := fg.MergeState(ctx, branch)
+	pull, err := fg.MergeState(ctx, branch)
 	if err != nil {
 		log.Warn("pull request not checked", "err", err)
 		return fact, false
 	}
+	state, pushed := pull.State, false
 	open := state == forge.MergePending || state == forge.MergeFailed
 	if i := slices.IndexFunc(stranded, func(c workspace.Clone) bool { return c.Branch == branch }); i >= 0 && (open || state == "") {
 		if _, err := p.Workspace.Push(ctx, stranded[i].Dir, branch); err != nil {
@@ -100,6 +116,7 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 			return fact, true
 		}
 		log.Info("stranded branch pushed", "branch", branch)
+		pushed = true
 		if state == "" {
 			pr, err := fg.OpenPullRequest(ctx, forge.PullRequestInput{Branch: branch, Base: base, Title: pullRequestTitle(it.Ref, it.Title), Body: pullRequestBody(it.Ref, "")})
 			if err != nil {
@@ -112,6 +129,7 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 	}
 	if open && slices.Contains(behind, branch) {
 		updated, conflicts, err := p.updateReviewBranch(ctx, it, branch, base)
+		pushed = pushed || updated
 		switch {
 		case err != nil:
 			log.Warn("branch not updated", "err", err)
@@ -129,6 +147,17 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 		}
 	}
 	fact.PullRequest = pullRequestState[state]
+	// Not while a check still runs, so one fact holds every failure; not
+	// with conflicts; and not after this pass pushed, as the failure is
+	// then the old head's.
+	if state == forge.MergeFailed && !pull.Running && len(fact.Conflicts) == 0 && !pushed {
+		c, ok := p.reviewChecks[it.Ref]
+		if !ok || c.head != pull.Head {
+			c = headChecks{pull.Head, failedChecks(ctx, fg, log, pull.Failed)}
+			p.reviewChecks[it.Ref] = c
+		}
+		fact.Checks = c.checks
+	}
 	return fact, true
 }
 

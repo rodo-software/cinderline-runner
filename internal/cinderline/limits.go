@@ -2,7 +2,10 @@ package cinderline
 
 import (
 	"regexp"
+	"strings"
 	"unicode/utf8"
+
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 )
 
 // The app's limits on what the runner sends (app/Rules/RunnerRules.php in
@@ -36,7 +39,11 @@ const (
 	maxSecrets       = 50    // last.secrets
 	maxRefusedHosts  = 20    // last.refused_hosts
 	maxHostPort      = 260   // one refused host:port; a longer one is left out
+	maxCheckName     = 255   // a failed check's name
 )
+
+// MaxChecks is the most failed checks of a review fact or a step.
+const MaxChecks = 20
 
 // modelID is a model id the app accepts in a typed model
 // (AgentClient::TYPED_MODEL); any other id is left out.
@@ -87,6 +94,29 @@ func clipAll(s []string, n, chars int) []string {
 	out := make([]string, 0, min(len(s), n))
 	for _, v := range first(s, n) {
 		out = append(out, clip(v, chars))
+	}
+	return out
+}
+
+// checks is the first MaxChecks checks with a name, each text redacted and
+// cut to its limit, a log to its end; nil stays nil. One without a name
+// is left out: the app refuses it.
+func checks(cs []FailedCheck) []FailedCheck {
+	if cs == nil {
+		return nil
+	}
+	out := make([]FailedCheck, 0, min(len(cs), MaxChecks))
+	for _, c := range cs {
+		if len(out) == MaxChecks {
+			break
+		}
+		if c.Name = clip(redact.String(c.Name), maxCheckName); strings.TrimSpace(c.Name) == "" {
+			continue
+		}
+		c.Description = clip(redact.String(c.Description), maxText)
+		c.URL = clip(redact.String(c.URL), maxURL)
+		c.Log = clipTail(redact.String(c.Log), maxTail)
+		out = append(out, c)
 	}
 	return out
 }

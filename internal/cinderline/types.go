@@ -71,6 +71,18 @@ type ReviewFact struct {
 	Ref         string   `json:"ref"`
 	PullRequest string   `json:"pull_request"`
 	Conflicts   []string `json:"conflicts"`
+	// Checks are, with failed, the CI checks that failed on the head.
+	Checks []FailedCheck `json:"checks,omitempty"`
+}
+
+// FailedCheck is a CI check that failed on a pull request's head. Its
+// texts are the forge's and the CI's, untrusted; Log is the end of its log,
+// "" when the runner could not read one.
+type FailedCheck struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Log         string `json:"log,omitempty"`
 }
 
 // PollAnswer is the app's answer to a poll.
@@ -222,6 +234,8 @@ type LastStep struct {
 	PullRequest *string  `json:"pull_request"` // its URL
 	Merge       *string  `json:"merge"`        // merged, closed, pending or failed; nil when not asked
 	Commit      *string  `json:"commit"`
+	// Checks are, with merge failed because of CI, the checks that failed.
+	Checks []FailedCheck `json:"checks,omitempty"`
 
 	// What the push scan found, at publish and stop: a known one comes with
 	// the outcome secret, nothing pushed; the others are warnings.

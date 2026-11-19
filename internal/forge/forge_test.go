@@ -50,3 +50,28 @@ func TestReadRetries(t *testing.T) {
 		t.Errorf("DefaultBranch = %v, want the 404 at once", err)
 	}
 }
+
+// CLR-201: a check's log is read from its end with a Range request; a
+// server that ignores the range sends it whole and only its end is kept,
+// without a character the cut split. An error answer is an error.
+func TestLogTail(t *testing.T) {
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git", reply{206, "the end"})
+	if s, err := logTail(context.Background(), g.HTTP, "GitHub", "https://api.github.com/x", map[string]string{"Authorization": "Bearer t"}); s != "the end" || err != nil {
+		t.Errorf("logTail = %q, %v", s, err)
+	}
+	if h := (*reqs)[0].header; h.Get("Range") != "bytes=-16384" || h.Get("Authorization") != "Bearer t" || h.Get("Accept") != "text/plain, */*" {
+		t.Errorf("header = %v", h)
+	}
+
+	whole := "é" + strings.Repeat("x", 3*logBytes-2) + "€" + strings.Repeat("y", logBytes-4) + "END" // € cut in two
+	g, _ = recorded(t, "https://github.com/willem/cinderline.git", reply{200, whole})
+	s, err := logTail(context.Background(), g.HTTP, "GitHub", "https://api.github.com/x", nil)
+	if err != nil || !strings.HasSuffix(s, "END") || len(s) > logBytes || strings.ContainsAny(s, "�x") {
+		t.Errorf("logTail of a whole log = %d bytes ending %q, %v", len(s), s[max(0, len(s)-5):], err)
+	}
+
+	g, _ = recorded(t, "https://github.com/willem/cinderline.git", reply{404, "Not Found"})
+	if _, err := logTail(context.Background(), g.HTTP, "GitHub", "https://api.github.com/x", nil); status(err) != 404 || !strings.Contains(err.Error(), "404: Not Found") {
+		t.Errorf("logTail on a 404 = %v", err)
+	}
+}

@@ -395,3 +395,58 @@ func TestRequestsFitTheAppsLimits(t *testing.T) {
 		t.Error("the caller's texts were changed")
 	}
 }
+
+// CLR-201: the failed checks of a publish report and of a Review fact are
+// cut to the app's limits, the first 20 with a name, each text redacted, a
+// log keeping its end; none leaves the key out.
+func TestFailedChecksFitAndAreRedacted(t *testing.T) {
+	redact.Add("test secret", "secret-value-1234567890")
+	s := &server{status: []int{200, 200, 200}, body: `{"state":"x","step":{"kind":"done"}}`}
+	c := s.client(t)
+	cs := []FailedCheck{{Name: " "}, {
+		Name:        strings.Repeat("n", 300),
+		Description: "token secret-value-1234567890 " + strings.Repeat("d", 1100),
+		URL:         "https://ci.example/" + strings.Repeat("u", 2100),
+		Log:         "secret-value-1234567890 " + strings.Repeat("é", 5000) + " secret-value-1234567890 END",
+	}}
+	for i := range 25 {
+		cs = append(cs, FailedCheck{Name: fmt.Sprintf("check %d", i)})
+	}
+	want := func(got []FailedCheck) {
+		t.Helper()
+		if len(got) != MaxChecks || got[1].Name != "check 0" || got[19].Name != "check 18" {
+			t.Fatalf("sent %d checks, first %+v", len(got), got[:min(2, len(got))])
+		}
+		g := got[0]
+		if utf8.RuneCountInString(g.Name) != maxCheckName || utf8.RuneCountInString(g.Description) != maxText || !strings.HasPrefix(g.Description, "token [redacted test secret] ") ||
+			utf8.RuneCountInString(g.URL) != maxURL || utf8.RuneCountInString(g.Log) != maxTail || !strings.HasSuffix(g.Log, " [redacted test secret] END") {
+			t.Errorf("sent name %d, description %d %.40q, url %d, log %d ending %q", utf8.RuneCountInString(g.Name), utf8.RuneCountInString(g.Description), g.Description,
+				utf8.RuneCountInString(g.URL), utf8.RuneCountInString(g.Log), g.Log[len(g.Log)-40:])
+		}
+	}
+
+	failed := "failed"
+	if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Last: &LastStep{Step: "publish", Outcome: "published", Merge: &failed, Checks: cs}}); err != nil {
+		t.Fatal(err)
+	}
+	var next NextRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &next)
+	want(next.Last.Checks)
+
+	if _, err := c.Poll(context.Background(), PollRequest{Review: []ReviewFact{{Ref: "CSR-1", PullRequest: "failed", Conflicts: []string{}, Checks: cs}}}); err != nil {
+		t.Fatal(err)
+	}
+	var poll PollRequest
+	_ = json.Unmarshal([]byte(s.bodies[1]), &poll)
+	want(poll.Review[0].Checks)
+	if strings.Contains(s.bodies[0]+s.bodies[1], "secret-value") || cs[1].Log[:6] != "secret" {
+		t.Error("a secret was sent, or the caller's text was changed")
+	}
+
+	if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Last: &LastStep{Step: "publish", Outcome: "published"}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(s.bodies[2], "checks") {
+		t.Errorf("sent %s, want no checks", s.bodies[2])
+	}
+}

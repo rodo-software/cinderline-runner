@@ -328,8 +328,8 @@ func TestGitHubMergeState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g, reqs := recorded(t, "https://github.com/willem/cinderline.git", tt.replies...)
 			s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
-			if s != tt.want || err != nil {
-				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
+			if s.State != tt.want || err != nil {
+				t.Errorf("MergeState = %q, %v; want %q", s.State, err, tt.want)
 			}
 			wantURLs(t, *reqs, tt.urls...)
 			if (*reqs)[0].header.Get("Authorization") != "Bearer "+testToken {
@@ -359,8 +359,78 @@ func TestGitHubMergeStateAfterBranchDeletion(t *testing.T) {
 	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{200, `[{"number":53,"head":{"ref":"cinderline/EMBER-1","sha":"abc"},"merged_at":"2026-11-07T09:47:00Z","state":"closed"}]`})
 	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
-	if s != MergeMerged || err != nil {
-		t.Errorf("MergeState = %q, %v; want merged", s, err)
+	if s.State != MergeMerged || err != nil {
+		t.Errorf("MergeState = %q, %v; want merged", s.State, err)
 	}
 	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/cinderline/pulls?state=all&head=willem%3Acinderline%2FEMBER-1")
+}
+
+// CLR-201: the failed checks are the check runs that failed, timed out or
+// were cancelled, described by their output's title, else its summary; one
+// not completed is running. Only a GitHub Actions run has a log.
+func TestGitHubFailedChecks(t *testing.T) {
+	g, _ := recorded(t, "https://github.com/willem/cinderline.git",
+		reply{200, `[{"head":{"sha":"abc"},"state":"open"}]`},
+		reply{200, `{"check_runs":[` +
+			`{"id":11,"name":"test","status":"completed","conclusion":"failure","html_url":"https://github.com/willem/cinderline/actions/runs/1/job/11","output":{"title":"Process completed with exit code 1.","summary":"s"},"app":{"slug":"github-actions"}},` +
+			`{"id":12,"name":"lint","status":"completed","conclusion":"timed_out","html_url":"h12","output":{"title":null,"summary":"Timed out"},"app":{"slug":"github-actions"}},` +
+			`{"id":13,"name":"coverage","status":"completed","conclusion":"cancelled","html_url":"h13","output":{},"app":{"slug":"codecov"}},` +
+			`{"id":14,"name":"race","status":"in_progress","conclusion":null,"app":{"slug":"github-actions"}},` +
+			`{"id":15,"name":"vet","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}]}`})
+	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
+	want := PullState{State: MergeFailed, Head: "abc", Running: true, Failed: []Check{
+		{Name: "test", Description: "Process completed with exit code 1.", URL: "https://github.com/willem/cinderline/actions/runs/1/job/11", job: "11"},
+		{Name: "lint", Description: "Timed out", URL: "h12", job: "12"},
+		{Name: "coverage", URL: "h13"},
+	}}
+	if err != nil || !reflect.DeepEqual(s, want) {
+		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
+	}
+
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git", reply{200, "##[error]exit 1"})
+	if log, err := g.CheckLog(context.Background(), want.Failed[0]); log != "##[error]exit 1" || err != nil {
+		t.Errorf("CheckLog = %q, %v", log, err)
+	}
+	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/cinderline/actions/jobs/11/logs")
+	if h := (*reqs)[0].header; h.Get("Authorization") != "Bearer "+testToken || h.Get("Range") == "" {
+		t.Errorf("log request header = %v", h)
+	}
+
+	g, _ = recorded(t, "https://github.com/willem/cinderline.git", reply{403, `{"message":"Resource not accessible by personal access token"}`})
+	if _, err := g.CheckLog(context.Background(), want.Failed[0]); status(err) != 403 || strings.Contains(err.Error(), testToken) {
+		t.Errorf("CheckLog without Actions: read = %v, want the 403", err)
+	}
+
+	g, reqs = recorded(t, "https://github.com/willem/cinderline.git")
+	if log, err := g.CheckLog(context.Background(), want.Failed[2]); log != "" || err != nil || len(*reqs) != 0 {
+		t.Errorf("CheckLog of another app's check = %q, %v after %d requests", log, err, len(*reqs))
+	}
+}
+
+// CLR-201: GitHub answers the log request with a redirect to the text on
+// another host, which gets the request's range but never the token.
+func TestGitHubCheckLogFollowsTheRedirectWithoutTheToken(t *testing.T) {
+	var blob http.Header
+	g, err := NewGitHub("https://github.com/willem/cinderline.git", testToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.HTTP = &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+		w := httptest.NewRecorder()
+		if r.URL.Host == "api.github.com" {
+			w.Header().Set("Location", "https://results.blob.example.net/logs/11.txt?sig=x")
+			w.WriteHeader(http.StatusFound)
+			return w.Result(), nil
+		}
+		blob = r.Header
+		w.WriteHeader(http.StatusPartialContent)
+		io.WriteString(w, "tail of the log")
+		return w.Result(), nil
+	})}
+	if log, err := g.CheckLog(context.Background(), Check{job: "11"}); log != "tail of the log" || err != nil {
+		t.Errorf("CheckLog = %q, %v", log, err)
+	}
+	if blob.Get("Authorization") != "" || blob.Get("Range") == "" {
+		t.Errorf("redirected request header = %v; want a range and no token", blob)
+	}
 }

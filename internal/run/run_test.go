@@ -117,6 +117,29 @@ func TestStepFacts(t *testing.T) {
 			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
 			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
 		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"), Conflicts: []string{"a.go"}}},
+		// CLR-201: a failure on an earlier push's head does not end the wait;
+		// one on the pushed head ends it once no check runs, with every
+		// failed check, a log that cannot be read left out.
+		{"publish CI failed", `{"kind":"publish","merge":true}`, func(f *fixture) {
+			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+			f.fg.Merges = []error{nil}
+			test, lint := forge.Check{Name: "test", Description: "exit 1", URL: "t"}, forge.Check{Name: "lint"}
+			f.fg.MergeStates = []forge.MergeStateReply{
+				{State: forge.MergeFailed, Head: "old", Failed: []forge.Check{test}},
+				{State: forge.MergeFailed, Head: "abc123", Running: true, Failed: []forge.Check{test}},
+				{State: forge.MergeFailed, Head: "abc123", Failed: []forge.Check{test, lint}},
+			}
+			f.fg.CheckLogs = []forge.CheckLogReply{{Log: "--- FAIL: TestX"}, {Err: errors.New("403")}}
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"),
+			Checks: []cinderline.FailedCheck{{Name: "test", Description: "exit 1", URL: "t", Log: "--- FAIL: TestX"}, {Name: "lint"}}}},
+		// CLR-201: a merge the forge refused has no checks.
+		{"publish merge refused", `{"kind":"publish","merge":true}`, func(f *fixture) {
+			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+			f.fg.Merges = []error{errors.New("405 not allowed")}
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"),
+			Error: ptr("asking the forge to merge u failed: 405 not allowed")}},
 		{"publish failed", `{"kind":"publish"}`, func(f *fixture) {
 			f.ws.Ancestors = fill(5, workspace.IsAncestorReply{})
 			f.ws.Pushes = fill(5, errors.New("denied"))
@@ -177,7 +200,7 @@ func show(l cinderline.LastStep) string {
 	for _, f := range l.Secrets {
 		found = append(found, fmt.Sprint(f.Kind, "@", f.Commit, ":", s(f.Path), "/", f.Known))
 	}
-	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ","), strings.Join(found, ",")}, "|")
+	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ","), strings.Join(found, ","), fmt.Sprintf("%+v", l.Checks)}, "|")
 }
 
 // A step the runner cannot do, and a failure in its own code, end the run
@@ -586,7 +609,7 @@ type stopWhileWaiting struct {
 	stop func()
 }
 
-func (s stopWhileWaiting) MergeState(ctx context.Context, branch string) (forge.MergeState, error) {
+func (s stopWhileWaiting) MergeState(ctx context.Context, branch string) (forge.PullState, error) {
 	s.stop()
 	return s.Fake.MergeState(ctx, branch)
 }
@@ -610,6 +633,38 @@ func TestAStopWhileWaitingForTheMergeReportsItPending(t *testing.T) {
 	want := cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Commit: ptr("abc123"), Merge: ptr("pending")}
 	if lasts := app.lasts(); len(lasts) != 1 || !sameLast(lasts[0], want) {
 		t.Errorf("lasts = %+v", lasts)
+	}
+}
+
+// CLR-201: at the wait's limit a failure on the pushed head is reported
+// with the checks that failed so far, even while another still runs; a
+// failure on another head is the pending merge of the pushed one.
+func TestTheMergeWaitEndsAtItsLimit(t *testing.T) {
+	polls := int(mergeLimit/mergeEvery) + 1
+	for _, tc := range []struct {
+		head, merge string
+		checks      []cinderline.FailedCheck
+	}{
+		{"abc123", "failed", []cinderline.FailedCheck{{Name: "test", Log: "FAIL"}}},
+		{"old", "pending", nil},
+	} {
+		f := newFixture(t)
+		f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
+		f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
+		f.fg.Merges = []error{nil}
+		f.fg.MergeStates = fill(polls, forge.MergeStateReply{State: forge.MergeFailed, Head: tc.head, Running: true, Failed: []forge.Check{{Name: "test"}}})
+		f.fg.CheckLogs = []forge.CheckLogReply{{Log: "FAIL"}}
+		app := &fakeApp{onNext: stepsOf(`{"kind":"publish","merge":true}`)}
+		if _, err := f.run(t, app); err != nil {
+			t.Fatal(err)
+		}
+		want := cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Commit: ptr("abc123"), Merge: ptr(tc.merge), Checks: tc.checks}
+		if lasts := app.lasts(); len(lasts) != 1 || !sameLast(lasts[0], want) {
+			t.Errorf("head %s: lasts = %+v", tc.head, lasts)
+		}
+		if len(f.fg.MergeStates) != 0 {
+			t.Errorf("head %s: %d polls left; want the wait to its limit", tc.head, len(f.fg.MergeStates))
+		}
 	}
 }
 

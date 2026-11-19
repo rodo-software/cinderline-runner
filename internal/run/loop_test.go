@@ -278,10 +278,10 @@ type blockingForge struct {
 	started, release chan struct{}
 }
 
-func (b blockingForge) MergeState(ctx context.Context, branch string) (forge.MergeState, error) {
+func (b blockingForge) MergeState(ctx context.Context, branch string) (forge.PullState, error) {
 	close(b.started)
 	<-b.release
-	return "", nil
+	return forge.PullState{}, nil
 }
 
 // While an upkeep pass runs the runner is not idle, so no job starts on the

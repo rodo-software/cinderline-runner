@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,34 +110,48 @@ func (b *Bitbucket) RequestMerge(context.Context, PullRequest) error {
 	return errors.New("Bitbucket cannot merge a pull request when its checks pass; merge it yourself")
 }
 
-func (b *Bitbucket) MergeState(ctx context.Context, branch string) (MergeState, error) {
+func (b *Bitbucket) MergeState(ctx context.Context, branch string) (PullState, error) {
 	pr, err := b.find(ctx, "?q="+sourceBranch(branch)+"&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&sort=-created_on", branch)
+	head := pr.Source.Commit.Hash // short: Bitbucket names the first 12 characters
 	switch {
 	case err != nil:
-		return "", err
+		return PullState{}, err
 	case pr.Source.Branch.Name == "": // none found
-		return "", nil
+		return PullState{}, nil
 	case pr.State == "MERGED":
-		return MergeMerged, nil
+		return PullState{State: MergeMerged, Head: head}, nil
 	case pr.State == "DECLINED" || pr.State == "SUPERSEDED":
-		return MergeClosed, nil
+		return PullState{State: MergeClosed, Head: head}, nil
 	}
 	var statuses struct {
 		Values []struct {
-			State string `json:"state"` // SUCCESSFUL, FAILED, INPROGRESS or STOPPED
+			State       string `json:"state"` // SUCCESSFUL, FAILED, INPROGRESS or STOPPED
+			Key         string `json:"key"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			URL         string `json:"url"`
 		} `json:"values"`
 	}
 	// shortcut: the first page (10) of build statuses only; page if a head commit gets more builds.
-	if err := b.do(ctx, http.MethodGet, b.repo+"/commit/"+url.PathEscape(pr.Source.Commit.Hash)+"/statuses", nil, &statuses); err != nil {
-		return "", err
+	if err := b.do(ctx, http.MethodGet, b.repo+"/commit/"+url.PathEscape(head)+"/statuses", nil, &statuses); err != nil {
+		return PullState{}, err
 	}
-	for _, s := range statuses.Values {
-		if s.State == "FAILED" || s.State == "STOPPED" {
-			return MergeFailed, nil
+	s := PullState{State: MergePending, Head: head}
+	for _, st := range statuses.Values {
+		switch st.State {
+		case "INPROGRESS":
+			s.Running = true
+		case "FAILED", "STOPPED":
+			s.State = MergeFailed
+			s.Failed = append(s.Failed, Check{Name: cmp.Or(st.Name, st.Key), Description: st.Description, URL: st.URL})
 		}
 	}
-	return MergePending, nil
+	return s, nil
 }
+
+// CheckLog reads no log: Bitbucket Pipelines' step logs are not read
+// (CLR-201 made them optional), and other CI has none on Bitbucket.
+func (b *Bitbucket) CheckLog(context.Context, Check) (string, error) { return "", nil }
 
 // sourceBranch is the escaped query that filters pull requests by source branch.
 func sourceBranch(branch string) string {

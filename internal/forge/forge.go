@@ -32,9 +32,12 @@ type Forge interface {
 	FindPullRequest(ctx context.Context, branch string) (pr PullRequest, found bool, err error)
 	RequestMerge(ctx context.Context, pr PullRequest) error
 	// MergeState is where the newest pull request of branch stands, in any
-	// state; "" when the branch has none. By branch: the runner keeps no
-	// pull request numbers (0091).
-	MergeState(ctx context.Context, branch string) (MergeState, error)
+	// state; State "" when the branch has none. By branch: the runner keeps
+	// no pull request numbers (0091).
+	MergeState(ctx context.Context, branch string) (PullState, error)
+	// CheckLog is the end of the log of a check MergeState named, at most
+	// logBytes; "" and no error when the forge has no log of it the runner can read.
+	CheckLog(ctx context.Context, c Check) (string, error)
 }
 
 // PullRequestInput is what a new pull request is opened with.
@@ -60,6 +63,29 @@ const (
 	MergeClosed  MergeState = "closed" // closed without merging
 	MergeFailed  MergeState = "failed" // open, with failed checks on its head
 )
+
+// PullState is where the newest pull request of a branch stands.
+type PullState struct {
+	State MergeState
+	Head  string // its head commit; Bitbucket names it by a short hash
+	// With MergeFailed: Running says a check of the head has not finished,
+	// and Failed are the head's failed checks, without their logs.
+	Running bool
+	Failed  []Check
+}
+
+// Check is a CI check that failed on a pull request's head. Its texts are
+// the forge's, untrusted.
+type Check struct {
+	Name, Description, URL string
+
+	job  string // the forge's ID of the job whose log CheckLog reads; "": none
+	head string // the head commit, for Forgejo, which finds the job by it
+}
+
+// logBytes is how much of the end of a check's log CheckLog reads: enough
+// for the 4,000 characters the app takes, in any UTF-8.
+const logBytes = 16 << 10
 
 // New returns the Forge of repository on a forge of kind, as a project names
 // it; "" tells the kind from the repository's host, Forgejo for a host of
@@ -187,6 +213,54 @@ func do(ctx context.Context, hc *http.Client, forge, method, u string, header ma
 	}
 	return nil
 }
+
+// logTail is the last logBytes of the plain-text log at u. It asks for
+// only those with a Range request; a server that ignores it sends the whole
+// log, which is read to its end and only its end kept. header is the
+// forge's authentication, and its Accept when plain text is not right.
+func logTail(ctx context.Context, hc *http.Client, forge, u string, header map[string]string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "text/plain, */*")
+	for k, v := range header {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("User-Agent", name.Name+"-runner")
+	req.Header.Set("Range", fmt.Sprintf("bytes=-%d", logBytes))
+	resp, err := send(hc, req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		return "", &apiError{forge, http.MethodGet, u, resp.StatusCode, textStart(string(data))}
+	}
+	t := &tail{n: logBytes}
+	if _, err := io.Copy(t, resp.Body); err != nil {
+		return "", err
+	}
+	// The cut can split a character.
+	return strings.ToValidUTF8(string(t.end()), ""), nil
+}
+
+// tail is a writer that keeps the last n bytes written to it.
+type tail struct {
+	b []byte
+	n int
+}
+
+func (t *tail) Write(p []byte) (int, error) {
+	t.b = append(t.b, p...)
+	if len(t.b) > 2*t.n {
+		t.b = append(t.b[:0], t.b[len(t.b)-t.n:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tail) end() []byte { return t.b[max(0, len(t.b)-t.n):] }
 
 // textStart is the start of an error answer's text, for when it names no message.
 func textStart(s string) string {

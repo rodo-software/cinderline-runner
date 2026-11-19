@@ -110,34 +110,66 @@ func (g *GitLab) RequestMerge(ctx context.Context, pr PullRequest) error {
 	}, &r)
 }
 
-func (g *GitLab) MergeState(ctx context.Context, branch string) (MergeState, error) {
+func (g *GitLab) MergeState(ctx context.Context, branch string) (PullState, error) {
 	var mrs []gitlabMR
 	if err := g.do(ctx, http.MethodGet, g.project+"/merge_requests?source_branch="+url.QueryEscape(branch)+"&state=all", nil, &mrs); err != nil {
-		return "", err
+		return PullState{}, err
 	}
 	if len(mrs) == 0 {
-		return "", nil
+		return PullState{}, nil
 	}
 	mr := mrs[0] // the newest: GitLab lists by creation, newest first
 	switch mr.State {
 	case "merged":
-		return MergeMerged, nil
+		return PullState{State: MergeMerged}, nil
 	case "closed":
-		return MergeClosed, nil
+		return PullState{State: MergeClosed}, nil
 	}
 	// The list leaves out head_pipeline; only the single merge request carries it.
 	var one struct {
+		SHA          string `json:"sha"` // the head; a merged results pipeline runs on another commit
 		HeadPipeline *struct {
+			ID     int64  `json:"id"`
 			Status string `json:"status"`
 		} `json:"head_pipeline"`
 	}
 	if err := g.do(ctx, http.MethodGet, g.project+"/merge_requests/"+strconv.Itoa(mr.IID), nil, &one); err != nil {
-		return "", err
+		return PullState{}, err
 	}
-	if p := one.HeadPipeline; p != nil && (p.Status == "failed" || p.Status == "canceled") {
-		return MergeFailed, nil
+	s := PullState{State: MergePending, Head: one.SHA}
+	p := one.HeadPipeline
+	if p == nil || (p.Status != "failed" && p.Status != "canceled") {
+		return s, nil
 	}
-	return MergePending, nil
+	// A failed or canceled pipeline has finished, so nothing is running.
+	// shortcut: this list is read on every pass of the Review upkeep while
+	// the pipeline stays failed, one request; the logs are read once per head.
+	s.State = MergeFailed
+	var jobs []struct {
+		ID            int64  `json:"id"`
+		Name          string `json:"name"`
+		FailureReason string `json:"failure_reason"`
+		WebURL        string `json:"web_url"`
+		AllowFailure  bool   `json:"allow_failure"`
+	}
+	// Canceled jobs too: a canceled pipeline counts as failed, as a cancelled check run does on GitHub.
+	if err := g.do(ctx, http.MethodGet, g.project+"/pipelines/"+strconv.FormatInt(p.ID, 10)+"/jobs?scope%5B%5D=failed&scope%5B%5D=canceled&per_page=100", nil, &jobs); err != nil {
+		return PullState{}, err
+	}
+	for _, j := range jobs {
+		if !j.AllowFailure { // an allowed failure does not fail the pipeline
+			s.Failed = append(s.Failed, Check{Name: j.Name, Description: j.FailureReason, URL: j.WebURL, job: strconv.FormatInt(j.ID, 10)})
+		}
+	}
+	return s, nil
+}
+
+// CheckLog reads the job's trace, which the token's api scope covers.
+func (g *GitLab) CheckLog(ctx context.Context, c Check) (string, error) {
+	if c.job == "" {
+		return "", nil
+	}
+	return logTail(ctx, g.HTTP, "GitLab", g.project+"/jobs/"+c.job+"/trace", map[string]string{"PRIVATE-TOKEN": g.token})
 }
 
 // do sends one API request with in as its JSON body, when not nil, and

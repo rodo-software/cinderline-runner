@@ -214,8 +214,8 @@ func TestBitbucketMergeState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			b, reqs := recordedBitbucket(t, tt.replies...)
 			s, err := b.MergeState(context.Background(), "cinderline/EMB-3")
-			if s != tt.want || err != nil {
-				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
+			if s.State != tt.want || err != nil {
+				t.Errorf("MergeState = %q, %v; want %q", s.State, err, tt.want)
 			}
 			wantURLs(t, *reqs, tt.urls...)
 		})
@@ -232,5 +232,26 @@ func TestBitbucketMergeStateError(t *testing.T) {
 	b, _ = recordedBitbucket(t, reply{200, `{"values":[` + bbPR + `]}`}, reply{502, `<html>Bad Gateway</html>`})
 	if _, err := b.MergeState(context.Background(), "cinderline/EMB-3"); err == nil || !strings.Contains(err.Error(), "502: <html>Bad Gateway</html>") {
 		t.Errorf("MergeState = %v, want the 502", err)
+	}
+}
+
+// CLR-201: the failed checks are the head's FAILED and STOPPED build
+// statuses, named by their name, else their key; one in progress is
+// running. Bitbucket has no log the runner reads.
+func TestBitbucketFailedChecks(t *testing.T) {
+	b, _ := recordedBitbucket(t, reply{200, `{"values":[` + bbPR + `]}`},
+		reply{200, `{"values":[{"state":"FAILED","key":"k1","name":"Pipeline #12 for cinderline/EMB-3","description":"1 of 2 steps failed","url":"https://bitbucket.org/ws/repo/pipelines/results/12"},` +
+			`{"state":"STOPPED","key":"jenkins","name":"","description":"","url":"https://ci.example.com/1"},` +
+			`{"state":"INPROGRESS","key":"k3","name":"lint"}]}`})
+	s, err := b.MergeState(context.Background(), "cinderline/EMB-3")
+	want := PullState{State: MergeFailed, Head: "abc123", Running: true, Failed: []Check{
+		{Name: "Pipeline #12 for cinderline/EMB-3", Description: "1 of 2 steps failed", URL: "https://bitbucket.org/ws/repo/pipelines/results/12"},
+		{Name: "jenkins", URL: "https://ci.example.com/1"},
+	}}
+	if err != nil || !reflect.DeepEqual(s, want) {
+		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
+	}
+	if log, err := b.CheckLog(context.Background(), want.Failed[0]); log != "" || err != nil {
+		t.Errorf("CheckLog = %q, %v", log, err)
 	}
 }

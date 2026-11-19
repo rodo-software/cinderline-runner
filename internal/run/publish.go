@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -104,7 +105,7 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 		return last, nil
 	}
 	log.Info("waiting for the merge", "pull_request", pr.URL)
-	state, err := p.awaitMerge(sctx, j.fg, j.branch)
+	state, err := p.awaitMerge(sctx, j.fg, j.branch, deref(last.Commit))
 	if stopped(sctx) {
 		log.Info("stopped during the publish, merge not waited for", "pull_request", pr.URL)
 		last.Merge = ptr(string(forge.MergePending))
@@ -113,7 +114,11 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 	if err != nil {
 		return nil, err
 	}
-	last.Merge = ptr(string(state))
+	last.Merge = ptr(string(state.State))
+	if state.State == forge.MergeFailed {
+		log.Info("CI failed", "pull_request", pr.URL, "checks", len(state.Failed))
+		last.Checks = failedChecks(sctx, j.fg, log, state.Failed)
+	}
 	return last, nil
 }
 
@@ -136,29 +141,56 @@ func (p *Project) attempt(ctx context.Context, j *job, title string) (conflicts 
 }
 
 // awaitMerge polls the branch's pull request every mergeEvery until it is
-// merged or closed, or mergeLimit has passed: then it is pending, or failed
-// when its checks failed. A failed poll is logged and tried again.
-func (p *Project) awaitMerge(ctx context.Context, fg forge.Forge, branch string) (forge.MergeState, error) {
+// merged or closed, or its CI failed on head, the commit the run pushed
+// ("": unknown, any head), and no other check of it still runs, so one
+// report holds every failure; a failure on another head is an earlier
+// push's (CLR-201). At mergeLimit it is failed when CI failed on head, else
+// pending. A failed poll is logged and tried again.
+func (p *Project) awaitMerge(ctx context.Context, fg forge.Forge, branch, head string) (forge.PullState, error) {
 	for waited := time.Duration(0); ; waited += mergeEvery {
 		state, err := fg.MergeState(ctx, branch)
+		failed := err == nil && state.State == forge.MergeFailed && sameCommit(state.Head, head)
 		switch {
 		case ctx.Err() != nil:
-			return "", ctx.Err()
+			return forge.PullState{}, ctx.Err()
 		case err != nil:
 			p.Log.Warn("merge not checked, trying again", "project", p.Config.Key, "branch", branch, "err", err)
-		case state == forge.MergeMerged || state == forge.MergeClosed:
+		case state.State == forge.MergeMerged || state.State == forge.MergeClosed:
+			return state, nil
+		case failed && !state.Running:
 			return state, nil
 		}
 		if waited >= mergeLimit {
-			if state == forge.MergeFailed {
+			if failed {
 				return state, nil
 			}
-			return forge.MergePending, nil
+			return forge.PullState{State: forge.MergePending}, nil
 		}
 		if err := sleep(ctx, mergeEvery); err != nil {
-			return "", err
+			return forge.PullState{}, err
 		}
 	}
+}
+
+// sameCommit says whether the forge's head is the commit pushed; pushed ""
+// is unknown and taken as any head. Bitbucket names a head by a short hash.
+func sameCommit(head, pushed string) bool {
+	return pushed == "" || (head != "" && strings.HasPrefix(pushed, head))
+}
+
+// failedChecks is the forge's failed checks as the app takes them, the
+// first cinderline.MaxChecks, each with the end of its log. A log that
+// cannot be read is left out and logged, never failing the step (CLR-201).
+func failedChecks(ctx context.Context, fg forge.Forge, log *slog.Logger, failed []forge.Check) []cinderline.FailedCheck {
+	out := []cinderline.FailedCheck{}
+	for _, c := range failed[:min(len(failed), cinderline.MaxChecks)] {
+		text, err := fg.CheckLog(ctx, c)
+		if err != nil && ctx.Err() == nil {
+			log.Warn("CI log not read, the check is sent without it", "check", c.Name, "err", err)
+		}
+		out = append(out, cinderline.FailedCheck{Name: c.Name, Description: c.Description, URL: c.URL, Log: text})
+	}
+	return out
 }
 
 // head is the clone's commit; nil when unknown.

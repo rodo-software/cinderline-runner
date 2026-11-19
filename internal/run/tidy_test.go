@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"slices"
 	"testing"
@@ -187,5 +188,53 @@ func TestUpkeepKeepsUnpushedWork(t *testing.T) {
 	}
 	if slices.Contains(methods(f.ws), "Prepare") {
 		t.Errorf("workspace calls %v; want no fresh clone", methods(f.ws))
+	}
+}
+
+// CLR-201: a Review issue whose pull request failed CI carries the failed
+// checks with their logs once no check of the head runs; the logs are read
+// once per head, and again for a new head. While a check runs, after the
+// pass pushed the branch or with conflicts, failed carries no checks.
+func TestUpkeepSendsTheFailedChecks(t *testing.T) {
+	f := newFixture(t)
+	f.ws.Behinds = fill(4, workspace.BehindReply{})
+	test := forge.Check{Name: "test", URL: "t"}
+	f.fg.MergeStates = []forge.MergeStateReply{
+		{State: forge.MergeFailed, Head: "h1", Running: true, Failed: []forge.Check{test}},
+		{State: forge.MergeFailed, Head: "h1", Failed: []forge.Check{test}},
+		{State: forge.MergeFailed, Head: "h1", Failed: []forge.Check{test}},
+		{State: forge.MergeFailed, Head: "h2", Failed: []forge.Check{test}},
+	}
+	f.fg.CheckLogs = []forge.CheckLogReply{{Log: "FAIL 1"}, {Log: "FAIL 2"}}
+	items := []cinderline.ReviewItem{{Ref: "CSR-7", Title: "Seven"}}
+	var got []string
+	for range 4 {
+		facts := f.p.upkeep(context.Background(), proj, items)
+		if len(facts) != 1 || facts[0].PullRequest != "failed" {
+			t.Fatalf("facts = %+v", facts)
+		}
+		got = append(got, fmt.Sprintf("%+v", facts[0].Checks))
+	}
+	want := []string{"[]", "[{Name:test Description: URL:t Log:FAIL 1}]", "[{Name:test Description: URL:t Log:FAIL 1}]", "[{Name:test Description: URL:t Log:FAIL 2}]"}
+	if !slices.Equal(got, want) {
+		t.Errorf("checks by pass = %q\nwant %q", got, want)
+	}
+
+	// A branch the pass updates, or one that conflicts with the base.
+	for _, tc := range []struct {
+		name      string
+		conflicts []string
+	}{{"updated", nil}, {"conflicts", []string{"x.go"}}} {
+		f := newFixture(t)
+		f.ws.Behinds = []workspace.BehindReply{{Branches: []string{"cinderline/CSR-7"}}}
+		f.ws.Prepares = []workspace.PrepareReply{{Dir: "/runs/CSR-7"}}
+		f.ws.Ancestors = fill(2, workspace.IsAncestorReply{})
+		f.ws.MergeBases = []workspace.MergeBaseReply{{Conflicts: tc.conflicts}}
+		f.ws.Logs = []workspace.LogReply{{}}
+		f.fg.MergeStates = []forge.MergeStateReply{{State: forge.MergeFailed, Head: "h1", Failed: []forge.Check{test}}}
+		facts := f.p.upkeep(context.Background(), proj, items)
+		if len(facts) != 1 || facts[0].PullRequest != "failed" || facts[0].Checks != nil {
+			t.Errorf("%s: facts = %+v; want failed without checks", tc.name, facts)
+		}
 	}
 }

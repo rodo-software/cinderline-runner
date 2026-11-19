@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -138,36 +139,68 @@ func (g *GitHub) RequestMerge(ctx context.Context, pr PullRequest) error {
 	return nil
 }
 
-func (g *GitHub) MergeState(ctx context.Context, branch string) (MergeState, error) {
+func (g *GitHub) MergeState(ctx context.Context, branch string) (PullState, error) {
 	var prs []githubPull
 	if err := g.do(ctx, http.MethodGet, g.pulls("all", branch), nil, &prs); err != nil {
-		return "", err
+		return PullState{}, err
 	}
 	if len(prs) == 0 {
-		return "", nil
+		return PullState{}, nil
 	}
 	pr := prs[0] // the newest: GitHub lists by creation, newest first
 	switch {
 	case pr.MergedAt != "":
-		return MergeMerged, nil
+		return PullState{State: MergeMerged, Head: pr.Head.SHA}, nil
 	case pr.State == "closed":
-		return MergeClosed, nil
+		return PullState{State: MergeClosed, Head: pr.Head.SHA}, nil
 	}
 	// shortcut: the first 30 check runs only, GitHub's default page; page if a repository runs more on one commit.
 	var checks struct {
 		CheckRuns []struct {
+			ID         int64  `json:"id"`
+			Name       string `json:"name"`
+			Status     string `json:"status"` // queued, in_progress, completed, ...
 			Conclusion string `json:"conclusion"`
+			HTMLURL    string `json:"html_url"`
+			Output     struct {
+				Title   string `json:"title"`
+				Summary string `json:"summary"`
+			} `json:"output"`
+			App struct {
+				Slug string `json:"slug"`
+			} `json:"app"`
 		} `json:"check_runs"`
 	}
 	if err := g.do(ctx, http.MethodGet, g.repo+"/commits/"+url.PathEscape(pr.Head.SHA)+"/check-runs", nil, &checks); err != nil {
-		return "", err
+		return PullState{}, err
 	}
+	s := PullState{State: MergePending, Head: pr.Head.SHA}
 	for _, c := range checks.CheckRuns {
+		if c.Status != "completed" {
+			s.Running = true
+		}
 		if c.Conclusion == "failure" || c.Conclusion == "timed_out" || c.Conclusion == "cancelled" {
-			return MergeFailed, nil
+			s.State = MergeFailed
+			check := Check{Name: c.Name, Description: cmp.Or(c.Output.Title, c.Output.Summary), URL: c.HTMLURL}
+			if c.App.Slug == "github-actions" { // an Actions check run's ID is its job's
+				check.job = strconv.FormatInt(c.ID, 10)
+			}
+			s.Failed = append(s.Failed, check)
 		}
 	}
-	return MergePending, nil
+	return s, nil
+}
+
+// CheckLog reads the log of a GitHub Actions job. GitHub answers with a
+// redirect to the text elsewhere, which the client follows without the
+// token. It needs "Actions: read".
+func (g *GitHub) CheckLog(ctx context.Context, c Check) (string, error) {
+	if c.job == "" {
+		return "", nil
+	}
+	h := g.auth()
+	h["Accept"] = "application/vnd.github+json" // as GitHub's docs ask; the text it redirects to is plain
+	return logTail(ctx, g.HTTP, "GitHub", g.repo+"/actions/jobs/"+c.job+"/logs", h)
 }
 
 // pulls is the list of the branch's pull requests in state, by head
@@ -179,11 +212,14 @@ func (g *GitHub) pulls(state, branch string) string {
 // do sends one API request with in as its JSON body, when not nil, and
 // decodes a 2xx answer into out.
 func (g *GitHub) do(ctx context.Context, method, u string, in, out any) error {
-	return do(ctx, g.HTTP, "GitHub", method, u, map[string]string{
-		"Accept":               "application/vnd.github+json",
-		"Authorization":        "Bearer " + g.token,
-		"X-GitHub-Api-Version": "2022-11-28",
-	}, githubMessage, in, out)
+	h := g.auth()
+	h["Accept"] = "application/vnd.github+json"
+	return do(ctx, g.HTTP, "GitHub", method, u, h, githubMessage, in, out)
+}
+
+// auth is the headers that authenticate a request.
+func (g *GitHub) auth() map[string]string {
+	return map[string]string{"Authorization": "Bearer " + g.token, "X-GitHub-Api-Version": "2022-11-28"}
 }
 
 // githubMessage is the message of an error answer, GitHub's or Forgejo's: its JSON message, else

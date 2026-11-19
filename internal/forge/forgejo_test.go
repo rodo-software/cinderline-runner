@@ -247,8 +247,8 @@ func TestForgejoMergeState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", tt.replies...)
 			s, err := f.MergeState(context.Background(), "cinderline/EMBER-1")
-			if s != tt.want || err != nil {
-				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
+			if s.State != tt.want || err != nil {
+				t.Errorf("MergeState = %q, %v; want %q", s.State, err, tt.want)
 			}
 			wantURLs(t, *reqs, tt.urls...)
 			if got := (*reqs)[0].header.Get("Authorization"); got != "token "+testToken {
@@ -282,8 +282,8 @@ func TestForgejoMergeStateAfterBranchDeletion(t *testing.T) {
 		reply{200, `[{"number":54,"head":{"label":"cinderline/EMBER-116","ref":"cinderline/EMBER-116","sha":"y"},"state":"open"},` +
 			`{"number":53,"head":{"label":"cinderline/EMBER-115","ref":"refs/pull/53/head","sha":"x"},"merged":true,"state":"closed"}]`})
 	s, err := f.MergeState(context.Background(), "cinderline/EMBER-115")
-	if s != MergeMerged || err != nil {
-		t.Errorf("MergeState = %q, %v; want merged", s, err)
+	if s.State != MergeMerged || err != nil {
+		t.Errorf("MergeState = %q, %v; want merged", s.State, err)
 	}
 	wantURLs(t, *reqs, "GET "+pulls+"?state=all&sort=recentupdate&limit=50")
 }
@@ -315,8 +315,8 @@ func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", tt.replies...)
 			s, err := f.MergeState(context.Background(), "cinderline/EMBER-1")
-			if s != tt.want || err != nil {
-				t.Errorf("MergeState = %q, %v; want %q", s, err, tt.want)
+			if s.State != tt.want || err != nil {
+				t.Errorf("MergeState = %q, %v; want %q", s.State, err, tt.want)
 			}
 			wantURLs(t, *reqs, tt.urls...)
 		})
@@ -337,4 +337,76 @@ func TestForgejoFindPullRequestByLabel(t *testing.T) {
 		t.Errorf("FindPullRequest = %+v, %v, %v", pr, found, err)
 	}
 	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50", "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=2")
+}
+
+// CLR-201: the failed checks of the head are its commit statuses that
+// failed or erred, the newest of each context; a pending one is running.
+func TestForgejoFailedChecks(t *testing.T) {
+	f, _, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git",
+		reply{200, `[{"head":{"label":"cinderline/EMBER-1","ref":"cinderline/EMBER-1","sha":"abc"},"state":"open"}]`},
+		reply{200, `{"state":"failure","statuses":[` +
+			`{"status":"failure","context":"ci / test (push)","description":"Failing after 1m","target_url":"https://git.rodo.nl/willem/cinderline/actions/runs/7/jobs/1"},` +
+			`{"status":"error","context":"lint","description":"","target_url":""},` +
+			`{"status":"success","context":"ci / vet (push)"},{"status":"pending","context":"ci / race (push)"}]}`})
+	s, err := f.MergeState(context.Background(), "cinderline/EMBER-1")
+	want := PullState{State: MergeFailed, Head: "abc", Running: true, Failed: []Check{
+		{Name: "ci / test (push)", Description: "Failing after 1m", URL: "https://git.rodo.nl/willem/cinderline/actions/runs/7/jobs/1", head: "abc"},
+		{Name: "lint", head: "abc"},
+	}}
+	if err != nil || !reflect.DeepEqual(s, want) {
+		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
+	}
+}
+
+// CLR-201: the log of a failed status is the log of the Actions job it
+// links: the head's run whose page starts the link, then that run's job
+// with the linked page, else the job at the link's index. The shapes are
+// those of codeberg.org's API description (runs in workflow_runs, jobs a
+// bare list). A status no run links has none; Forgejo 15, as on
+// git.rodo.nl, lists runs but answers 404 for their jobs.
+func TestForgejoCheckLog(t *testing.T) {
+	const repo = "https://git.rodo.nl/api/v1/repos/willem/cinderline"
+	const runs = `{"workflow_runs":[{"id":40,"index_in_repo":6,"html_url":"https://git.rodo.nl/willem/cinderline/actions/runs/6"},` +
+		`{"id":41,"index_in_repo":7,"html_url":"https://git.rodo.nl/willem/cinderline/actions/runs/7"}],"total_count":2}`
+	check := Check{Name: "ci / test (push)", URL: "https://git.rodo.nl/willem/cinderline/actions/runs/7/jobs/1", head: "abc"}
+	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git",
+		reply{200, runs},
+		reply{200, `[{"id":91,"name":"vet","html_url":"https://git.rodo.nl/willem/cinderline/actions/runs/7/jobs/0"},{"id":92,"name":"test","html_url":"https://git.rodo.nl/willem/cinderline/actions/runs/7/jobs/1"}]`},
+		reply{206, "--- FAIL: TestX"})
+	if log, err := f.CheckLog(context.Background(), check); log != "--- FAIL: TestX" || err != nil {
+		t.Errorf("CheckLog = %q, %v", log, err)
+	}
+	wantURLs(t, *reqs, "GET "+repo+"/actions/runs?head_sha=abc", "GET "+repo+"/actions/runs/41/jobs", "GET "+repo+"/actions/jobs/92/logs")
+	if h := (*reqs)[2].header; h.Get("Authorization") != "token "+testToken || h.Get("Range") == "" {
+		t.Errorf("log request header = %v", h)
+	}
+
+	// Jobs whose pages are not the status's link: the one at its index.
+	f, reqs, _ = recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git",
+		reply{200, runs}, reply{200, `[{"id":91,"html_url":"https://git.rodo.nl/x/91"},{"id":92,"html_url":""}]`}, reply{200, "log"})
+	if log, err := f.CheckLog(context.Background(), check); log != "log" || err != nil {
+		t.Errorf("CheckLog by index = %q, %v", log, err)
+	}
+	wantURLs(t, *reqs, "GET "+repo+"/actions/runs?head_sha=abc", "GET "+repo+"/actions/runs/41/jobs", "GET "+repo+"/actions/jobs/92/logs")
+
+	f, _, _ = recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{200, runs}, reply{200, `[{"id":91,"html_url":"https://git.rodo.nl/x/91"}]`})
+	if log, err := f.CheckLog(context.Background(), check); log != "" || err != nil {
+		t.Errorf("CheckLog of a job the run does not have = %q, %v", log, err)
+	}
+
+	other := Check{Name: "woodpecker", URL: "https://ci.example.com/repos/1/pipeline/5", head: "abc"}
+	f, reqs, _ = recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{200, runs})
+	if log, err := f.CheckLog(context.Background(), other); log != "" || err != nil || len(*reqs) != 1 {
+		t.Errorf("CheckLog of another CI's status = %q, %v after %d requests", log, err, len(*reqs))
+	}
+
+	f, _, _ = recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{200, runs}, reply{404, `{"message":"The target couldn't be found."}`})
+	if _, err := f.CheckLog(context.Background(), check); status(err) != 404 {
+		t.Errorf("CheckLog on Forgejo 15 = %v, want the 404", err)
+	}
+
+	f, reqs, _ = recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git")
+	if log, err := f.CheckLog(context.Background(), Check{Name: "lint", head: "abc"}); log != "" || err != nil || len(*reqs) != 0 {
+		t.Errorf("CheckLog of a status without a URL = %q, %v after %d requests", log, err, len(*reqs))
+	}
 }

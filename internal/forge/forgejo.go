@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -106,28 +107,98 @@ func (f *Forgejo) RequestMerge(ctx context.Context, pr PullRequest) error {
 	}
 }
 
-func (f *Forgejo) MergeState(ctx context.Context, branch string) (MergeState, error) {
+func (f *Forgejo) MergeState(ctx context.Context, branch string) (PullState, error) {
 	pr, err := f.find(ctx, "?state=all&sort=recentupdate&limit="+strconv.Itoa(forgejoPageSize), branch)
 	switch {
 	case err != nil:
-		return "", err
+		return PullState{}, err
 	case pr.Head.Label == "": // none found
-		return "", nil
+		return PullState{}, nil
 	case pr.Merged:
-		return MergeMerged, nil
+		return PullState{State: MergeMerged, Head: pr.Head.SHA}, nil
 	case pr.State == "closed":
-		return MergeClosed, nil
+		return PullState{State: MergeClosed, Head: pr.Head.SHA}, nil
 	}
+	// The combined status lists the newest status of each context; the
+	// statuses endpoint lists every one ever set, so a context that failed
+	// and then passed would still look failed there.
 	var status struct {
-		State string `json:"state"`
+		State    string `json:"state"`
+		Statuses []struct {
+			Status      string `json:"status"` // pending, success, error, failure or warning
+			Context     string `json:"context"`
+			Description string `json:"description"`
+			TargetURL   string `json:"target_url"`
+		} `json:"statuses"`
 	}
 	if err := f.do(ctx, http.MethodGet, f.repo+"/commits/"+url.PathEscape(pr.Head.SHA)+"/status", nil, &status); err != nil {
+		return PullState{}, err
+	}
+	s := PullState{State: MergePending, Head: pr.Head.SHA}
+	for _, st := range status.Statuses {
+		switch st.Status {
+		case "pending":
+			s.Running = true
+		case "failure", "error":
+			s.Failed = append(s.Failed, Check{Name: st.Context, Description: st.Description, URL: st.TargetURL, head: pr.Head.SHA})
+		}
+	}
+	if len(s.Failed) > 0 || status.State == "failure" || status.State == "error" {
+		s.State = MergeFailed
+	}
+	return s, nil
+}
+
+// forgejoJob is the part of a Forgejo Actions job the runner reads.
+type forgejoJob struct {
+	ID      int64  `json:"id"`
+	HTMLURL string `json:"html_url"`
+}
+
+// CheckLog reads the log of the Forgejo Actions job a failed status links
+// to: among the head's runs, the one whose page starts the status's target
+// URL, <run page>/jobs/<n>; of its jobs, the one with that page, else the
+// n-th. Another CI's status links no run. An instance without the Actions
+// API answers 404, as Forgejo 15.0.11 does for the jobs.
+//
+// Checked against the API description of codeberg.org (Forgejo 17.0.0
+// development build) and of a Forgejo 15.0.11 on 2026-11-19, not a run:
+// whether a job's html_url is the status's target URL is not known, so the
+// n-th job is the fallback.
+func (f *Forgejo) CheckLog(ctx context.Context, c Check) (string, error) {
+	if c.head == "" || c.URL == "" {
+		return "", nil
+	}
+	var runs struct {
+		Runs []struct {
+			ID      int64  `json:"id"`
+			HTMLURL string `json:"html_url"`
+		} `json:"workflow_runs"`
+	}
+	if err := f.do(ctx, http.MethodGet, f.repo+"/actions/runs?head_sha="+url.QueryEscape(c.head), nil, &runs); err != nil {
 		return "", err
 	}
-	if status.State == "failure" || status.State == "error" {
-		return MergeFailed, nil
+	target := strings.TrimSuffix(c.URL, "/")
+	for _, run := range runs.Runs {
+		n, ok := strings.CutPrefix(target, strings.TrimSuffix(run.HTMLURL, "/")+"/jobs/")
+		index, err := strconv.Atoi(n)
+		if run.HTMLURL == "" || !ok || err != nil || index < 0 {
+			continue
+		}
+		var jobs []forgejoJob // a bare list, unlike the runs
+		if err := f.do(ctx, http.MethodGet, f.repo+"/actions/runs/"+strconv.FormatInt(run.ID, 10)+"/jobs", nil, &jobs); err != nil {
+			return "", err
+		}
+		i := slices.IndexFunc(jobs, func(j forgejoJob) bool { return strings.TrimSuffix(j.HTMLURL, "/") == target })
+		if i < 0 && index < len(jobs) {
+			i = index
+		}
+		if i < 0 {
+			return "", nil
+		}
+		return logTail(ctx, f.HTTP, "Forgejo", f.repo+"/actions/jobs/"+strconv.FormatInt(jobs[i].ID, 10)+"/logs", f.auth())
 	}
-	return MergePending, nil
+	return "", nil
 }
 
 // forgejoPageSize is the page size used when listing pull requests, and
@@ -175,8 +246,12 @@ func (f *Forgejo) find(ctx context.Context, query, branch string) (forgejoPull, 
 // do sends one API request with in as its JSON body, when not nil, and
 // decodes a 2xx answer into out, when not nil.
 func (f *Forgejo) do(ctx context.Context, method, u string, in, out any) error {
-	return do(ctx, f.HTTP, "Forgejo", method, u, map[string]string{
-		"Accept":        "application/json",
-		"Authorization": "token " + f.token,
-	}, githubMessage, in, out) // same error shape as GitHub: {"message": "..."}
+	h := f.auth()
+	h["Accept"] = "application/json"
+	return do(ctx, f.HTTP, "Forgejo", method, u, h, githubMessage, in, out) // same error shape as GitHub: {"message": "..."}
+}
+
+// auth is the header that authenticates a request.
+func (f *Forgejo) auth() map[string]string {
+	return map[string]string{"Authorization": "token " + f.token}
 }

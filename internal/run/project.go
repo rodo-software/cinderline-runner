@@ -77,6 +77,9 @@ type Project struct {
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
 	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
 	image         string // the agent image the tools mount was filled for; only runs touch it, one at a time
+	// reviewChecks are, by Review issue ref, the failed checks of its pull
+	// request's head, read once per head; only upkeep passes touch it, one at a time.
+	reviewChecks map[string]headChecks
 
 	detectMu sync.Mutex    // one detection at a time
 	detected chan struct{} // closed by the first detection, so the loop polls at once; nil in tests
