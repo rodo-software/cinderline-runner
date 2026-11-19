@@ -12,6 +12,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -151,6 +152,46 @@ func TestUpkeep(t *testing.T) {
 	}
 	if !slices.Equal(pushes, []string{"/runs/CSR-7", "/runs/CSR-7"}) {
 		t.Errorf("pushes %v; want the stranded clone and its update, not the conflict", pushes)
+	}
+}
+
+// CLR-204: an agent controls its clone's branch, so matching the branch
+// alone does not establish that the stranded work belongs to this issue.
+func TestUpkeepPushesOnlyTheIssuesOwnClone(t *testing.T) {
+	branch := name.Name + "/CSR-7"
+	foreign := workspace.Clone{Dir: workspace.RunsPath + "/CSR-8", Branch: branch}
+	own := workspace.Clone{Dir: workspace.RunsPath + "/CSR-7", Branch: branch}
+	for _, tc := range []struct {
+		name   string
+		clones []workspace.Clone
+		want   []string
+	}{
+		{name: "foreign clone", clones: []workspace.Clone{foreign}},
+		{name: "own clone", clones: []workspace.Clone{own}, want: []string{own.Dir}},
+		{name: "foreign clone before own", clones: []workspace.Clone{foreign, own}, want: []string{own.Dir}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.ws.Strandeds = []workspace.StrandedReply{{Clones: tc.clones}}
+			f.ws.Behinds = []workspace.BehindReply{{}}
+			f.fg.MergeStates = []forge.MergeStateReply{{State: forge.MergePending}}
+			facts := f.p.upkeep(context.Background(), proj, []cinderline.ReviewItem{{Ref: "CSR-7", Title: "Seven"}})
+			if len(facts) != 1 || facts[0].Ref != "CSR-7" || facts[0].PullRequest != "open" {
+				t.Fatalf("facts = %+v; want CSR-7 with an open pull request", facts)
+			}
+			var pushes []string
+			for _, c := range f.ws.Calls() {
+				if c.Method == "Push" {
+					pushes = append(pushes, c.Args[0].(string))
+					if c.Args[1].(string) != branch {
+						t.Errorf("pushed branch %v; want %s", c.Args[1], branch)
+					}
+				}
+			}
+			if !slices.Equal(pushes, tc.want) {
+				t.Errorf("pushes %v; want %v", pushes, tc.want)
+			}
+		})
 	}
 }
 
