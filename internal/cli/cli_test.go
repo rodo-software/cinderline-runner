@@ -198,12 +198,16 @@ func TestAddHappyPath(t *testing.T) {
 
 func TestAddReasksBadURL(t *testing.T) {
 	u := instance(t, "WEB", repoURL)
-	c, out, errb := newCLI(t, lines("ftp://x.example.com", "not a url", u, goodToken, "", "git-tok"))
+	c, out, errb := newCLI(t, lines("ftp://x.example.com", "not a url", "http://cinderline.example.com", u, goodToken, "", "git-tok"))
 	if code := c.Run([]string{"add"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
-	if n := strings.Count(out.String(), "URL of the "); n != 3 {
-		t.Errorf("asked the URL %d times, want 3:\n%s", n, out.String())
+	if n := strings.Count(out.String(), "URL of the "); n != 4 {
+		t.Errorf("asked the URL %d times, want 4:\n%s", n, out.String())
+	}
+	// Refused before the runner token is asked, so it never crosses in clear (CLR-208).
+	if !strings.Contains(out.String(), `"http://cinderline.example.com" must be an absolute https URL; plain http only on localhost`) || strings.Contains(out.String(), "could not be reached") {
+		t.Errorf("plain http URL not refused before it was contacted:\n%s", out.String())
 	}
 }
 

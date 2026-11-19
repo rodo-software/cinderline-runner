@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -60,8 +59,8 @@ func (c *CLI) add(args []string) int {
 			if err != nil {
 				return c.fail(err)
 			}
-			if u, err := url.Parse(v); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-				say("%q is not an absolute http or https URL.", v)
+			if err := config.CheckInstanceURL(v); err != nil {
+				say("%q %v.", v, err)
 				continue
 			}
 			instance = strings.TrimRight(v, "/")

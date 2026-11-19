@@ -25,4 +25,5 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-19-login-replaces-key](2026-11-19-login-replaces-key.md): a successful `login` deletes the client's stored model key; a later `key set` wins again.
 - [2026-11-19-docker-26](2026-11-19-docker-26.md): Docker Engine 26.0 or later, so an agent's and a check's container mount only their issue's own clone.
 
+- [2026-11-19-https-instance](2026-11-19-https-instance.md): the Cinderline URL must be https; plain http only on localhost or a loopback address; an existing config with another http URL fails to load.
 - [2026-11-19-compose-local-files](2026-11-19-compose-local-files.md): validate repository-local composition before Compose reads files; freeze the resolved composition for checks and operations.

@@ -118,7 +118,15 @@ func TestValidate(t *testing.T) {
 	}{
 		{"none", nil, ""},
 		{"one", []Project{ok}, ""},
-		{"same key two instances", []Project{ok, with(func(p *Project) { p.URL = "http://b.example.com" })}, ""},
+		{"same key two instances", []Project{ok, with(func(p *Project) { p.URL = "https://b.example.com" })}, ""},
+		// CLR-208, decision 2026-11-19-https-instance: plain http only on the runner's own machine.
+		{"http localhost", []Project{with(func(p *Project) { p.URL = "http://localhost:8000" })}, ""},
+		{"http loopback", []Project{with(func(p *Project) { p.URL = "http://127.0.0.1:8000" })}, ""},
+		{"http loopback v6", []Project{with(func(p *Project) { p.URL = "http://[::1]:8000" })}, ""},
+		{"http other host", []Project{with(func(p *Project) { p.URL = "http://cinderline.example.com" })}, "project 1 (WEB): url must be an absolute https URL; plain http only"},
+		{"http private address", []Project{with(func(p *Project) { p.URL = "http://192.168.1.5:8000" })}, "project 1 (WEB): url must be an absolute https URL; plain http only"},
+		{"http docker host", []Project{with(func(p *Project) { p.URL = "http://host.docker.internal:8000" })}, "project 1 (WEB): url must be an absolute https URL; plain http only"},
+		{"http localhost lookalike", []Project{with(func(p *Project) { p.URL = "http://localhost.example.com" })}, "project 1 (WEB): url must be an absolute https URL; plain http only"},
 		{"ftp url", []Project{with(func(p *Project) { p.URL = "ftp://x" })}, "project 1 (WEB): url"},
 		{"url without scheme", []Project{with(func(p *Project) { p.URL = "cinder.example.com" })}, "project 1 (WEB): url"},
 		{"empty url", []Project{with(func(p *Project) { p.URL = "" })}, "project 1 (WEB): url"},

@@ -248,6 +248,19 @@ func CheckRepositoryURL(s string) error {
 	return fmt.Errorf("%q must be an https URL such as https://host/owner/repository, without a user name or password: git signs in with the token over https only", s)
 }
 
+// CheckInstanceURL allows an absolute https URL of a Cinderline instance, or
+// plain http on localhost or a loopback address for local development: the
+// runner token, the agents' scoped tokens and every prompt travel over it
+// (decision 2026-11-19-https-instance). Its error leaves the URL out, which
+// may hold a password.
+func CheckInstanceURL(s string) error {
+	u, err := url.Parse(s)
+	if err == nil && u.Host != "" && (u.Scheme == "https" || u.Scheme == "http" && loopbackHost(u.Hostname())) {
+		return nil
+	}
+	return errors.New("must be an absolute https URL; plain http only on localhost or a loopback address, for local development")
+}
+
 // validRef is a subset of git check-ref-format: plain names such as main,
 // release/1.2 or v1.0.0, never an option, a range or a reflog expression.
 func validRef(s string) bool {
@@ -386,8 +399,8 @@ func (c *Config) Validate() error {
 	seen := map[id]bool{}
 	for i, p := range c.Projects {
 		var problem string
-		if u, err := url.Parse(p.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			problem = "url must be an absolute http or https URL"
+		if err := CheckInstanceURL(p.URL); err != nil {
+			problem = "url " + err.Error()
 		} else if p.Key == "" || strings.IndexFunc(p.Key, unicode.IsSpace) >= 0 {
 			problem = "key must be non-empty without whitespace"
 		} else if strings.IndexFunc(p.LocalID, unicode.IsSpace) >= 0 {
@@ -451,9 +464,13 @@ func runnersMachine(hp string) bool {
 	if err != nil {
 		return false
 	}
+	return loopbackHost(host) || strings.EqualFold(host, "host.docker.internal")
+}
+
+// loopbackHost says host is localhost or a loopback address.
+func loopbackHost(host string) bool {
 	ip := net.ParseIP(host)
-	host = strings.ToLower(host)
-	return host == "localhost" || host == "host.docker.internal" || ip != nil && ip.IsLoopback()
+	return strings.EqualFold(host, "localhost") || ip != nil && ip.IsLoopback()
 }
 
 // AllowedHost says hp may join a run's allowlist as an allow_hosts entry
