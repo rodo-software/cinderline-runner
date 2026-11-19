@@ -56,8 +56,8 @@ func (s *scripted) Run(ctx context.Context, spec environment.Spec) (string, erro
 
 // agentScript checks what a real agent relies on, then does the work: the
 // tools volume's Claude Code runs on the image's libc, the prompt arrives on
-// stdin, the credential arrives by name and the clone is on the issue's
-// branch. It commits hello.txt with the identity
+// stdin, the credential arrives by name, the clone is on the issue's branch
+// and is the only folder of the runs volume it sees (CLR-207). It commits hello.txt with the identity
 // the runner set and leaves left.txt for the runner to commit (CSR-169). It
 // ends with Claude Code's JSON result.
 func agentScript(ref string) string {
@@ -66,6 +66,7 @@ func agentScript(ref string) string {
 grep '# Your task: ` + ref + `' >/dev/null
 test "$ANTHROPIC_API_KEY" = ` + itCredential + `
 test "$(git rev-parse --abbrev-ref HEAD)" = ` + name.Name + `/` + ref + `
+test "$(ls -A ` + workspace.RunsPath + `)" = ` + ref + `
 echo 'written by the scripted agent' > hello.txt
 git add hello.txt
 git commit --quiet -m 'Add hello.txt'

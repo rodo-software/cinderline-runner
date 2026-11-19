@@ -12,11 +12,11 @@ Cinderline decides, the runner does the mechanics and reports facts (decision 20
 
 | System | Versions | Docker |
 |---|---|---|
-| macOS | The current and two previous major releases, as Docker Desktop supports them; Apple silicon and Intel | Docker Desktop |
-| Linux | Any distribution that runs a supported Docker Engine; `cinderline service` needs systemd | Docker Engine 25.0.5 or later (or 23.0.11 or later of 23.0), or Docker Desktop |
-| Windows | Windows 10 22H2 (build 19045) or Windows 11 23H2 or later, 64-bit; ARM64 only as far as Docker Desktop's ARM build (early access) runs | Docker Desktop with the WSL2 backend |
+| macOS | The current and two previous major releases, as Docker Desktop supports them; Apple silicon and Intel | Docker Desktop 4.29 or later |
+| Linux | Any distribution that runs a supported Docker Engine; `cinderline service` needs systemd | Docker Engine 26.0 or later, or Docker Desktop 4.29 or later |
+| Windows | Windows 10 22H2 (build 19045) or Windows 11 23H2 or later, 64-bit; ARM64 only as far as Docker Desktop's ARM build (early access) runs | Docker Desktop 4.29 or later with the WSL2 backend |
 
-- An older Docker Engine is refused: it forwards DNS lookups from the agents' internal network, a way out past the network allowlist (CVE-2024-29018).
+- An older Docker Engine is refused: an agent's container can then be given only its own issue's clone (`volume-subpath`), and older engines also forward DNS lookups from the agents' internal network, a way out past the network allowlist (CVE-2024-29018). Docker Desktop 4.29 ships Engine 26.0.
 - On a Windows build below 19045 every command except `cinderline version` stops with an error naming the build it found. Windows Server is not supported: Docker Desktop does not run on it.
 - CI runs the checks on macOS on GitHub and on Linux on Forgejo (Windows is off for now, decision 2026-11-12-ci-speedups); [docs/ci/platforms.yml](docs/ci/platforms.yml) widens that to the oldest and newest images per system and architecture.
 

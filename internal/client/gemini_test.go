@@ -195,7 +195,7 @@ func TestGeminiRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:  "CSR-7",
 		Dir:    "/runs/CSR-7",
-		Mounts: []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-gemini:/state", "-v", "tools:/opt/cinderline:ro"},
+		Mounts: []string{"-v", "cinderline-CSR-repo:/repo:ro", "--mount", "type=volume,src=cinderline-CSR-runs,dst=/runs/CSR-7,volume-subpath=CSR-7", "-v", "cinderline-CSR-state-gemini:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:    slices.Concat([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, geminiEnv("AIza-key", false, turn, "https://cs.example/mcp"), wantIdentity),
 		Cmd: append([]string{
 			"sh", "-c", `mkdir -p "$GEMINI_CLI_HOME/.gemini" && printf '%s' "$CINDERLINE_GEMINI_SETTINGS" > "$GEMINI_CLI_HOME/.gemini/settings.json" && exec "$0" "$@"`,

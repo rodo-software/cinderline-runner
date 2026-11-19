@@ -210,7 +210,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
-		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-opencode:/state", "-v", "tools:/opt/cinderline:ro"},
+		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "--mount", "type=volume,src=cinderline-CSR-runs,dst=/runs/CSR-7,volume-subpath=CSR-7", "-v", "cinderline-CSR-state-opencode:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp", nil), wantIdentity),
 		Cmd:     append([]string{"/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
 		Stdin:   "do it",

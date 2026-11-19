@@ -192,7 +192,7 @@ func TestClaudeRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:    "CSR-7",
 		Dir:      "/runs/CSR-7",
-		Mounts:   []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-claude:/state", "-v", "tools:/opt/cinderline:ro", "-v", "/state/attachments/CSR-7:/attachments:ro"},
+		Mounts:   []string{"-v", "cinderline-CSR-repo:/repo:ro", "--mount", "type=volume,src=cinderline-CSR-runs,dst=/runs/CSR-7,volume-subpath=CSR-7", "-v", "cinderline-CSR-state-claude:/state", "-v", "tools:/opt/cinderline:ro", "-v", "/state/attachments/CSR-7:/attachments:ro"},
 		Env:      slices.Concat([]string{"DISABLE_AUTOUPDATER=1"}, claudeEnv("sk-ant-api03-k", Turn{Token: "tok"}), wantIdentity),
 		Cmd:      append([]string{"/opt/cinderline/bin/claude"}, claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, session, "https://cs.example/mcp")...),
 		Stdin:    "do it",
@@ -265,6 +265,23 @@ func TestClaudeRunStateVolumeFails(t *testing.T) {
 	}
 	if len(env.Calls()) != 0 {
 		t.Error("the turn ran without its state volume")
+	}
+}
+
+// CLR-207: a turn mounts only its own clone of the runs volume, so a dir
+// that is not a clone directly under /runs is refused before any docker
+// command runs.
+func TestClaudeRunRefusesDirOutsideRuns(t *testing.T) {
+	for _, bad := range []string{"", "/runs", "/repo/CSR-7", "/runs/CSR-7/sub", "/runs/a,readonly=false"} {
+		env := &environment.Fake{}
+		var ran [][]string
+		c := &CLI{Name: "claude", Project: "CSR", Env: env, Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
+			ran = append(ran, argv)
+			return "", nil
+		}}
+		if _, err := c.Run(context.Background(), Turn{Dir: bad}); err == nil || len(ran) != 0 || len(env.Calls()) != 0 {
+			t.Errorf("Run(%q) = %v after %q and %d turns; want an error and nothing run", bad, err, ran, len(env.Calls()))
+		}
 	}
 }
 

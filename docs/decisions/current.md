@@ -56,6 +56,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 ## Git, workspaces and branches
 
 - Each issue gets its own clone in a runs volume, sharing objects through alternates. The git token stays in a helper container, which never runs git in the agent's clone. (2026-11-05-runner-rewrite-details)
+- An agent's or check's container mounts only its issue's folder of the runs volume, at `/runs/<REF>`, with the repo volume read-only; the runner's own git containers mount the whole volume. (2026-11-19-docker-26)
 - Pushes are never forced. (2026-11-07-publish-resilience)
 - Review upkeep is git only, no agent: one fetch per pass finds the branches that are behind; a stranded clone is pushed before it is replaced, and nothing is replaced when the list fails. (2026-11-07-solo-team-resolves-merge-conflicts; 2026-11-11-audit-fixes)
 - A configured project is its Cinderline URL, workspace slug and key. Docker objects, keychain entries and state files are named by its `id`, set at `add` to `<workspace>-<KEY>`, or the key alone in workspace `default`; an entry without one gets that name from its key when it is loaded. `add` refuses a duplicate, and the daemon runs only the first of two with one ID. (2026-11-15-workspace-in-project-identity; 2026-11-17-project-key-rename)
@@ -79,7 +80,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - A project that needs another toolchain uses `docker`: a Dockerfile and `.cinderline/compose.yml` in its repository. An agent image needs `/bin/sh` and a glibc or musl loader and runs as uid 1000; agent CLIs come from the tools volume. (2026-11-16-project-toolchains)
 - The default image holds PHP 8.4, Composer, Node 22 and git; Go left it once the runner project had its own image. (2026-11-16-project-toolchains point 3; CLR-185)
 - The default image is built only when `images/default/` changes on main (or by hand), for linux/arm64 natively, tagged with the Dockerfile's sum; elsewhere the runner builds it locally. (2026-11-12-ci-speedups)
-- `add` and `service install` fail at once without docker, a running daemon or 5 GB free; `run` fails at once on missing docker or low disk but waits for the daemon, retrying every 10 seconds, because the service starts before Docker Desktop answers. Docker Engine must be 25.0.5+ or 23.0.11+ (CVE-2024-29018). (2026-11-08-docker-prereq; 2026-11-11-audit-fixes)
+- `add` and `service install` fail at once without docker, a running daemon or 5 GB free; `run` fails at once on missing docker or low disk but waits for the daemon, retrying every 10 seconds, because the service starts before Docker Desktop answers. Docker Engine must be 26.0+, for `volume-subpath` and the fix for CVE-2024-29018. (2026-11-08-docker-prereq; 2026-11-11-audit-fixes; 2026-11-19-docker-26)
 
 ## Network and the proxy
 

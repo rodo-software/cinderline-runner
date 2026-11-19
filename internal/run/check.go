@@ -16,13 +16,14 @@ import (
 // project's hosts and allow. failed is a check that ran and failed, with
 // the tail of its output; err is a stop or a check that could not run.
 func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int, allow []string) (failed bool, tail string, err error) {
+	mounts, err := workspace.CloneMounts(p.Config.ID(), dir)
+	if err != nil {
+		return false, "", fmt.Errorf("the check could not run: %w", err)
+	}
 	out, err := p.Env.Run(ctx, environment.Spec{
-		Issue: path.Base(dir),
-		Dir:   dir,
-		Mounts: []string{
-			"-v", workspace.Volume(p.Config.ID(), "repo") + ":" + workspace.RepoPath + ":ro",
-			"-v", workspace.Volume(p.Config.ID(), "runs") + ":" + workspace.RunsPath,
-		},
+		Issue:    path.Base(dir),
+		Dir:      dir,
+		Mounts:   mounts,
 		Cmd:      []string{"sh", "-c", check},
 		Timeout:  time.Duration(maxMinutes) * time.Minute,
 		AppAllow: allow,

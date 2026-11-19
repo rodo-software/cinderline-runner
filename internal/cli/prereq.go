@@ -30,16 +30,16 @@ func dockerHint(goos string) string {
 	}
 }
 
-// keepsDNSInside reports whether Docker Engine version v has the fix for
-// CVE-2024-29018 (23.0.11, 25.0.5, 26.0.0): older engines answer DNS lookups
-// from an --internal network through the host's resolver, a way out past the
-// egress proxy. A version it cannot read does not have it.
-func keepsDNSInside(v string) bool {
-	var major, minor, patch int
-	if n, _ := fmt.Sscanf(v, "%d.%d.%d", &major, &minor, &patch); n != 3 {
-		return false
-	}
-	return major >= 26 || major == 25 && (minor > 0 || patch >= 5) || major == 23 && (minor > 0 || patch >= 11)
+// engineOK reports whether Docker Engine version v is 26.0 or later:
+// volume-subpath, which mounts only an issue's own clone in its agent's
+// container (CLR-207, decision 2026-11-19-docker-26), needs 26.0, which also
+// has the fix for CVE-2024-29018 (older engines answer DNS lookups from an
+// --internal network through the host's resolver, a way out past the egress
+// proxy). A version it cannot read is too old.
+func engineOK(v string) bool {
+	var major int
+	n, _ := fmt.Sscanf(v, "%d.", &major)
+	return n == 1 && major >= 26
 }
 
 // checkDocker reports a missing docker, a silent daemon, an engine too old or low disk; with wait it waits for the daemon.
@@ -74,8 +74,8 @@ func (c *CLI) checkDocker(ctx context.Context, wait bool) error {
 	if err != nil {
 		return err
 	}
-	if !keepsDNSInside(engine) {
-		return fmt.Errorf("the Docker Engine, %s, is too old: it forwards DNS lookups from the agents' internal network, which lets an agent send data out past the allowlist (CVE-2024-29018); update to 25.0.5 or later (or 23.0.11 or later of 23.0)", engine)
+	if !engineOK(engine) {
+		return fmt.Errorf("the Docker Engine, %s, is too old: %s needs 26.0 or later, to mount only an issue's own clone in its agent's container and to keep the agents' DNS lookups inside their network (CVE-2024-29018); update Docker Engine, or Docker Desktop to 4.29 or later", engine, name.Name)
 	}
 
 	out, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none", "--entrypoint", "df", workspace.GitImage, "-Pk", "/")

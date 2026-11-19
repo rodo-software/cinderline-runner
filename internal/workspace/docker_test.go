@@ -618,6 +618,26 @@ func TestDockerAgentRefusesDirOutsideRuns(t *testing.T) {
 	}
 }
 
+// CLR-207: an agent's or check's container gets only its issue's folder of
+// the runs volume, at the clone's path, so the alternates into /repo still
+// resolve; anything but a clone directly under RunsPath is refused, as the
+// dir goes into a --mount option list.
+func TestCloneMountsOnlyTheIssuesFolder(t *testing.T) {
+	got, err := CloneMounts("CSR", "/runs/CSR-7")
+	want := []string{
+		"-v", "cinderline-CSR-repo:/repo:ro",
+		"--mount", "type=volume,src=cinderline-CSR-runs,dst=/runs/CSR-7,volume-subpath=CSR-7",
+	}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("CloneMounts = %q, %v; want %q", got, err, want)
+	}
+	for _, bad := range []string{"/runs", "/repo", "/runs/../repo", "/runs/a/b", "/runs/a,readonly=false", "/x,y/CSR-7", "", "--x"} {
+		if got, err := CloneMounts("CSR", bad); err == nil {
+			t.Errorf("CloneMounts(%q) = %q, want an error", bad, got)
+		}
+	}
+}
+
 // Behind fetches once, then lists in one container without token or network.
 func TestDockerBehind(t *testing.T) {
 	d, calls := scripted([]string{"", "", "", "cinderline/CSR-5\ncinderline/CSR-8\n"}, nil)

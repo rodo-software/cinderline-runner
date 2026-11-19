@@ -23,5 +23,6 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-18-drain-before-reload](2026-11-18-drain-before-reload.md): commands that reload the runner drain it first while runs are in flight, with `s` to stop at once.
 - [2026-11-18-verbose-agent-output](2026-11-18-verbose-agent-output.md): container output in `run -v` as plain lines with colours only, cleaned in the log file.
 - [2026-11-19-login-replaces-key](2026-11-19-login-replaces-key.md): a successful `login` deletes the client's stored model key; a later `key set` wins again.
+- [2026-11-19-docker-26](2026-11-19-docker-26.md): Docker Engine 26.0 or later, so an agent's and a check's container mount only their issue's own clone.
 
 - [2026-11-19-compose-local-files](2026-11-19-compose-local-files.md): validate repository-local composition before Compose reads files; freeze the resolved composition for checks and operations.

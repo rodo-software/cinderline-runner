@@ -86,7 +86,11 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 			return Result{}, fmt.Errorf("%w: %w", ErrNotStarted, err)
 		}
 	}
-	if err := PrepareState(ctx, c.Exec, c.Project, c.Name); err != nil {
+	mounts, err := agentMounts(c.Project, c.Name, t.Dir, c.Tools)
+	if err != nil {
+		return Result{}, err
+	}
+	if err = PrepareState(ctx, c.Exec, c.Project, c.Name); err != nil {
 		return Result{}, err
 	}
 	session := t.SessionID
@@ -97,7 +101,6 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	if k.libs {
 		libs = c.Tools.OpenCodeEnv
 	}
-	mounts := agentMounts(c.Project, c.Name, c.Tools)
 	if t.Attachments != "" {
 		mounts = append(mounts, "-v", t.Attachments+":"+workspace.AttachmentsPath+":ro")
 	}
@@ -148,15 +151,15 @@ func jsonLines(out string) []string {
 	return lines
 }
 
-// agentMounts mounts the issue's clone, the repo volume that holds the
+// agentMounts mounts the issue's clone dir, the repo volume that holds the
 // objects the clone's alternates point at, the client's state volume and the
 // tools.
-func agentMounts(project, client string, t tools.Mount) []string {
-	return append([]string{
-		"-v", workspace.Volume(project, "repo") + ":" + workspace.RepoPath + ":ro",
-		"-v", workspace.Volume(project, "runs") + ":" + workspace.RunsPath,
-		"-v", StateVolume(project, client) + ":" + StatePath,
-	}, t.Args...)
+func agentMounts(project, client, dir string, t tools.Mount) ([]string, error) {
+	clone, err := workspace.CloneMounts(project, dir)
+	if err != nil {
+		return nil, err
+	}
+	return slices.Concat(clone, []string{"-v", StateVolume(project, client) + ":" + StatePath}, t.Args), nil
 }
 
 // StateVolume is the name of the volume with one client's sessions, config

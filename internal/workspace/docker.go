@@ -206,6 +206,21 @@ func Volume(project, kind string) string {
 	return name.Name + "-" + project + "-" + kind
 }
 
+// CloneMounts mounts the clone dir (RunsPath/<REF>) of an agent's or a
+// check's container, and the repo volume its alternates point at read-only.
+// Only the issue's own folder of the runs volume, at the same path, so an
+// agent cannot write another issue's clone (CLR-207); volume-subpath needs
+// Docker Engine 26 (decision 2026-11-19-docker-26).
+func CloneMounts(project, dir string) ([]string, error) {
+	if err := checkDir(dir); err != nil {
+		return nil, err
+	}
+	return []string{
+		"-v", Volume(project, "repo") + ":" + RepoPath + ":ro",
+		"--mount", "type=volume,src=" + Volume(project, "runs") + ",dst=" + dir + ",volume-subpath=" + path.Base(dir),
+	}, nil
+}
+
 func (d *Docker) labels(issue string) []string { return Labels(d.Project, issue) }
 
 // ProjectLabel is the label every container, network and volume the runner

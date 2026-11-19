@@ -74,18 +74,20 @@ func TestPrereqEnoughDiskPasses(t *testing.T) {
 	}
 }
 
-// An engine without the fix for CVE-2024-29018 leaks DNS from the agents'
-// internal network, so it is refused (decision 2026-11-11-audit-fixes).
-func TestPrereqRefusesAnEngineThatLeaksDNS(t *testing.T) {
+// An engine before 26.0 cannot mount only an issue's own clone
+// (volume-subpath, CLR-207), and before the fix for CVE-2024-29018 leaks DNS
+// from the agents' internal network, so it is refused (decision
+// 2026-11-19-docker-26).
+func TestPrereqRefusesAnEngineBefore26(t *testing.T) {
 	for v, ok := range map[string]bool{
-		"20.10.24": false, "23.0.10": false, "23.0.11": true, "24.0.9": false, "25.0.4": false,
-		"25.0.5": true, "26.0.0": true, "27.3.1": true, "28.0.0-rc.1": true, "20.10.24+dfsg1": false, "dev": false,
+		"20.10.24": false, "23.0.11": false, "24.0.9": false, "25.0.5": false, "25.0.99": false,
+		"26.0.0": true, "26.1": true, "27.3.1": true, "28.0.0-rc.1": true, "29.0.1+dfsg1": true, "20.10.24+dfsg1": false, "dev": false,
 	} {
 		c, _, _ := newCLI(t, "")
 		d := &scriptedDocker{version: v, df: dfOut(40 << 20)}
 		c.exec = d.exec
 		err := c.checkDocker(context.Background(), false)
-		if ok && err != nil || !ok && (err == nil || !strings.Contains(err.Error(), "CVE-2024-29018") || len(d.calls) != 1) {
+		if ok && err != nil || !ok && (err == nil || !strings.Contains(err.Error(), "26.0 or later") || len(d.calls) != 1) {
 			t.Errorf("engine %s: err = %v after %q; want ok = %v", v, err, d.calls, ok)
 		}
 	}
