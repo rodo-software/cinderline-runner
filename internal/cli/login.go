@@ -51,18 +51,36 @@ func (c *CLI) login(args []string) int {
 	if clientName == "gemini" {
 		fmt.Fprintln(c.Stdout, `After "Authentication succeeded", type /quit to finish.`)
 	}
-	// --tty needs the real terminal, not c.Stdin/c.Stdout.
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	tty := c.tty
+	if tty == nil {
+		tty = runOnTerminal
+	}
+	if err := tty(ctx, argv); err != nil {
 		return c.fail(fmt.Errorf("%s login: %w", clientName, err))
+	}
+	// A CLI can end its sign-in with success and still save nothing where
+	// the runs look (CLR-199), so success is the file on the volume.
+	saved, err := client.LoginExists(ctx, c.exec, key, clientName)
+	if err != nil {
+		return c.fail(fmt.Errorf("%s login: credentials not checked on %s: %w", clientName, client.StateVolume(key, clientName), err))
+	}
+	if !saved {
+		return c.fail(fmt.Errorf("%s login ended, but its credentials are not on %s; the runs cannot use it, sign in again", clientName, client.StateVolume(key, clientName)))
 	}
 
 	fmt.Fprintf(c.Stdout, "%s is signed in for project %s; the credentials are on its %s state volume\n", clientName, p.Key, clientName)
 	c.reload()
 	return 0
+}
+
+// runOnTerminal runs argv on the real terminal: --tty needs it, not
+// c.Stdin/c.Stdout.
+func runOnTerminal(ctx context.Context, argv []string) error {
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 // agentImage returns the default image and the tools mount for it, with a

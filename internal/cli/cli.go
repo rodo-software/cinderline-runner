@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,13 +27,14 @@ type CLI struct {
 	Stderr  io.Writer
 
 	exec          workspace.Exec
-	http          *http.Client                   // the tools downloads; nil means http.DefaultClient
-	removeService func(exe string) error         // nil means uninstallService
-	startService  func(exe string) (bool, error) // nil means startService; update restarts the service with it
-	processGone   func(pid int) bool             // nil means processGone; drainAndWait waits with it until the daemon's process has exited
-	pathsErr      error                          // from config.DefaultPaths; only commands that need the paths fail on it
-	WindowsBuild  uint32                         // OS build on Windows, 0 elsewhere; Main sets it
-	exe           string                         // the binary update replaces; "" means os.Executable()
+	http          *http.Client                                   // the tools downloads; nil means http.DefaultClient
+	removeService func(exe string) error                         // nil means uninstallService
+	startService  func(exe string) (bool, error)                 // nil means startService; update restarts the service with it
+	processGone   func(pid int) bool                             // nil means processGone; drainAndWait waits with it until the daemon's process has exited
+	tty           func(ctx context.Context, argv []string) error // nil means runOnTerminal; login runs the CLI's sign-in with it
+	pathsErr      error                                          // from config.DefaultPaths; only commands that need the paths fail on it
+	WindowsBuild  uint32                                         // OS build on Windows, 0 elsewhere; Main sets it
+	exe           string                                         // the binary update replaces; "" means os.Executable()
 }
 
 // command is one subcommand. A new command is one function and one entry in commands.

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/rodo-software/cinderline-runner/internal/tools"
@@ -53,4 +54,25 @@ func LoginArgv(client, project, image string, t tools.Mount) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("%s has no sign-in of its own here; supported clients: claude, codex, gemini", client)
 	}
+}
+
+// loginFiles are where each CLI's own sign-in leaves its credentials on its
+// state volume, under the config dirs of claudeHome, codexHome and geminiHome.
+var loginFiles = map[string]string{
+	"claude": StatePath + "/claude/.credentials.json",
+	"codex":  StatePath + "/codex/auth.json",
+	"gemini": StatePath + "/gemini/.gemini/oauth_creds.json",
+}
+
+// LoginExists reports whether the client's sign-in file is on the project's
+// state volume of that client; false for a client without a sign-in.
+func LoginExists(ctx context.Context, x workspace.Exec, project, client string) (bool, error) {
+	file := loginFiles[client]
+	if file == "" {
+		return false, nil
+	}
+	_, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none",
+		"-v", StateVolume(project, client)+":"+StatePath,
+		"--entrypoint", "test", workspace.GitImage, "-f", file)
+	return workspace.ExitedZero(err)
 }

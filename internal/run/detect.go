@@ -17,12 +17,6 @@ import (
 
 var clientNames = []string{"claude", "codex", "gemini", "opencode"}
 
-var loginFiles = map[string]string{
-	"claude": "/state/claude/.credentials.json",
-	"codex":  "/state/codex/auth.json",
-	"gemini": "/state/gemini/.gemini/oauth_creds.json",
-}
-
 var versionPat = regexp.MustCompile(`[0-9]+\.[0-9]+(?:\.[0-9]+)+`)
 
 func allMissingBinary() []cinderline.ReportClient {
@@ -62,7 +56,10 @@ func detectClients(ctx context.Context, exec workspace.Exec, cfg config.Project,
 			res = append(res, cinderline.ReportClient{Name: name, State: state, Version: v})
 			continue
 		}
-		if name == "opencode" && providers || name != "opencode" && loginExists(ctx, exec, cfg.Key, name) {
+		// By ID, as every run and login names the volume; by key, a project
+		// outside the default workspace never found its login (CLR-199).
+		login, _ := client.LoginExists(ctx, exec, cfg.ID(), name)
+		if name == "opencode" && providers || login {
 			res = append(res, cinderline.ReportClient{Name: name, State: "ready", Version: v})
 			continue
 		}
@@ -112,20 +109,6 @@ func binaryArgv(mount tools.Mount, image, name string) []string {
 		return append(argv, image, tools.Path+"/bin/opencode", "--version")
 	}
 	return nil
-}
-
-// loginExists checks whether the login file exists on the client's state volume.
-func loginExists(ctx context.Context, exec workspace.Exec, project, name string) bool {
-	p := loginFiles[name]
-	if p == "" {
-		return false
-	}
-	argv := []string{"docker", "run", "--rm", "--network", "none",
-		"-v", client.StateVolume(project, name) + ":/state",
-		"--entrypoint", "test", workspace.GitImage, "-f", p}
-	_, err := exec(ctx, nil, argv...)
-	ok, _ := workspace.ExitedZero(err)
-	return ok
 }
 
 // checkKey checks whether the key works via a free HTTP GET.

@@ -93,7 +93,7 @@ var testMount = tools.Mount{
 	Env:  []string{"DISABLE_AUTOUPDATER=1"},
 }
 
-var testCfg = config.Project{URL: "https://test.example.com", Key: "TEST", Repository: "https://git.example.com/o/r"}
+var testCfg = config.Project{URL: "https://test.example.com", Key: "TEST", Workspace: config.DefaultWorkspace, Repository: "https://git.example.com/o/r"}
 
 func testDetect(ctx context.Context, exec workspace.Exec, sec *secrets.Secrets, cfg config.Project) []cinderline.ReportClient {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -261,34 +261,50 @@ func TestDetectKeyAndNetworkError(t *testing.T) {
 	}
 }
 
+// TestDetectLoginFileNoKey finds a login on the volume the project's ID
+// names, as `login` and every run name it; CLR-199: a project outside the
+// default workspace has an ID other than its key.
 func TestDetectLoginFileNoKey(t *testing.T) {
-	keyring.MockInit()
-	sec := secrets.New(t.TempDir())
-	s := newScriptedExec()
-	ctx := context.Background()
-	for _, name := range []string{"claude", "codex", "opencode"} {
-		s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/" + name, "--version"}, "1.0.0\n", nil)
-	}
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js", "--version"}, "0.1.0\n", nil)
-
-	// Login files exist (test -f exits 0)
-	for name, file := range map[string]string{"claude": "/state/claude/.credentials.json", "codex": "/state/codex/auth.json", "gemini": "/state/gemini/.gemini/oauth_creds.json"} {
-		s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", client.StateVolume("TEST", name) + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", nil)
-	}
-
-	got := testDetect(ctx, s.exec, sec, testCfg)
-	m := map[string]cinderline.ReportClient{}
-	for _, rc := range got {
-		m[rc.Name] = rc
-	}
-	for _, name := range []string{"claude", "codex", "gemini"} {
-		if rc, ok := m[name]; ok {
-			if rc.State != "ready" {
-				t.Errorf("%s = %s, want ready", name, rc.State)
+	acme := testCfg
+	acme.Workspace = "acme"
+	for _, tc := range []struct {
+		name   string
+		cfg    config.Project
+		volume string // the state volume's name, less the client
+	}{
+		{"default workspace", testCfg, "cinderline-TEST-state-"},
+		{"other workspace", acme, "cinderline-acme-TEST-state-"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keyring.MockInit()
+			sec := secrets.New(t.TempDir())
+			s := newScriptedExec()
+			ctx := context.Background()
+			for _, name := range []string{"claude", "codex", "opencode"} {
+				s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/" + name, "--version"}, "1.0.0\n", nil)
 			}
-		} else {
-			t.Errorf("%s not found", name)
-		}
+			s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js", "--version"}, "0.1.0\n", nil)
+
+			// Login files exist (test -f exits 0)
+			for name, file := range map[string]string{"claude": "/state/claude/.credentials.json", "codex": "/state/codex/auth.json", "gemini": "/state/gemini/.gemini/oauth_creds.json"} {
+				s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", tc.volume + name + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", nil)
+			}
+
+			got := testDetect(ctx, s.exec, sec, tc.cfg)
+			m := map[string]cinderline.ReportClient{}
+			for _, rc := range got {
+				m[rc.Name] = rc
+			}
+			for _, name := range []string{"claude", "codex", "gemini"} {
+				if rc, ok := m[name]; ok {
+					if rc.State != "ready" {
+						t.Errorf("%s = %s, want ready", name, rc.State)
+					}
+				} else {
+					t.Errorf("%s not found", name)
+				}
+			}
+		})
 	}
 }
 

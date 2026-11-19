@@ -5,7 +5,10 @@ package client
 // client's config dir (review item 5: the docker argv per client).
 
 import (
+	"context"
+	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -131,3 +134,46 @@ func TestGeminiEnvWithoutKeyUsesLogin(t *testing.T) {
 		}
 	}
 }
+
+// TestLoginExists checks each client's sign-in file on its state volume of
+// the project, and runs nothing for a client without a sign-in.
+func TestLoginExists(t *testing.T) {
+	for client, file := range map[string]string{
+		"claude": "/state/claude/.credentials.json",
+		"codex":  "/state/codex/auth.json",
+		"gemini": "/state/gemini/.gemini/oauth_creds.json",
+	} {
+		for _, tc := range []struct {
+			err  error
+			want bool
+		}{{nil, true}, {exitCode(1), false}} {
+			var argv []string
+			x := func(_ context.Context, _ []string, a ...string) (string, error) { argv = a; return "", tc.err }
+			got, err := LoginExists(context.Background(), x, "acme-WEB", client)
+			if err != nil || got != tc.want {
+				t.Errorf("%s, exec err %v: %v, %v; want %v, nil", client, tc.err, got, err, tc.want)
+			}
+			want := []string{"docker", "run", "--rm", "--network", "none", "-v", "cinderline-acme-WEB-state-" + client + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}
+			if !reflect.DeepEqual(argv, want) {
+				t.Errorf("%s argv\n got %q\nwant %q", client, argv, want)
+			}
+		}
+	}
+	// docker itself failing is an error, not a missing login.
+	x := func(context.Context, []string, ...string) (string, error) { return "", errors.New("no docker") }
+	if got, err := LoginExists(context.Background(), x, "WEB", "codex"); got || err == nil {
+		t.Errorf("docker failure: %v, %v; want false and an error", got, err)
+	}
+	x = func(context.Context, []string, ...string) (string, error) {
+		t.Error("opencode ran docker")
+		return "", nil
+	}
+	if got, err := LoginExists(context.Background(), x, "WEB", "opencode"); got || err != nil {
+		t.Errorf("opencode: %v, %v; want false, nil", got, err)
+	}
+}
+
+type exitCode int
+
+func (e exitCode) Error() string { return "exit status " + strconv.Itoa(int(e)) }
+func (e exitCode) ExitCode() int { return int(e) }
