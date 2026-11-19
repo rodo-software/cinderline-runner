@@ -18,6 +18,9 @@ type Note struct {
 	Client  string    `json:"client"`  // a session resumes only in its own client
 	Origin  string    `json:"origin"`  // the word of the done step: paused or kept
 	Time    time.Time `json:"time"`    // when it was written
+	// Manager is a run in the Project Manager slot: its clone is read-only,
+	// so it is replaced fresh on every run and never pushed (CLR-194).
+	Manager bool `json:"manager,omitempty"`
 	// Pruned says why tidying deleted the session, for the next run's
 	// workspace notes; such a note names no session.
 	Pruned string `json:"pruned,omitempty"`

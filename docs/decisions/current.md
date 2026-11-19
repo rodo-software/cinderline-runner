@@ -43,9 +43,9 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 
 ## The loop, runs, sessions and tidying
 
-- One loop per project and at most one run at a time. (2026-11-16-runner-protocol-v2)
+- One loop per project and at most one run at a time, plus at most one Project Manager run next to it in its own slot: the poll always sends `manager_idle` and starts `manager_job`. A manager run gets only `run` and `stop` steps, works in a fresh clone of the base removed at its end, and never commits or pushes, not at `stop` either (`not_pushed`); tidying never pushes its clone. (2026-11-16-runner-protocol-v2; app decision 2026-11-17-project-manager; CLR-194)
 - A run that does not start leaves the issue in To do; the loop then waits 1 minute, doubling to 10. (2026-11-07-publish-resilience)
-- A session resumes only when its clone still exists in the runs volume. (2026-11-11-audit-fixes)
+- A session resumes only when its clone still exists in the runs volume (2026-11-11-audit-fixes), except a Project Manager's, which resumes in a fresh clone at the same dir (CLR-194).
 - A reload (`POST /reload`) stops every project loop, re-reads `config.json` and starts again; a config that fails to load keeps the old one, and the caller gets the error. Runs cut by a reload are moved to Blocked by the app at the next poll. (2026-11-05-reload-config; 2026-11-16-runner-protocol-v2)
 - The team's `max_turns` is passed to every agent turn; the app always sends a number. (2026-11-07-team-max-turns)
 - The idle limit is the project's `idle_minutes`, for every agent turn. Claude Code runs with `--output-format stream-json --verbose`, so one idle timer on the output stream serves every client. (2026-11-14-run-failsafes)

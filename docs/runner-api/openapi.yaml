@@ -62,10 +62,11 @@ paths:
       description: |
         Sent every `poll_after` seconds, all the time, also during a run. The
         app, in this order: stores the report and the heartbeat; moves every
-        active top-level In progress issue with a team that is not in
-        `running` to Blocked with a note; names the runs to stop; offers a job
-        to an idle runner; and, when asked, says what to do with held sessions
-        and which Review branches to keep current.
+        active top-level In progress issue with a team, or of the Project
+        Manager, that is not in `running` to Blocked with a note; names the
+        runs to stop; offers a job to an idle runner, and a Project Manager
+        job to a free manager slot; and, when asked, says what to do with held
+        sessions and which Review branches to keep current.
       parameters:
         - $ref: '#/components/parameters/RunnerVersion'
       requestBody:
@@ -287,6 +288,14 @@ components:
         idle:
           type: boolean
           description: The runner can start a run now.
+        manager_idle:
+          type: boolean
+          description: >-
+            The runner has a free Project Manager slot (decision
+            2026-11-17-project-manager). Only a runner with that slot sends
+            it: it runs the project's one Project Manager issue there, in
+            parallel with the run in its own slot. Without it, a Project
+            Manager issue comes as `job`, before the team issues.
         held:
           type: array
           maxItems: 200
@@ -354,6 +363,9 @@ components:
           type: integer
           minimum: 0
           description: The connections the runner's egress proxy refused.
+        strict_hosts:
+          type: boolean
+          description: The runner has strict host blocking on, so it ignores a step's `allow_hosts` (decision 2026-11-17-blocked-hosts). The app then names a blocked host on the issue without asking a person about it. Left out, false.
         model_providers:
           type: array
           maxItems: 50
@@ -362,6 +374,26 @@ components:
             type: string
             maxLength: 50
             pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
+        provider_models:
+          type: array
+          maxItems: 50
+          description: The models each of the runner's model providers reports, for the team editor's OpenCode model list (decision 2026-11-17-provider-models). Left out, no provider reports any. A help for picking only; it decides no offer.
+          items:
+            type: object
+            required: [provider, models]
+            properties:
+              provider:
+                type: string
+                maxLength: 50
+                pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
+              models:
+                type: array
+                maxItems: 200
+                description: Model ids without the provider, as a team's model names them after `<provider>/`.
+                items:
+                  type: string
+                  maxLength: 150
+                  pattern: '^[A-Za-z0-9._:/-]{1,150}$'
 
     ReviewFact:
       type: object
@@ -373,7 +405,7 @@ components:
         pull_request:
           type: string
           enum: [open, merged, closed, failed, none]
-          description: Where the issue's pull request stands; `failed` is a merge the forge refused, `none` no pull request.
+          description: Where the issue's pull request stands; `failed` is an open one whose head's CI checks failed, `none` no pull request.
         conflicts:
           type: array
           maxItems: 1000
@@ -381,6 +413,33 @@ components:
           items:
             type: string
             maxLength: 1000
+        checks:
+          type: [array, 'null']
+          maxItems: 20
+          description: With `failed`, the CI checks that failed. The app writes them on the issue and sends it back to To do, a few times per issue (decision 2026-11-17-failed-ci-goes-back-to-todo). Left out or empty, `failed` only sets a trusted team's merge status.
+          items:
+            $ref: '#/components/schemas/FailedCheck'
+
+    FailedCheck:
+      type: object
+      description: A CI check that failed on the pull request's head. The runner clips each text to its cap.
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: [string, 'null']
+          maxLength: 1000
+          description: The forge's one-line summary of the check.
+        url:
+          type: [string, 'null']
+          maxLength: 2000
+          description: The check's page on the forge.
+        log:
+          type: [string, 'null']
+          maxLength: 4000
+          description: The last lines of the check's log, where the forge's API gives them.
 
     PollResponse:
       type: object
@@ -388,7 +447,7 @@ components:
       properties:
         poll_after:
           type: integer
-          description: Seconds until the next poll.
+          description: Seconds until the next poll. Shorter while a person has the project's Project Manager chat open (decision 2026-11-17-project-manager-fast-poll).
         review_after:
           type: integer
           description: Seconds between the times the runner brings the Review branches up to date and sends `review`.
@@ -409,7 +468,20 @@ components:
             Nothing is claimed: the run's first `next` request does that. The
             first issue passed over because a client is not ready or a
             provider is missing gets a progress line saying which. Null: no
-            work.
+            work. A poll without `manager_idle` gets a Project Manager issue
+            here first, the same way.
+        manager_job:
+          oneOf:
+            - $ref: '#/components/schemas/Job'
+            - type: 'null'
+          description: |
+            Only when the poll had `manager_idle`; null unless it was true.
+            The first To do Project Manager issue, chosen as `job` is, when
+            the project has a Project Manager: its `team` is the manager as a
+            team of one agent named `Project Manager`, without workers. Its
+            run follows the same steps in the manager slot, next to the run
+            in the job slot; it is never checked or published, and its turns
+            get a `manager` token.
         stop:
           type: array
           description: The `running` issues whose turn must end now, with the outcome `stopped`. The issue is unknown, archived, Cancelled or in Backlog, or Blocked; only a Blocked issue whose latest comment is an agent's is left alone for one poll interval, because an agent that asked a person a question is ending its turn itself.
@@ -636,7 +708,7 @@ components:
         | `resolve` | as `run`, and `not_verified` (the runner undid a merge it could not verify) | as `run` |
         | `check` | `passed`, `failed`, `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's) |
         | `merge` | `conflict` | `conflicts`, `commits` |
-        | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request`, `conflicts`, `merge`, `commit`, `error` |
+        | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request`, `conflicts`, `merge`, `commit`, `error`, `checks` |
         | `stop` | `pushed`, `not_pushed` | `commit`, `error` |
 
         A `stop` the app did not ask for is the runner's own failure (an error
@@ -652,6 +724,12 @@ components:
         reports `published` with `merge` null, also when the step said
         `merge: true`. The app then reports the pull request as open and not
         merged because of the stop, and leaves the merge status as it is.
+
+        A `publish` that waits for the merge stops waiting as soon as the pull
+        request's CI checks fail: it reports `merge: failed` with the failed
+        `checks`. The app then moves the issue to To do with their output
+        instead of to Review, a few times per issue (decision
+        2026-11-17-failed-ci-goes-back-to-todo).
       properties:
         step:
           type: string
@@ -703,6 +781,26 @@ components:
           type: [string, 'null']
           maxLength: 100
           description: The last commit of the work.
+        checks:
+          type: [array, 'null']
+          maxItems: 20
+          description: With `merge` `failed`, the CI checks that failed; left out or empty when the forge refused the merge itself.
+          items:
+            $ref: '#/components/schemas/FailedCheck'
+        refused_hosts:
+          type: [array, 'null']
+          maxItems: 20
+          description: |
+            With `run`, `resolve` and `check`: the `host:port` pairs the step's
+            egress proxy refused, each once, the host in lower case as the
+            allowlist writes it (decision 2026-11-17-blocked-hosts). The app
+            names the ones new to the issue in a comment and, unless the
+            report said `strict_hosts`, asks a person whether the agent may
+            reach them, which moves the issue to Blocked. An entry that is not
+            a `host:port` is ignored. Left out or empty, none.
+          items:
+            type: string
+            maxLength: 260
 
     Usage:
       type: object
@@ -754,7 +852,7 @@ components:
       description: |
         What the runner does next, a closed set by `kind`. A step never
         carries a command, a path, a docker option, an environment variable
-        or a URL. A kind the runner does not know ends the run with an
+        or a URL; its `allow_hosts` are only `host:port` pairs a person allowed. A kind the runner does not know ends the run with an
         unasked `stop` whose `error` names the runner's version.
       oneOf:
         - $ref: '#/components/schemas/RunStep'
@@ -791,9 +889,11 @@ components:
           enum: [new, resume]
         token:
           type: [string, 'null']
-          description: The scoped MCP token for this turn; null, the agent works without Cinderline. The app deletes the run's earlier tokens when it answers, and all of them at `done`.
+          description: The scoped MCP token for this turn, of kind `orchestrator`, `reader` (a sub-issue of the orchestrator's own) or `manager` (a Project Manager run); null, the agent works without Cinderline. The app deletes the run's earlier tokens when it answers, and all of them at `done`.
         prompt:
           type: string
+        allow_hosts:
+          $ref: '#/components/schemas/AllowHosts'
         attachments:
           type: [array, 'null']
           description: The files to put in the attachments folder, emptied first; null, leave the folder as it is.
@@ -827,6 +927,8 @@ components:
           type: [string, 'null']
         prompt:
           type: string
+        allow_hosts:
+          $ref: '#/components/schemas/AllowHosts'
         reason:
           $ref: '#/components/schemas/Reason'
 
@@ -839,6 +941,8 @@ components:
           const: check
         issue:
           $ref: '#/components/schemas/StepIssue'
+        allow_hosts:
+          $ref: '#/components/schemas/AllowHosts'
         reason:
           $ref: '#/components/schemas/Reason'
 
@@ -881,6 +985,17 @@ components:
           description: '`paused`: the run continues in this session (it waits for a person, reached its budget, was stopped, or is a team between its rounds). `kept`: for a follow-up.'
         reason:
           $ref: '#/components/schemas/Reason'
+
+    AllowHosts:
+      type: array
+      description: |
+        The `host:port` pairs a person allowed for this issue's runs by
+        answering "Yes, this run" (decision 2026-11-17-blocked-hosts), sub-issues
+        included. The runner adds them to this step's proxy allowlist, unless
+        it has strict host blocking on, and never opens `localhost`, a loopback
+        address or `host.docker.internal` through them. Left out, none.
+      items:
+        type: string
 
     Reason:
       type: string

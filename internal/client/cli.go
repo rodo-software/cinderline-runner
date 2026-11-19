@@ -97,10 +97,14 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	if k.libs {
 		libs = c.Tools.OpenCodeEnv
 	}
+	mounts := agentMounts(c.Project, c.Name, c.Tools)
+	if t.Attachments != "" {
+		mounts = append(mounts, "-v", t.Attachments+":"+workspace.AttachmentsPath+":ro")
+	}
 	out, err := c.Env.Run(ctx, environment.Spec{
 		Issue:   path.Base(t.Dir), // the clone is RunsPath/<REF>
 		Dir:     t.Dir,
-		Mounts:  agentMounts(c.Project, c.Name, c.Tools),
+		Mounts:  mounts,
 		Env:     slices.Concat(c.Tools.Env, libs, k.env(c, t), workspace.Identity(t.Author)),
 		Cmd:     k.cmd(c, t, session),
 		Stdin:   t.Prompt,

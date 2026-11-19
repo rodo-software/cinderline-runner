@@ -101,8 +101,11 @@ func (c *CLI) busy(p config.Project) error {
 		return err
 	}
 	for _, s := range st.Projects {
-		if s.Project == p.Label() && s.Issue != "" {
+		switch {
+		case s.Project == p.Label() && s.Issue != "":
 			return fmt.Errorf("%s is running %s; rename it when the run has ended", p.Key, s.Issue)
+		case s.Project == p.Label() && s.Manager != "":
+			return fmt.Errorf("%s is running the Project Manager on %s; rename it when the run has ended", p.Key, s.Manager)
 		}
 	}
 	if _, err := os.Stat(run.OutboxFile(c.Paths.State, p)); err == nil {

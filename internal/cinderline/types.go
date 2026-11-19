@@ -8,6 +8,10 @@ type PollRequest struct {
 	Report  Report   `json:"report"`
 	Running []string `json:"running"` // never null
 	Idle    bool     `json:"idle"`
+	// ManagerIdle says the runner's Project Manager slot is free. Only a
+	// runner with the slot sends it, false too, as sending the field claims
+	// it (decision 2026-11-17-project-manager).
+	ManagerIdle bool `json:"manager_idle"`
 	// Held, when set, asks what to do with these issues' sessions and clones.
 	Held []string `json:"held,omitzero"`
 	// Review, when not nil, asks for the Review list; an empty list asks too.
@@ -71,11 +75,15 @@ type ReviewFact struct {
 
 // PollAnswer is the app's answer to a poll.
 type PollAnswer struct {
-	PollAfter   int      `json:"poll_after"`   // seconds
-	ReviewAfter int      `json:"review_after"` // seconds
-	Project     Project  `json:"project"`
-	Job         *Job     `json:"job"` // nil: no work
-	Stop        []string `json:"stop"`
+	PollAfter   int     `json:"poll_after"`   // seconds
+	ReviewAfter int     `json:"review_after"` // seconds
+	Project     Project `json:"project"`
+	Job         *Job    `json:"job"` // nil: no work
+	// ManagerJob is the job for the runner's Project Manager slot, nil:
+	// none. Only when the poll said ManagerIdle, null unless it was true
+	// (decision 2026-11-17-project-manager).
+	ManagerJob *Job     `json:"manager_job"`
+	Stop       []string `json:"stop"`
 	// Held and Review are nil when the poll did not ask for them.
 	Held   []HeldItem   `json:"held"`
 	Review []ReviewItem `json:"review"`

@@ -176,7 +176,7 @@ func TestClaudeRunFresh(t *testing.T) {
 			return "", nil
 		},
 	}
-	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Idle: 10 * time.Minute, Model: "m", Author: "Dev / Coder", Token: "tok", Allow: []string{"pypi.org:443"}})
+	res, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Prompt: "do it", MaxTurns: 5, MaxMinutes: 30, Idle: 10 * time.Minute, Model: "m", Author: "Dev / Coder", Token: "tok", Allow: []string{"pypi.org:443"}, Attachments: "/state/attachments/CSR-7"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestClaudeRunFresh(t *testing.T) {
 	want := environment.Spec{
 		Issue:   "CSR-7",
 		Dir:     "/runs/CSR-7",
-		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-claude:/state", "-v", "tools:/opt/cinderline:ro"},
+		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "-v", "cinderline-CSR-runs:/runs", "-v", "cinderline-CSR-state-claude:/state", "-v", "tools:/opt/cinderline:ro", "-v", "/state/attachments/CSR-7:/attachments:ro"},
 		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1"}, claudeEnv("sk-ant-api03-k", Turn{Token: "tok"}), wantIdentity),
 		Cmd:     append([]string{"/opt/cinderline/bin/claude"}, claudeArgs(Turn{Model: "m", MaxTurns: 5, Token: "tok"}, session, "https://cs.example/mcp")...),
 		Stdin:   "do it",

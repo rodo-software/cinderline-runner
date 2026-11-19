@@ -43,10 +43,13 @@ func Listen(path string) (net.Listener, error) {
 
 // ProjectStatus is what the daemon tells of one project.
 type ProjectStatus struct {
-	Project     string    `json:"project"`
-	Connected   bool      `json:"connected"`            // the last poll succeeded
-	LastPoll    time.Time `json:"last_poll,omitzero"`   // the last successful poll
-	Issue       string    `json:"issue,omitempty"`      // the run in flight
+	Project   string    `json:"project"`
+	Connected bool      `json:"connected"`          // the last poll succeeded
+	LastPoll  time.Time `json:"last_poll,omitzero"` // the last successful poll
+	Issue     string    `json:"issue,omitempty"`    // the run in flight
+	// Manager is the run in flight in the Project Manager slot, next to the
+	// team's run; "": none (decision 2026-11-17-project-manager).
+	Manager     string    `json:"manager,omitempty"`
 	LastError   string    `json:"last_error,omitempty"` // the last failure; cleared by the next successful poll
 	LastErrorAt time.Time `json:"last_error_at,omitzero"`
 }

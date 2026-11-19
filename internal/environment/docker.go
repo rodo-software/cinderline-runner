@@ -61,8 +61,9 @@ type Docker struct {
 	// Allow is the project's hosts every run may reach, as host:port
 	// (ProjectHosts); each run adds its client's Spec.Allow.
 	Allow []string
-	// OnRefused is called with each host:port the run's proxy refused; nil: none.
-	OnRefused func(hostPort string)
+	// OnRefused is called with each host:port the run's proxy refused, and
+	// the run's issue; nil: none.
+	OnRefused func(issue, hostPort string)
 	// OnFetch is called before the default image is pulled or built, a slow
 	// first-time step; nil: none. A failed pull calls it again for the build.
 	OnFetch func()
@@ -225,7 +226,7 @@ func (d *Docker) refused(ctx context.Context, issue string) {
 		hp := e.Host + ":" + e.Port
 		log.Warn("host refused", "host", hp, "at", e.Time)
 		if d.OnRefused != nil {
-			d.OnRefused(hp)
+			d.OnRefused(issue, hp)
 		}
 	}
 }

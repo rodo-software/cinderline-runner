@@ -100,11 +100,18 @@ type Docker struct {
 	Repository string // the configured repository URL, the only remote
 	Token      string // the git token; reaches only the helper's environment
 	Exec       Exec
+
+	// repoMu lets one fetch or push write the bare clone at a time: a
+	// project's team run and Project Manager run share it (CLR-194), and
+	// git refuses a ref lock another git holds.
+	repoMu sync.Mutex
 }
 
 // Fetch makes the project's repo volume and bare clone if missing and
 // mirrors the remote's branches into it.
 func (d *Docker) Fetch(ctx context.Context) error {
+	d.repoMu.Lock()
+	defer d.repoMu.Unlock()
 	labels := d.labels("")
 	if err := d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, labels...), d.volume("repo"))...); err != nil {
 		return err
@@ -129,6 +136,8 @@ func (d *Docker) Push(ctx context.Context, dir, branch string) ([]Secret, error)
 	}
 	labels := d.labels(strings.TrimPrefix(branch, name.Name+"/"))
 	scratch := "refs/push/" + branch
+	d.repoMu.Lock()
+	defer d.repoMu.Unlock()
 	// The clone belongs to the agent's UID, so git needs it named safe; only
 	// that exact path.
 	if err := d.helper(ctx, labels, false, true, "-c", "safe.directory="+dir, "-C", RepoPath, "fetch", "--quiet", "--no-tags", dir, "+refs/heads/"+branch+":"+scratch); err != nil {

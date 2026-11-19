@@ -1,6 +1,7 @@
 package run
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -150,8 +151,10 @@ func runWorkspace(branch, base string, extras []config.ExtraRepository, links []
 
 // prepareRun prepares the run's environment and clone. What it could not
 // prepare but the run can do without goes into the workspace's notes; an
-// error means the run did not start.
-func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb cinderline.Job) (*job, *conflict, *held, error) {
+// error means the run did not start. A manager run (CLR-194) reads a fresh
+// clone of the base: it does not keep an earlier clone's work, resume its
+// clone or merge the base into it, though it may resume its session.
+func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb cinderline.Job, manager bool) (*job, *conflict, *held, error) {
 	ref, team := jb.Issue.Ref, jb.Team
 	// The ref becomes a branch, a folder and a file name.
 	if !workspace.IssueRef.MatchString(ref) {
@@ -172,6 +175,8 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	p.prepMu.Lock()
+	defer p.prepMu.Unlock()
 	if p.prepare != nil {
 		if err := p.prepare(ctx, proj, base); err != nil {
 			return nil, nil, nil, fmt.Errorf("the run's environment could not be prepared: %w", err)
@@ -179,20 +184,37 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 	}
 	j := &job{
 		ref: ref, title: jb.Issue.Title, body: jb.Issue.Body, branch: name.Name + "/" + ref, base: base,
-		team: team, check: proj.CheckCommand, idle: time.Duration(max(proj.IdleMinutes, 0)) * time.Minute, fg: fg,
+		team: team, check: proj.CheckCommand, idle: time.Duration(max(proj.IdleMinutes, 0)) * time.Minute, fg: fg, manager: manager,
 	}
 	extras, notes := p.extraRepositories(ctx, ref)
 	// Fetched on every run, so a resume and a follow-up read fresh code too.
 	links, more := p.linkedProjects(ctx, ref, proj.LinkedProjects)
 	notes = append(notes, more...)
-	// A run's attachments come from its steps; another run's files must not linger.
-	if err := p.resetAttachments(); err != nil {
-		return nil, nil, nil, err
-	}
 	h := &held{reports: map[string]string{}, agents: map[string]string{}}
 	h.lead = session{issue: ref, agent: lead.Name}
+	if manager {
+		// The manager's clone is read-only and replaced fresh on every run:
+		// only its session may be resumed, in a fresh clone of the base.
+		if n, ok := p.managerResume(j, lead.Client); ok {
+			h.lead.id, h.lead.origin = n.Session, n.Origin
+		}
+		if err := p.resetAttachments(ref); err != nil {
+			return nil, nil, nil, err
+		}
+		if j.dir, err = p.Workspace.Prepare(ctx, j.branch, base); err != nil {
+			return nil, nil, nil, err
+		}
+		// Noted at once, so tidying never pushes the clone, even after a crash.
+		p.saveNote(ref, p.note(j, h, cmp.Or(h.lead.origin, "paused")))
+		j.ws = runWorkspace(j.branch, base, extras, links, notes)
+		return j, nil, h, nil
+	}
 	n, resumed, more := p.resume(ctx, j, lead.Client)
 	notes = append(notes, more...)
+	// A run's attachments come from its steps; another run's files must not linger.
+	if err := p.resetAttachments(ref); err != nil {
+		return nil, nil, nil, err
+	}
 	if resumed {
 		j.dir, h.lead.id, h.lead.origin = n.Dir, n.Session, n.Origin
 	} else if err := p.keepWork(ctx, ref, leadAuthor(team), ref+": "+j.title); err != nil {
@@ -204,6 +226,17 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 	// Also on a fresh clone, where the merge changes nothing, as Prepare
 	// does not say whether it continued the remote branch.
 	return j, p.catchUp(ctx, j), h, nil
+}
+
+// managerResume returns the note of the manager's kept session, if it can
+// be resumed: a session of this client. The clone it named need not be
+// there and is never continued: the run reads a fresh clone of the base.
+func (p *Project) managerResume(j *job, cl string) (Note, bool) {
+	n, ok := p.readNote(j.ref)
+	if !ok || n.Pruned != "" || n.Session == "" || n.Client != cl || !n.Manager {
+		return Note{}, false
+	}
+	return n, true
 }
 
 // resume returns the note of the session the run continues, if it can: a

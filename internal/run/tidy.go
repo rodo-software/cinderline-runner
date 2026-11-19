@@ -65,6 +65,9 @@ func (p *Project) held(ctx context.Context) (refs []string, stranded []workspace
 func (p *Project) tidy(ctx context.Context, asked []string, items []cinderline.HeldItem, stranded []workspace.Clone) {
 	for _, c := range stranded {
 		ref, _ := strings.CutPrefix(c.Branch, name.Name+"/")
+		if n, _ := p.readNote(path.Base(c.Dir)); n.Manager {
+			continue // a Project Manager's clone is never pushed, only deleted (CLR-194)
+		}
 		if _, err := p.Workspace.Push(ctx, c.Dir, c.Branch); err != nil {
 			p.Log.Warn("stranded branch not pushed", "project", p.Config.Key, "issue", ref, "err", err)
 			continue
@@ -119,6 +122,23 @@ func (p *Project) tidy(ctx context.Context, asked []string, items []cinderline.H
 	}
 }
 
+// removeClone deletes the manager run's clone and its attachments folder at
+// the run's end: the clone is read-only and its work never moves, so nothing
+// is kept (CLR-194). A failure only logs.
+func (p *Project) removeClone(ctx context.Context, j *job) {
+	if p.Workspace == nil {
+		return
+	}
+	if j.dir != "" {
+		if err := p.Workspace.Remove(ctx, j.dir); err != nil {
+			p.Log.Warn("manager clone not removed", "project", p.Config.Key, "issue", j.ref, "err", err)
+		}
+	}
+	if err := p.dropAttachments(j.ref); err != nil {
+		p.Log.Warn("manager attachments not removed", "project", p.Config.Key, "issue", j.ref, "err", err)
+	}
+}
+
 // remove deletes ref's clone, once its work is kept, its client session
 // files and its note, in that order, so a failure leaves the note for the
 // next tidy. why is logged; for a session pruned by the limits it replaces
@@ -126,14 +146,21 @@ func (p *Project) tidy(ctx context.Context, asked []string, items []cinderline.H
 func (p *Project) remove(ctx context.Context, ref string, n Note, why string) {
 	log := p.Log.With("project", p.Config.Key, "issue", ref)
 	if n.Dir != "" && p.Workspace != nil {
-		if err := p.keepWork(ctx, ref, "", ref+": work left in the clone"); err != nil {
-			log.Warn("clone not deleted", "err", err)
-			return
+		if !n.Manager {
+			if err := p.keepWork(ctx, ref, "", ref+": work left in the clone"); err != nil {
+				log.Warn("clone not deleted", "err", err)
+				return
+			}
 		}
 		if err := p.Workspace.Remove(ctx, n.Dir); err != nil {
 			log.Warn("clone not deleted", "err", err)
 			return
 		}
+	}
+	// Each run has its own folder (CLR-194): a removed issue's must not linger.
+	if err := p.dropAttachments(ref); err != nil {
+		log.Warn("attachments not removed", "err", err)
+		return
 	}
 	if n.Session != "" && !p.forget(ctx, ref, n.Session) {
 		return

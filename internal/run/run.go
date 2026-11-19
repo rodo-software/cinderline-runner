@@ -40,6 +40,10 @@ type job struct {
 	idle             time.Duration   // the project's idle limit for a turn
 	fg               forge.Forge
 	ws               cinderline.RunWorkspace
+	// manager is a run in the Project Manager slot: it reads a fresh clone
+	// of the base, never commits or pushes, and refuses a check, publish or
+	// resolve step (CLR-194).
+	manager bool
 }
 
 func (j *job) isTeam() bool { return len(j.team.Agents) > 1 }
@@ -106,7 +110,7 @@ func malformed(c *cinderline.Client, kind, why string) error {
 // started false when the run did not start; err then says why, or is nil
 // when the app took the job back (a 409 on the first call). Nothing is
 // claimed before the first call, so a run that did not start wrote nothing.
-func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline.Project, jb cinderline.Job) (started bool, err error) {
+func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline.Project, jb cinderline.Job, manager bool) (started bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			p.Log.Error("panic", "project", p.Config.Key, "issue", jb.Issue.Ref, "stack", string(debug.Stack()))
@@ -115,9 +119,13 @@ func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline
 			}
 		}
 	}()
-	j, cf, h, err := p.prepareRun(ctx, proj, jb)
+	j, cf, h, err := p.prepareRun(ctx, proj, jb, manager)
 	if err != nil {
 		return false, err
+	}
+	// A manager run never commits or pushes: its clone is only read.
+	if j.manager {
+		defer p.removeClone(context.WithoutCancel(ctx), j) // also after a plain stop
 	}
 	return p.steps(ctx, c, j, cf, h)
 }
@@ -201,11 +209,14 @@ func (p *Project) step(ctx context.Context, c *cinderline.Client, j *job, h *hel
 	}()
 	cf := *pending
 	*pending = nil
+	if j.manager && step.Kind != "run" && step.Kind != "stop" {
+		return nil, malformed(c, step.Kind, "a Project Manager run is never checked, published or merged")
+	}
 	if step.Kind == "run" || step.Kind == "resolve" || step.Kind == "check" {
-		p.takeRefused() // what an earlier step left is not this one's
+		p.takeRefused(j.ref) // what an earlier step left is not this one's
 		defer func() {
 			if last != nil {
-				last.RefusedHosts = p.takeRefused()
+				last.RefusedHosts = p.takeRefused(j.ref)
 			}
 		}()
 	}
@@ -243,7 +254,7 @@ func (p *Project) next(ctx context.Context, c *cinderline.Client, ref string, re
 
 // note is the note of the lead's session.
 func (p *Project) note(j *job, h *held, origin string) Note {
-	return Note{Dir: j.dir, Session: h.lead.id, Client: j.team.Agents[0].Client, Origin: origin}
+	return Note{Dir: j.dir, Session: h.lead.id, Client: j.team.Agents[0].Client, Origin: origin, Manager: j.manager}
 }
 
 // keepLead keeps the lead's session under origin, or drops the note when there is none.
@@ -273,9 +284,14 @@ func (p *Project) pause(ctx context.Context, j *job, h *held) {
 
 // stop commits and pushes what the clone holds. A secret the runner knows
 // in its commits is the outcome secret: nothing is pushed and the clone
-// stays as it is.
+// stays as it is. A manager run's clone is read-only: it is neither
+// committed nor pushed, and the stop reports not_pushed (CLR-194).
 func (p *Project) stop(ctx context.Context, j *job) cinderline.LastStep {
 	last := cinderline.LastStep{Step: "stop", Issue: j.ref}
+	if j.manager {
+		last.Outcome = "not_pushed" // not even what its agent changed
+		return last
+	}
 	var found []workspace.Secret
 	_, err := p.Workspace.Commit(ctx, j.dir, leadAuthor(j.team), j.ref+": "+j.title)
 	if err == nil {
@@ -327,7 +343,7 @@ func (p *Project) runStep(ctx context.Context, c *cinderline.Client, j *job, h *
 	}
 	issue := step.Issue.Ref
 	last, _, err := p.agentTurn(ctx, c, j, h, step, issue)
-	if err != nil || issue == j.ref || last.Outcome == "not_started" {
+	if err != nil || issue == j.ref || last.Outcome == "not_started" || j.manager {
 		return last, err
 	}
 	if _, err := p.Workspace.Commit(ctx, j.dir, gitAuthor(j.team, step.Agent), issue+": "+step.Issue.Title); err != nil {
@@ -383,7 +399,7 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Outcome, last.Error = "not_started", ptr(err.Error())
 		return last, client.Result{}, nil
 	}
-	turn := client.Turn{Dir: j.dir, Prompt: step.Prompt, MaxTurns: j.team.MaxTurns, MaxMinutes: j.team.MaxMinutes, Ponytail: j.team.Ponytail, Idle: j.idle, Allow: p.allowHosts(issue, step.AllowHosts)}
+	turn := client.Turn{Dir: j.dir, Attachments: attachmentsDir(p.State, p.Config, j.ref), Prompt: step.Prompt, MaxTurns: j.team.MaxTurns, MaxMinutes: j.team.MaxMinutes, Ponytail: j.team.Ponytail, Idle: j.idle, Allow: p.allowHosts(issue, step.AllowHosts)}
 	switch step.Session {
 	case "new":
 	case "resume":
@@ -456,12 +472,13 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 
 // stoppable is ctx for a step of run ref that the poll's stop may end: a
 // turn, a check, a publish. The step calls end when it is done; end reports
-// whether a stop came. A stop between steps is ignored.
+// whether a stop came. A stop between steps is ignored. Two runs may have a
+// step in flight at once, so the cancels are per run (CLR-194).
 func (p *Project) stoppable(ctx context.Context, ref string) (sctx context.Context, end func() bool) {
 	sctx, cancel := context.WithCancelCause(ctx)
 	p.setTurn(ref, cancel)
 	return sctx, func() bool {
-		p.setTurn("", nil)
+		p.setTurn(ref, nil)
 		cancel(nil)
 		return stopped(sctx)
 	}
@@ -474,16 +491,23 @@ func stopped(ctx context.Context) bool { return errors.Is(context.Cause(ctx), er
 func (p *Project) setTurn(ref string, cancel context.CancelCauseFunc) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.stopRef, p.stopRun = ref, cancel
+	if cancel == nil {
+		delete(p.stopRuns, ref)
+		return
+	}
+	if p.stopRuns == nil {
+		p.stopRuns = map[string]context.CancelCauseFunc{}
+	}
+	p.stopRuns[ref] = cancel
 }
 
 // stopTurn ends the step in flight of run ref, if any, as stopped.
 func (p *Project) stopTurn(ref string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.stopRun != nil && p.stopRef == ref {
+	if cancel := p.stopRuns[ref]; cancel != nil {
 		p.Log.Info("step stopped by Cinderline", "project", p.Config.Key, "issue", ref)
-		p.stopRun(errStopped)
+		cancel(errStopped)
 	}
 }
 
@@ -568,10 +592,10 @@ func (p *Project) stepAttachments(ctx context.Context, c *cinderline.Client, ref
 		}
 		taken[lower] = true
 	}
-	if err := p.resetAttachments(); err != nil {
+	if err := p.resetAttachments(ref); err != nil {
 		return err
 	}
-	dir := attachmentsDir(p.State, p.Config)
+	dir := attachmentsDir(p.State, p.Config, ref)
 	for _, f := range files {
 		if err := c.DownloadAttachment(ctx, f.Issue, f.ID, filepath.Join(dir, f.Name)); err != nil {
 			return fmt.Errorf("attachment %s of %s: %w", f.Name, f.Issue, err)

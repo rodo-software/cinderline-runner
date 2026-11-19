@@ -80,14 +80,14 @@ type Project struct {
 
 	detectMu sync.Mutex    // one detection at a time
 	detected chan struct{} // closed by the first detection, so the loop polls at once; nil in tests
+	prepMu   sync.Mutex    // one run prepares at a time: the team's and the manager's share the environment, the bare repository and the extra volumes
 
-	mu      sync.Mutex
-	clients []cinderline.ReportClient // the last detection; nil before the first
-	refused int                       // connections the egress proxy refused since start
-	hosts   []string                  // the host:port pairs it refused since takeRefused, once each
-	status  localapi.ProjectStatus
-	stopRun context.CancelCauseFunc // ends the agent turn in flight; nil while none runs
-	stopRef string                  // the run whose turn stopRun ends
+	mu       sync.Mutex
+	clients  []cinderline.ReportClient // the last detection; nil before the first
+	refused  int                       // connections the egress proxy refused since start
+	hosts    map[string][]string       // by run's issue ref: the host:port pairs it refused since takeRefused, once each
+	status   localapi.ProjectStatus
+	stopRuns map[string]context.CancelCauseFunc // by run's issue ref: ends its step in flight
 
 	openRouter bool // the last detection found OpenCode's OpenRouter key usable; guarded by mu
 }
@@ -169,8 +169,8 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 			mount.Args = append(mount.Args, workspace.ExtraMount(cfg.ID(), workspace.ExtraPath)...)
 		}
 		mount.Args = append(mount.Args, workspace.ExtraMount(cfg.ID(), workspace.LinkedPath)...)
-		// The attachments folder is a bind: the runner downloads to the host.
-		mount.Args = append(mount.Args, "-v", attachmentsDir(state, cfg)+":"+workspace.AttachmentsPath+":ro")
+		// Attachments are a bind per run, added by the client when a turn has
+		// them: the runner downloads to the host.
 		for _, c := range clis {
 			c.Tools = mount
 		}
@@ -238,24 +238,32 @@ func (p *Project) hasClients() bool {
 }
 
 // AddRefused counts one connection the egress proxy refused, for the
-// report, and keeps its host:port for the step's facts: once, in lower case
-// as the allowlist writes it, and only a well-formed one.
-func (p *Project) AddRefused(hostPort string) {
+// report, and keeps its host:port for the step's facts of run ref: once, in
+// lower case as the allowlist writes it, and only a well-formed one. Two
+// runs may refuse at once, so the hosts are per run (CLR-194).
+func (p *Project) AddRefused(ref, hostPort string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.refused++
 	hp := strings.ToLower(hostPort)
-	if config.ValidHostPort(hp) && !slices.Contains(p.hosts, hp) {
-		p.hosts = append(p.hosts, hp)
+	if !config.ValidHostPort(hp) || slices.Contains(p.hosts[ref], hp) {
+		return
 	}
+	if p.hosts == nil {
+		p.hosts = map[string][]string{}
+	}
+	p.hosts[ref] = append(p.hosts[ref], hp)
 }
 
-// takeRefused returns the hosts refused since its last call and forgets them.
-func (p *Project) takeRefused() []string {
+// takeRefused returns the hosts run ref refused since its last call and
+// forgets them.
+func (p *Project) takeRefused(ref string) []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	hosts := p.hosts
-	p.hosts = nil
+	hosts := p.hosts[ref]
+	if p.hosts != nil {
+		delete(p.hosts, ref)
+	}
 	return hosts
 }
 

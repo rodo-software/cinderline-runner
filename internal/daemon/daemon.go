@@ -198,7 +198,7 @@ func (d *daemon) start(ctx context.Context, wg *sync.WaitGroup, log *slog.Logger
 		env := &environment.Docker{
 			Project: id, Log: log, Exec: workspace.RunCommand,
 			Allow:     environment.ProjectHosts(p.URL, p.AllowHosts),
-			OnRefused: func(hp string) { proj.AddRefused(hp) },
+			OnRefused: func(issue, hp string) { proj.AddRefused(issue, hp) },
 		}
 		proj, err = run.NewProject(p, cfg.Providers, sec, o.Paths.State, env, log)
 		if err != nil {

@@ -432,11 +432,11 @@ func TestRunLogsAndCountsRefusedHosts(t *testing.T) {
 		return record(ctx, env, argv...)
 	}
 	var refused []string
-	d.OnRefused = func(host string) { refused = append(refused, host) }
+	d.OnRefused = func(issue, host string) { refused = append(refused, issue+" "+host) }
 	if _, err := d.Run(context.Background(), turn); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"evil.example:443", "probe.example:80"}; !reflect.DeepEqual(refused, want) {
+	if want := []string{"CSR-31 evil.example:443", "CSR-31 probe.example:80"}; !reflect.DeepEqual(refused, want) {
 		t.Errorf("OnRefused got %q, want %q", refused, want)
 	}
 	for _, want := range []string{"host=evil.example:443", "host=probe.example:80"} {

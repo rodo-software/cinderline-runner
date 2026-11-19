@@ -44,12 +44,12 @@ func TestEachStepReportsItsRefusedHosts(t *testing.T) {
 	f.cl.Runs = []client.RunReply{ok("s", "Done.")}
 	f.p.Clients["claude"] = refusingClient{f.cl, func() {
 		for _, hp := range []string{"Evil.Example:443", "pypi.org:443", "evil.example:443", "garbage:"} {
-			f.p.AddRefused(hp)
+			f.p.AddRefused("CSR-1", hp)
 		}
 	}}
 	f.env.Runs = []environment.RunReply{{}}
-	f.p.Env = refusingEnv{f.env, func() { f.p.AddRefused("files.pythonhosted.org:443") }}
-	f.p.AddRefused("before.example:443")
+	f.p.Env = refusingEnv{f.env, func() { f.p.AddRefused("CSR-1", "files.pythonhosted.org:443") }}
+	f.p.AddRefused("CSR-1", "before.example:443")
 	app := &fakeApp{onNext: stepsOf(runNew, checkStep, `{"kind":"stop"}`)}
 	if _, err := f.run(t, app); err != nil {
 		t.Fatal(err)

@@ -45,6 +45,7 @@ var waitFor = func(d time.Duration) time.Duration {
 // ended is how a run ended, for the loop.
 type ended struct {
 	ref     string
+	manager bool // the Project Manager slot, not the team's
 	started bool
 	err     error
 }
@@ -56,8 +57,9 @@ type loop struct {
 	ctx      context.Context
 	draining bool
 
-	running string     // the run in flight; "": none
-	runDone chan ended // room for one: one run at a time
+	running string     // the team's run in flight; "": none
+	runDone chan ended // room for two: the team's run and the manager's
+	manager string     // the Project Manager's run in flight; "": none
 
 	upkeep     bool                         // a pass is in flight
 	upkeepDone chan []cinderline.ReviewFact // room for one: one pass at a time
@@ -71,8 +73,13 @@ type loop struct {
 	upgrade  string        // the 426 logged last
 	mismatch string        // why the repository pin refuses; "": it holds
 
-	startWait  time.Duration // after a run that did not start
-	startAt    time.Time     // no job before this
+	teamHold, managerHold startHold // each slot's own, so a manager run that does not start holds off no team run
+}
+
+// startHold is a slot's wait after a run that did not start.
+type startHold struct {
+	wait       time.Duration
+	at         time.Time // no job before this
 	notStarted *cinderline.ReportError
 }
 
@@ -81,7 +88,7 @@ type loop struct {
 // flight any more. A plain stop (ctx) cancels a run at once; drain takes no
 // new job and lets the run in flight finish.
 func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan struct{}) {
-	l := &loop{p: p, c: c, ctx: ctx, runDone: make(chan ended, 1), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: defaultReviewAfter}
+	l := &loop{p: p, c: c, ctx: ctx, runDone: make(chan ended, 2), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: defaultReviewAfter}
 	// What an earlier process left: no run is in flight yet. Only hygiene, so a failure only logs.
 	if err := p.Env.Cleanup(ctx); err != nil && ctx.Err() == nil {
 		p.Log.Warn("stale containers and networks not removed", "project", p.Config.Key, "err", err)
@@ -90,13 +97,15 @@ func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan s
 	defer timer.Stop()
 	detected := p.detected
 	for {
-		if l.draining && l.running == "" && !l.upkeep {
+		if l.draining && l.running == "" && l.manager == "" && !l.upkeep {
 			return
 		}
 		select {
 		case <-ctx.Done():
-			if l.running != "" {
-				<-l.runDone // the run sees ctx too and ends without a word
+			for _, ref := range []string{l.running, l.manager} {
+				if ref != "" {
+					<-l.runDone // the run sees ctx too and ends without a word
+				}
 			}
 			if l.upkeep {
 				<-l.upkeepDone
@@ -130,15 +139,18 @@ func (l *loop) poll() (wait time.Duration) {
 		}
 	}()
 	l.c.Replay(l.ctx)
-	// A run, an upkeep pass and tidying work on the same clones and bare
-	// repository, so one at a time: a poll that starts a pass says it is not
-	// idle, and tidying is done here, before the pass starts.
+	// A run, a manager run, an upkeep pass and tidying work on the same
+	// clones and bare repository, so one at a time: a poll that starts a pass
+	// or a run says it is not idle, and tidying is done here, before the pass
+	// starts. The manager slot is offered only while the team's slot and the
+	// upkeep pass are free (CLR-194).
 	idle := l.idle()
-	review := l.running == "" && !l.upkeep && !l.draining && l.mismatch == "" && time.Since(l.lastUpkeep) >= l.review
-	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs(), Idle: idle && !review}
+	managerIdle := l.managerIdle()
+	review := l.running == "" && l.manager == "" && !l.upkeep && !l.draining && l.mismatch == "" && time.Since(l.lastUpkeep) >= l.review
+	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs(), Idle: idle && !review, ManagerIdle: managerIdle && !review}
 	var asked []string
 	var stranded []workspace.Clone
-	tidy := idle && (l.lastTidy.IsZero() || time.Since(l.lastTidy) >= tidyEvery)
+	tidy := idle && l.manager == "" && (l.lastTidy.IsZero() || time.Since(l.lastTidy) >= tidyEvery)
 	if tidy {
 		var ok bool
 		if asked, stranded, ok = p.held(l.ctx); !ok {
@@ -189,7 +201,10 @@ func (l *loop) poll() (wait time.Duration) {
 		}
 	}
 	if ans.Job != nil && req.Idle && l.mismatch == "" {
-		l.start(proj, *ans.Job)
+		l.start(proj, *ans.Job, false)
+	}
+	if ans.ManagerJob != nil && req.ManagerIdle && l.mismatch == "" && ans.ManagerJob.Issue.Ref != l.running {
+		l.start(proj, *ans.ManagerJob, true)
 	}
 
 	after := defaultPollAfter
@@ -242,17 +257,23 @@ func (l *loop) report() cinderline.Report {
 	if l.mismatch != "" {
 		errs = append(errs, cinderline.ReportError{Kind: cinderline.KindRepositoryMismatch, Message: l.mismatch})
 	}
-	if l.notStarted != nil {
-		errs = append(errs, *l.notStarted)
+	for _, h := range []startHold{l.teamHold, l.managerHold} {
+		if h.notStarted != nil {
+			errs = append(errs, *h.notStarted)
+		}
 	}
 	return cinderline.Report{RunnerVersion: l.c.Version(), Clients: clients, Environments: Environments, Errors: errs, RefusedConnections: refused, ModelProviders: providers, ProviderModels: p.Models.Get(), StrictHosts: p.StrictHosts}
 }
 
-// runningRefs are the run in flight and the runs whose report waits in the outbox.
+// runningRefs are the runs in flight and the runs whose report waits in the
+// outbox, the team's first.
 func (l *loop) runningRefs() []string {
 	refs := []string{}
 	if l.running != "" {
 		refs = append(refs, l.running)
+	}
+	if l.manager != "" {
+		refs = append(refs, l.manager)
 	}
 	for _, ref := range l.c.Queued() {
 		if !slices.Contains(refs, ref) {
@@ -265,19 +286,32 @@ func (l *loop) runningRefs() []string {
 // idle says the runner can start a run now: none and no upkeep pass is in
 // flight, and client detection has a result, so the report names the clients.
 func (l *loop) idle() bool {
-	return l.running == "" && !l.upkeep && !l.draining && l.mismatch == "" && l.p.hasClients() && !time.Now().Before(l.startAt)
+	return l.running == "" && !l.upkeep && !l.draining && l.mismatch == "" && l.p.hasClients() && !time.Now().Before(l.teamHold.at)
 }
 
-// start runs the job in its own goroutine. The ref is running at once, so
-// no poll can miss it.
-func (l *loop) start(proj cinderline.Project, jb cinderline.Job) {
+// managerIdle says the Project Manager slot can start a run now: no manager
+// run is in flight and no upkeep pass is, so the clone and the repository it
+// reads do not move under it. The team's run is in its own slot and does not
+// block the manager's (CLR-194).
+func (l *loop) managerIdle() bool {
+	return l.manager == "" && !l.upkeep && !l.draining && l.mismatch == "" && l.p.hasClients() && !time.Now().Before(l.managerHold.at)
+}
+
+// start runs the job in its slot, in its own goroutine. The ref is running
+// at once, so no poll can miss it.
+func (l *loop) start(proj cinderline.Project, jb cinderline.Job, manager bool) {
 	ref := jb.Issue.Ref
-	l.running = ref
-	l.p.setStatus(func(s *localapi.ProjectStatus) { s.Issue = ref })
-	l.p.Log.Info("run started", "project", l.p.Config.Key, "issue", ref)
+	if manager {
+		l.manager = ref
+		l.p.setStatus(func(s *localapi.ProjectStatus) { s.Manager = ref })
+	} else {
+		l.running = ref
+		l.p.setStatus(func(s *localapi.ProjectStatus) { s.Issue = ref })
+	}
+	l.p.Log.Info("run started", "project", l.p.Config.Key, "issue", ref, "manager", manager)
 	go func() {
-		started, err := l.p.run(l.ctx, l.c, proj, jb)
-		l.runDone <- ended{ref, started, err}
+		started, err := l.p.run(l.ctx, l.c, proj, jb, manager)
+		l.runDone <- ended{ref: ref, manager: manager, started: started, err: err}
 	}()
 }
 
@@ -285,16 +319,24 @@ func (l *loop) start(proj cinderline.Project, jb cinderline.Job) {
 // holds off the next job, longer each time; one that starts ends that.
 func (l *loop) ended(e ended) {
 	p := l.p
-	l.running, l.lastTidy = "", time.Time{}
-	p.setStatus(func(s *localapi.ProjectStatus) { s.Issue = "" })
+	l.lastTidy = time.Time{}
+	h := &l.teamHold
+	if e.manager {
+		h = &l.managerHold
+		l.manager = ""
+		p.setStatus(func(s *localapi.ProjectStatus) { s.Manager = "" })
+	} else {
+		l.running = ""
+		p.setStatus(func(s *localapi.ProjectStatus) { s.Issue = "" })
+	}
 	switch {
 	case e.err != nil:
-		l.startWait = min(max(2*l.startWait, minStartWait), maxStartWait)
-		l.startAt = time.Now().Add(l.startWait)
-		l.notStarted = &cinderline.ReportError{Kind: cinderline.KindNotStarted, Issue: e.ref, Message: firstLine(e.err.Error())}
-		p.Log.Warn("run did not start", "project", p.Config.Key, "issue", e.ref, "err", e.err, "retry_in", l.startWait)
+		h.wait = min(max(2*h.wait, minStartWait), maxStartWait)
+		h.at = time.Now().Add(h.wait)
+		h.notStarted = &cinderline.ReportError{Kind: cinderline.KindNotStarted, Issue: e.ref, Message: firstLine(e.err.Error())}
+		p.Log.Warn("run did not start", "project", p.Config.Key, "issue", e.ref, "err", e.err, "retry_in", h.wait)
 	case e.started:
-		l.startWait, l.startAt, l.notStarted = 0, time.Time{}, nil
+		*h = startHold{}
 		p.Log.Info("run ended", "project", p.Config.Key, "issue", e.ref)
 	}
 }

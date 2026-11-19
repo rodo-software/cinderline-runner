@@ -73,6 +73,9 @@ func (c *CLI) status(args []string) int {
 		if p.Issue != "" {
 			parts = append(parts, "working on "+p.Issue)
 		}
+		if p.Manager != "" {
+			parts = append(parts, "Project Manager on "+p.Manager)
+		}
 		if p.LastError != "" {
 			parts = append(parts, "last error "+p.LastErrorAt.Local().Format(time.DateTime)+": "+p.LastError)
 		}
@@ -231,12 +234,16 @@ func (c *CLI) drainAndWait(ctx context.Context, keyed bool) error {
 
 var errInterrupted = errors.New("interrupted")
 
-// inFlight is the issues the daemon runs now.
+// inFlight is the issues the daemon runs now, each project's run first,
+// then its Project Manager run.
 func inFlight(st localapi.Status) []string {
 	var issues []string
 	for _, p := range st.Projects {
 		if p.Issue != "" {
 			issues = append(issues, p.Issue)
+		}
+		if p.Manager != "" {
+			issues = append(issues, p.Manager)
 		}
 	}
 	return issues

@@ -22,7 +22,7 @@ const runNew = `{"kind":"run","issue":{"ref":"CSR-1","title":"Fix it"},"agent":"
 
 func (f *fixture) run(t *testing.T, app *fakeApp) (bool, error) {
 	t.Helper()
-	return f.p.run(context.Background(), app.client(t), proj, soloJob())
+	return f.p.run(context.Background(), app.client(t), proj, soloJob(), false)
 }
 
 // A solo run: the first request carries the run's facts and nothing else;
@@ -240,7 +240,7 @@ func TestAnUnreachableNextPausesAndQueues(t *testing.T) {
 	}
 	c := app.client(t)
 	c.Outbox = filepath.Join(t.TempDir(), "outbox.json")
-	if started, err := f.p.run(context.Background(), c, proj, soloJob()); !started || err != nil {
+	if started, err := f.p.run(context.Background(), c, proj, soloJob(), false); !started || err != nil {
 		t.Fatalf("run = %v, %v", started, err)
 	}
 	reqs := app.requests()
@@ -309,7 +309,7 @@ func TestAStopEndsTheTurnAsStopped(t *testing.T) {
 	app := &fakeApp{onNext: stepsOf(runNew)}
 	c := app.client(t)
 	var wg sync.WaitGroup
-	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob()) })
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), false) })
 	<-b.started
 	f.p.stopTurn("CSR-2") // another run's: nothing
 	f.p.stopTurn("CSR-1")
@@ -356,7 +356,7 @@ func TestAPublishConflictIsResolvedAndVerified(t *testing.T) {
 		f.ws.Markers = []workspace.BoolReply{{}}
 		f.ws.Resets = []error{nil}
 		f.cl.Runs = []client.RunReply{ok("r1", "Merged.")}
-		f.p.Clients["claude"] = refusingClient{f.cl, func() { f.p.AddRefused("proxy.golang.org:80") }}
+		f.p.Clients["claude"] = refusingClient{f.cl, func() { f.p.AddRefused("CSR-1", "proxy.golang.org:80") }}
 		app := &fakeApp{onNext: stepsOf(`{"kind":"publish","resolve_conflicts":true}`, `{"kind":"resolve","agent":"Coder","session":"new","token":null,"prompt":"Resolve.","allow_hosts":["pypi.org:443"]}`)}
 		if _, err := f.run(t, app); err != nil {
 			t.Fatal(err)
@@ -449,9 +449,13 @@ func TestStepAttachments(t *testing.T) {
 			t.Errorf("%s: outcome %s, want %s", tc.files, got, tc.want)
 		}
 		if tc.want == "finished" {
-			b, err := os.ReadFile(filepath.Join(attachmentsDir(f.p.State, cfg), "spec.pdf"))
+			b, err := os.ReadFile(filepath.Join(attachmentsDir(f.p.State, cfg, "CSR-1"), "spec.pdf"))
 			if string(b) != "PDF" || err != nil {
 				t.Errorf("spec.pdf = %q, %v", b, err)
+			}
+			// CLR-194: each run has its own folder, bound into its turns only.
+			if got := turns(f.cl)[0].Attachments; got != attachmentsDir(f.p.State, cfg, "CSR-1") {
+				t.Errorf("turn attachments %q", got)
 			}
 		}
 	}
@@ -491,7 +495,7 @@ func TestAFirstNextTheAppDoesNotAnswerIsNotQueued(t *testing.T) {
 	app := &fakeApp{onNext: func(int, string, cinderline.NextRequest) reply { return reply{503, `{"message":"deploying"}`} }}
 	c := app.client(t)
 	c.Outbox = filepath.Join(t.TempDir(), "outbox.json")
-	started, err := f.p.run(context.Background(), c, proj, soloJob())
+	started, err := f.p.run(context.Background(), c, proj, soloJob(), false)
 	if started || err == nil {
 		t.Errorf("run = %v, %v; want not started with the error", started, err)
 	}
@@ -529,7 +533,7 @@ func TestAStopEndsTheCheckAsStopped(t *testing.T) {
 	app := &fakeApp{onNext: stepsOf(`{"kind":"check","issue":{"ref":"CSR-1","title":"Fix it"}}`)}
 	c := app.client(t)
 	var wg sync.WaitGroup
-	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob()) })
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), false) })
 	<-env.started
 	f.p.stopTurn("CSR-1")
 	wg.Wait()

@@ -43,6 +43,9 @@ type Turn struct {
 	// turn's issue, which the caller has checked, for the run's allowlist
 	// next to the provider's (decision 2026-11-17-hosts-from-cinderline).
 	Allow []string
+	// Attachments is the host folder of the run's attachments, mounted
+	// read-only at workspace.AttachmentsPath; "": the run has none.
+	Attachments string
 }
 
 // Result is the parsed outcome of a turn.

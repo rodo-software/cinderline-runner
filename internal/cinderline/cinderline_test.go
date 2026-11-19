@@ -84,6 +84,24 @@ func TestPollSendsTheReportAndReadsTheAnswer(t *testing.T) {
 	}
 }
 
+// CLR-194: every poll says whether the Project Manager slot is free, false
+// too, as sending the field claims the slot; an answer without manager_job,
+// as older apps send, offers none, and one with it reads like job.
+func TestPollManagerSlot(t *testing.T) {
+	s := &server{status: []int{200}, body: `{"poll_after":30,"project":{"key":"CSR"},"job":null}`}
+	c := s.client(t)
+	ans, err := c.Poll(context.Background(), PollRequest{Running: []string{}})
+	if err != nil || ans.ManagerJob != nil || !strings.Contains(s.bodies[0], `"manager_idle":false`) {
+		t.Errorf("answer %+v, %v; body %s", ans, err, s.bodies[0])
+	}
+	s = &server{status: []int{200}, body: `{"poll_after":30,"project":{"key":"CSR"},"job":null,"manager_job":{"issue":{"ref":"CSR-2","title":"Plan","body":"b"},"team":{"name":"Project Manager","agents":[{"name":"Project Manager","client":"claude"}]}}}`}
+	c = s.client(t)
+	ans, err = c.Poll(context.Background(), PollRequest{Running: []string{}, ManagerIdle: true})
+	if err != nil || ans.ManagerJob == nil || ans.ManagerJob.Issue.Ref != "CSR-2" || ans.ManagerJob.Team.Agents[0].Name != "Project Manager" || !strings.Contains(s.bodies[0], `"manager_idle":true`) {
+		t.Errorf("answer %+v, %v; body %s", ans, err, s.bodies[0])
+	}
+}
+
 func TestNextRedactsWhatItSends(t *testing.T) {
 	redact.Add("test secret", "secret-value-1234567890")
 	s := &server{status: []int{200}, body: `{"state":"x","step":{"kind":"run","token":null}}`}

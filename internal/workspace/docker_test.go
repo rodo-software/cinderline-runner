@@ -7,7 +7,10 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const token = "s3cret-token"
@@ -96,6 +99,35 @@ func TestDockerPush(t *testing.T) {
 		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
 	}
 	tokenOnlyInEnv(t, *calls)
+}
+
+// CLR-194: two runs of a project, the team's and the Project Manager's,
+// never write the shared bare repository at once: git would refuse one of
+// them a ref lock.
+func TestDockerWritesTheRepoOneAtATime(t *testing.T) {
+	var inFlight, most atomic.Int32
+	d := &Docker{Project: "CSR", Repository: "https://git.example.com/o/r.git", Token: token,
+		Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
+			if slices.Contains(argv, "/repo") && slices.Contains(argv, "-C") {
+				n := inFlight.Add(1)
+				defer inFlight.Add(-1)
+				if n > most.Load() {
+					most.Store(n)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			return "", nil
+		},
+	}
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Go(func() { _ = d.Fetch(context.Background()) })
+		wg.Go(func() { _, _ = d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29") })
+	}
+	wg.Wait()
+	if most.Load() != 1 {
+		t.Errorf("%d git commands on the bare repository at once, want 1", most.Load())
+	}
 }
 
 func TestDockerPushRefusesDirOutsideRuns(t *testing.T) {
