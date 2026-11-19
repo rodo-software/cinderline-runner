@@ -262,18 +262,20 @@ func TestDetectKeyAndNetworkError(t *testing.T) {
 }
 
 // TestDetectLoginFileNoKey finds a login on the volume the project's ID
-// names, as `login` and every run name it; CLR-199: a project outside the
-// default workspace has an ID other than its key.
+// names, as `login` and every run name it, even when its workspace or
+// LocalID makes the ID differ from its key (CLR-199, CLR-206).
 func TestDetectLoginFileNoKey(t *testing.T) {
 	acme := testCfg
 	acme.Workspace = "acme"
+	renamed := testCfg
+	renamed.LocalID = "OLD"
 	for _, tc := range []struct {
-		name   string
-		cfg    config.Project
-		volume string // the state volume's name, less the client
+		name string
+		cfg  config.Project
 	}{
-		{"default workspace", testCfg, "cinderline-TEST-state-"},
-		{"other workspace", acme, "cinderline-acme-TEST-state-"},
+		{"default workspace", testCfg},
+		{"other workspace", acme},
+		{"local ID differs from key", renamed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			keyring.MockInit()
@@ -287,7 +289,7 @@ func TestDetectLoginFileNoKey(t *testing.T) {
 
 			// Login files exist (test -f exits 0)
 			for name, file := range map[string]string{"claude": "/state/claude/.credentials.json", "codex": "/state/codex/auth.json", "gemini": "/state/gemini/.gemini/oauth_creds.json"} {
-				s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", tc.volume + name + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", nil)
+				s.add([]string{"docker", "run", "--rm", "--network", "none", "-v", client.StateVolume(tc.cfg.ID(), name) + ":/state", "--entrypoint", "test", workspace.GitImage, "-f", file}, "", nil)
 			}
 
 			got := testDetect(ctx, s.exec, sec, tc.cfg)
@@ -296,6 +298,10 @@ func TestDetectLoginFileNoKey(t *testing.T) {
 				m[rc.Name] = rc
 			}
 			for _, name := range []string{"claude", "codex", "gemini"} {
+				mount := " -v " + client.StateVolume(tc.cfg.ID(), name) + ":/state "
+				if !slices.ContainsFunc(s.calls, func(call string) bool { return strings.Contains(call, mount) }) {
+					t.Errorf("%s login check did not mount %s; calls: %v", name, mount, s.calls)
+				}
 				if rc, ok := m[name]; ok {
 					if rc.State != "ready" {
 						t.Errorf("%s = %s, want ready", name, rc.State)
