@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/url"
 	"path/filepath"
 	"slices"
@@ -272,7 +273,7 @@ func (p *Project) takeRefused(ref string) []string {
 
 // allowHosts are the hosts a person allowed in Cinderline for issue's runs,
 // for a step's allowlist: none on a strict runner, and only those that pass
-// as an allow_hosts entry; the app's answer opens nothing else.
+// as an allow_hosts entry and do not name a private network address.
 func (p *Project) allowHosts(issue string, hosts []string) []string {
 	if len(hosts) == 0 {
 		return nil
@@ -284,8 +285,11 @@ func (p *Project) allowHosts(issue string, hosts []string) []string {
 	}
 	var out []string
 	for _, hp := range hosts {
-		if !config.AllowedHost(hp) {
-			log.Warn("host allowed in Cinderline dropped: not host:port, or the runner's own machine", "host", hp)
+		host, _, _ := net.SplitHostPort(hp)
+		ip := net.ParseIP(host)
+		// Local config keeps private access; app approvals do not (decision 2026-11-19-app-host-addresses).
+		if !config.AllowedHost(hp) || ip != nil && (ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified()) {
+			log.Warn("host allowed in Cinderline dropped: not host:port, or a private network address or the runner's own machine", "host", hp)
 			continue
 		}
 		out = append(out, strings.ToLower(hp))

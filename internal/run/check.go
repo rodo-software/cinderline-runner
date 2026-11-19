@@ -23,9 +23,9 @@ func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes in
 			"-v", workspace.Volume(p.Config.ID(), "repo") + ":" + workspace.RepoPath + ":ro",
 			"-v", workspace.Volume(p.Config.ID(), "runs") + ":" + workspace.RunsPath,
 		},
-		Cmd:     []string{"sh", "-c", check},
-		Timeout: time.Duration(maxMinutes) * time.Minute,
-		Allow:   allow,
+		Cmd:      []string{"sh", "-c", check},
+		Timeout:  time.Duration(maxMinutes) * time.Minute,
+		AppAllow: allow,
 	})
 	var exit interface{ ExitCode() int }
 	switch {

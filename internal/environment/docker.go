@@ -123,7 +123,12 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	}
 	// Only a turn's own provider maps the host, never the project's allow_hosts.
 	hostGateway := slices.ContainsFunc(s.Allow, func(hp string) bool { return strings.HasPrefix(hp, HostGateway+":") })
-	if err := d.up(ctx, s.Issue, proxy, append(slices.Clip(d.Allow), s.Allow...), hostGateway); err != nil {
+	allow := slices.Concat(d.Allow, s.Allow)
+	// Keep app approvals distinct through to dialing (decision 2026-11-19-app-host-addresses).
+	for _, hp := range s.AppAllow {
+		allow = append(allow, "public:"+hp)
+	}
+	if err := d.up(ctx, s.Issue, proxy, allow, hostGateway); err != nil {
 		return "", err
 	}
 	var p *composed

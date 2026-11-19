@@ -46,6 +46,9 @@ type Spec struct {
 	// Allow is the client's provider hosts, as host:port, for the run's
 	// network allowlist next to the project's (CSR-63).
 	Allow []string
+	// AppAllow holds app-approved host:port pairs. Unlike local config and
+	// provider hosts, these may connect only to public addresses.
+	AppAllow []string
 }
 
 // Tail is the end of a turn's output kept for comments: the last 40 lines,

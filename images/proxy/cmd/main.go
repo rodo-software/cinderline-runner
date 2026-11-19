@@ -10,6 +10,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +21,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -37,15 +41,18 @@ func main() {
 }
 
 // parseAllow reads the allowlist: exact host:port entries, the host in
-// lower case, no wildcards.
+// lower case, no wildcards. A public: prefix marks an app approval: false
+// means public addresses only, true means a locally trusted entry.
 func parseAllow(entries []string) (map[string]bool, error) {
 	set := map[string]bool{}
 	for _, e := range entries {
+		e, public := strings.CutPrefix(e, "public:")
 		host, port, ok := hostPort(e)
 		if !ok || strings.ContainsAny(host, "*/@ ") {
 			return nil, fmt.Errorf("allowlist entry %q is not host:port", e)
 		}
-		set[host+":"+port] = true
+		// Local permission wins regardless of order (decision 2026-11-19-app-host-addresses).
+		set[host+":"+port] = set[host+":"+port] || !public
 	}
 	return set, nil
 }
@@ -66,6 +73,28 @@ func hostPort(hp string) (host, port string, ok bool) {
 // which the runner maps for a local model provider with --add-host.
 var dial = (&net.Dialer{Timeout: 30 * time.Second}).DialContext
 
+var errPrivateAddress = errors.New("private network address not allowed")
+
+// Control sees the actual resolved IP before connect, including each
+// fallback address, so a DNS change cannot bypass the check.
+func checkPublicAddress(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return errPrivateAddress
+	}
+	// A resolved IPv6 link-local address may include an interface zone.
+	host, _, _ = strings.Cut(host, "%")
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+		return errPrivateAddress
+	}
+	return nil
+}
+
+var dialPublic = func(ctx context.Context, network, target string, control func(string, string, syscall.RawConn) error) (net.Conn, error) {
+	return (&net.Dialer{Timeout: 30 * time.Second, Control: control}).DialContext(ctx, network, target)
+}
+
 type proxy struct {
 	allow   map[string]bool
 	log     *slog.Logger
@@ -73,19 +102,52 @@ type proxy struct {
 }
 
 func newProxy(allow map[string]bool, out io.Writer) http.Handler {
-	return &proxy{
+	p := &proxy{
 		allow: allow,
 		log:   slog.New(slog.NewJSONHandler(out, nil)),
-		// A no-op Rewrite keeps the request's absolute URL as the target.
-		// A Transport without Proxy ignores proxy variables.
-		forward: &httputil.ReverseProxy{Rewrite: func(*httputil.ProxyRequest) {}, Transport: &http.Transport{DialContext: dial}},
 	}
+	// A no-op Rewrite keeps the request's absolute URL as the target.
+	// A Transport without Proxy ignores proxy variables.
+	p.forward = &httputil.ReverseProxy{
+		Rewrite:      func(*httputil.ProxyRequest) {},
+		Transport:    &http.Transport{DialContext: p.dial},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) { upstreamError(w, err) },
+	}
+	return p
+}
+
+func (p *proxy) dial(ctx context.Context, network, target string) (net.Conn, error) {
+	host, port, ok := hostPort(target)
+	trusted, listed := p.allow[host+":"+port]
+	if !ok || !listed {
+		return nil, errors.New("host not allowed")
+	}
+	if trusted {
+		return dial(ctx, network, target)
+	}
+	var refused sync.Once
+	return dialPublic(ctx, network, target, func(network, address string, c syscall.RawConn) error {
+		err := checkPublicAddress(network, address, c)
+		if err != nil {
+			// Dial may return another address's error; record the refusal here.
+			refused.Do(func() { p.log.Warn("refused", "host", host, "port", port) })
+		}
+		return err
+	})
+}
+
+func upstreamError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errPrivateAddress) {
+		http.Error(w, "host not allowed", http.StatusForbidden)
+		return
+	}
+	http.Error(w, "upstream unreachable", http.StatusBadGateway)
 }
 
 // allowed checks target against the list and logs a refusal.
 func (p *proxy) allowed(target string) bool {
 	host, port, ok := hostPort(target)
-	if ok && p.allow[host+":"+port] {
+	if _, listed := p.allow[host+":"+port]; ok && listed {
 		return true
 	}
 	if !ok {
@@ -120,9 +182,9 @@ func (p *proxy) tunnel(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "host not allowed", http.StatusForbidden)
 		return
 	}
-	up, err := dial(r.Context(), "tcp", r.Host)
+	up, err := p.dial(r.Context(), "tcp", r.Host)
 	if err != nil {
-		http.Error(w, "upstream unreachable", http.StatusBadGateway)
+		upstreamError(w, err)
 		return
 	}
 	defer up.Close()

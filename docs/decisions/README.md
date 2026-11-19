@@ -10,6 +10,7 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 
 ## Dated records in force
 
+- [2026-11-19-app-host-addresses](2026-11-19-app-host-addresses.md): app approvals cannot reach private addresses, including through DNS; local config retains its private-network access.
 - [2026-11-16-runner-protocol-v2](2026-11-16-runner-protocol-v2.md): the runner API contract, the same record in both repositories, with [`docs/runner-api/openapi.yaml`](../runner-api/openapi.yaml).
 - [2026-11-17-second-audit-decisions](2026-11-17-second-audit-decisions.md): a stop during publishing; no agent header.
 - [2026-11-17-local-model-providers](2026-11-17-local-model-providers.md): model providers for OpenCode agents.

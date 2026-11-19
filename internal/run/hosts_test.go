@@ -1,7 +1,9 @@
 package run
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -76,9 +78,11 @@ func TestEachStepReportsItsRefusedHosts(t *testing.T) {
 // allowlist, each checked as an allow_hosts entry; an invalid one is
 // dropped, not the step. On a strict runner none joins.
 func TestAStepOpensTheHostsAPersonAllowed(t *testing.T) {
-	allow := `"allow_hosts":["PyPI.org:443","localhost:8080","host.docker.internal:11434","127.0.0.1:1","*.evil.example:443","evil.example","files.pythonhosted.org:443"],`
+	allow := `"allow_hosts":["PyPI.org:443","localhost:8080","host.docker.internal:11434","127.0.0.1:1","*.evil.example:443","evil.example","files.pythonhosted.org:443","93.184.216.34:443","172.17.0.1:80","192.168.1.1:80","10.0.0.5:443","169.254.169.254:80","0.0.0.0:80"],`
 	for _, strict := range []bool{false, true} {
 		f := newFixture(t)
+		var logs bytes.Buffer
+		f.p.Log = slog.New(slog.NewTextHandler(&logs, nil))
 		f.p.StrictHosts = strict
 		f.cl.Runs = []client.RunReply{ok("s", "Done.")}
 		f.env.Runs = []environment.RunReply{{}}
@@ -90,7 +94,7 @@ func TestAStepOpensTheHostsAPersonAllowed(t *testing.T) {
 		}
 		var want []string
 		if !strict {
-			want = []string{"pypi.org:443", "files.pythonhosted.org:443"}
+			want = []string{"pypi.org:443", "files.pythonhosted.org:443", "93.184.216.34:443"}
 		}
 		if lasts := app.lasts(); len(lasts) != 2 || lasts[0].Outcome != "finished" || lasts[1].Outcome != "passed" {
 			t.Errorf("strict %v: lasts = %+v", strict, lasts)
@@ -98,8 +102,15 @@ func TestAStepOpensTheHostsAPersonAllowed(t *testing.T) {
 		if got := turns(f.cl)[0].Allow; !slices.Equal(got, want) {
 			t.Errorf("strict %v: turn allows %q, want %q", strict, got, want)
 		}
-		if got := f.env.Calls()[0].Args[0].(environment.Spec).Allow; !slices.Equal(got, want) {
+		if got := f.env.Calls()[0].Args[0].(environment.Spec).AppAllow; !slices.Equal(got, want) {
 			t.Errorf("strict %v: check allows %q, want %q", strict, got, want)
+		}
+		if !strict {
+			for _, hp := range []string{"172.17.0.1:80", "192.168.1.1:80", "10.0.0.5:443", "169.254.169.254:80", "0.0.0.0:80"} {
+				if !strings.Contains(logs.String(), `msg="host allowed in Cinderline dropped:`) || !strings.Contains(logs.String(), "host="+hp) {
+					t.Errorf("missing drop log for %s: %s", hp, logs.String())
+				}
+			}
 		}
 	}
 }

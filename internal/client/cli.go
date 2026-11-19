@@ -102,15 +102,16 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		mounts = append(mounts, "-v", t.Attachments+":"+workspace.AttachmentsPath+":ro")
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
-		Issue:   path.Base(t.Dir), // the clone is RunsPath/<REF>
-		Dir:     t.Dir,
-		Mounts:  mounts,
-		Env:     slices.Concat(c.Tools.Env, libs, k.env(c, t), workspace.Identity(t.Author)),
-		Cmd:     k.cmd(c, t, session),
-		Stdin:   t.Prompt,
-		Timeout: time.Duration(t.MaxMinutes) * time.Minute,
-		Idle:    t.Idle,
-		Allow:   slices.Concat(k.hosts(c, t), t.Allow),
+		Issue:    path.Base(t.Dir), // the clone is RunsPath/<REF>
+		Dir:      t.Dir,
+		Mounts:   mounts,
+		Env:      slices.Concat(c.Tools.Env, libs, k.env(c, t), workspace.Identity(t.Author)),
+		Cmd:      k.cmd(c, t, session),
+		Stdin:    t.Prompt,
+		Timeout:  time.Duration(t.MaxMinutes) * time.Minute,
+		Idle:     t.Idle,
+		Allow:    k.hosts(c, t),
+		AppAllow: t.Allow,
 	})
 	res := k.parse(out)
 	res.SessionID = cmp.Or(res.SessionID, t.SessionID)

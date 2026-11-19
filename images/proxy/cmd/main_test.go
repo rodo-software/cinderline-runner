@@ -8,7 +8,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -19,8 +21,178 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
+
+func TestAppEntriesArePublicOnlyAndLocalPermissionWins(t *testing.T) {
+	for _, entries := range [][]string{
+		{"public:App.Example:443", "mirror.example:443", "public:mirror.example:443"},
+		{"public:app.example:443", "public:mirror.example:443", "mirror.example:443"},
+	} {
+		got, err := parseAllow(entries)
+		want := map[string]bool{"app.example:443": false, "mirror.example:443": true}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("parseAllow(%q) = %v, %v; want %v", entries, got, err, want)
+		}
+	}
+	if _, err := parseAllow([]string{"public:*.example:443"}); err == nil {
+		t.Fatal("marked wildcard accepted")
+	}
+}
+
+func TestPublicAddressCheck(t *testing.T) {
+	for _, addr := range []string{"172.17.0.1:80", "192.168.1.1:80", "10.0.0.5:443", "169.254.169.254:80", "0.0.0.0:80", "127.0.0.1:80", "[::1]:80", "[fc00::1]:80", "[fe80::1%eth0]:80", "[::]:80", "bad:80"} {
+		if err := checkPublicAddress("tcp", addr, nil); !errors.Is(err, errPrivateAddress) {
+			t.Errorf("%s: got %v, want private address refusal", addr, err)
+		}
+	}
+	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443"} {
+		if err := checkPublicAddress("tcp", addr, nil); err != nil {
+			t.Errorf("%s: %v", addr, err)
+		}
+	}
+}
+
+func TestAppOpenedPublicNameUsesPublicDialForHTTPAndConnect(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, "public backend")
+	}))
+	t.Cleanup(backend.Close)
+	saved := dialPublic
+	var mu sync.Mutex
+	var targets []string
+	dialPublic = func(ctx context.Context, network, target string, _ func(string, string, syscall.RawConn) error) (net.Conn, error) {
+		mu.Lock()
+		targets = append(targets, target)
+		mu.Unlock()
+		return (&net.Dialer{}).DialContext(ctx, network, backend.Listener.Addr().String())
+	}
+	t.Cleanup(func() { dialPublic = saved })
+	proxy, log := startProxy(t, "public:public.example:80")
+	resp, err := viaProxy(proxy).Get("http://public.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "public backend" {
+		t.Errorf("HTTP = %d %q", resp.StatusCode, body)
+	}
+	status, c, _ := connect(t, proxy, "PUBLIC.example:80")
+	c.Close()
+	if status != http.StatusOK {
+		t.Errorf("CONNECT = %d, want 200", status)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(targets, []string{"public.example:80", "PUBLIC.example:80"}) {
+		t.Errorf("public dial targets = %q", targets)
+	}
+	if got := refusals(t, log.String()); len(got) != 0 {
+		t.Errorf("public requests refused: %v", got)
+	}
+}
+
+// A real resolver query returns a private address; Control must reject it
+// before any connection, for both proxy protocols, and log the original name.
+func TestAppOpenedNameResolvingToPrivateAddressIsRefused(t *testing.T) {
+	resolver := privateResolver(t)
+	saved := dialPublic
+	dialPublic = func(ctx context.Context, network, target string, control func(string, string, syscall.RawConn) error) (net.Conn, error) {
+		return (&net.Dialer{Timeout: time.Second, Resolver: resolver, Control: control}).DialContext(ctx, network, target)
+	}
+	t.Cleanup(func() { dialPublic = saved })
+	proxy, log := startProxy(t, "public:internal.example:80")
+	status, _, _ := connect(t, proxy, "internal.example:80")
+	if status != http.StatusForbidden {
+		t.Errorf("CONNECT = %d, want 403", status)
+	}
+	resp, err := viaProxy(proxy).Get("http://internal.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("HTTP = %d, want 403", resp.StatusCode)
+	}
+	got := refusals(t, log.String())
+	if len(got) != 2 {
+		t.Fatalf("refusals = %v, want one per request", got)
+	}
+	for _, line := range got {
+		if line["host"] != "internal.example" || line["port"] != "80" {
+			t.Errorf("refusal = %v", line)
+		}
+	}
+}
+
+// A dial can try several addresses and return the public address's network
+// error. The private-address refusal must still reach the runner's log.
+func TestPrivateAddressRefusalIsLoggedEvenWhenDialReturnsAnotherError(t *testing.T) {
+	saved := dialPublic
+	t.Cleanup(func() { dialPublic = saved })
+	dialPublic = func(_ context.Context, _, _ string, control func(string, string, syscall.RawConn) error) (net.Conn, error) {
+		for _, addr := range []string{"192.168.1.1:80", "10.0.0.5:80"} {
+			if err := control("tcp4", addr, nil); !errors.Is(err, errPrivateAddress) {
+				t.Errorf("%s: %v, want private-address refusal", addr, err)
+			}
+		}
+		return nil, errors.New("public upstream unreachable")
+	}
+	proxy, log := startProxy(t, "public:mixed.example:80")
+	connect(t, proxy, "mixed.example:80")
+	got := refusals(t, log.String())
+	if len(got) != 1 || got[0]["host"] != "mixed.example" || got[0]["port"] != "80" {
+		t.Errorf("refusals = %v, want one refusal for mixed.example:80", got)
+	}
+}
+
+// privateResolver serves only loopback DNS, answering A queries with
+// 192.168.1.1 and AAAA queries with no records.
+func privateResolver(t *testing.T) *net.Resolver {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, peer, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			q := append([]byte(nil), buf[:n]...)
+			if len(q) < 12 {
+				continue
+			}
+			i := 12
+			for i < len(q) && q[i] != 0 {
+				i += int(q[i]) + 1
+			}
+			if i+5 > len(q) {
+				continue
+			}
+			typ := binary.BigEndian.Uint16(q[i+1 : i+3])
+			q = q[:i+5]
+			binary.BigEndian.PutUint16(q[2:4], 0x8180)
+			binary.BigEndian.PutUint16(q[6:8], 0)
+			binary.BigEndian.PutUint16(q[8:10], 0)
+			binary.BigEndian.PutUint16(q[10:12], 0)
+			if typ == 1 {
+				binary.BigEndian.PutUint16(q[6:8], 1)
+				q = append(q, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 168, 1, 1)
+			}
+			_, _ = conn.WriteTo(q, peer)
+		}
+	}()
+	return &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "udp", conn.LocalAddr().String())
+	}}
+}
 
 func TestParseAllowExactHostAndPort(t *testing.T) {
 	got, err := parseAllow([]string{"API.Example.com:443", "x.example:8080"})

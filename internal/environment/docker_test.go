@@ -335,6 +335,21 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestRunMarksOnlyAppApprovedHosts(t *testing.T) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return nil })
+	d.Allow = []string{"192.168.1.5:443", "mirror.example:443"}
+	s := turn
+	s.AppAllow = []string{"app.example:443", "mirror.example:443"}
+	if _, err := d.Run(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{proxyTag(), "192.168.1.5:443", "mirror.example:443", "api.anthropic.com:443", "public:app.example:443", "public:mirror.example:443"}
+	got := calls()[3].Argv
+	if !slices.Equal(got[len(got)-len(want):], want) {
+		t.Fatalf("proxy argv = %q, want suffix %q", got, want)
+	}
+}
+
 func imageTag() string {
 	d, _ := scripted(nil, nil)
 	tag, _ := d.Image(context.Background())
