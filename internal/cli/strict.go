@@ -25,7 +25,7 @@ func (c *CLI) strictHosts(args []string) int {
 	if f.NArg() == 0 {
 		state := "off: a person can open a host for one issue's runs in Cinderline"
 		if cfg.StrictHosts {
-			state = "on: only allow_hosts in config.json opens a host"
+			state = "on: only allow_hosts in config.json opens a host, which `" + name.Name + " allow-host` sets"
 		}
 		fmt.Fprintln(c.Stdout, "Strict host blocking is "+state)
 		return 0
