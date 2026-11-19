@@ -21,15 +21,17 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/loopback"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// TestMain makes every wait of the package instant.
+// TestMain makes every wait of the package instant and keeps the tests off
+// the network (CLR-202).
 func TestMain(m *testing.M) {
 	sleep = func(ctx context.Context, _ time.Duration) error { return ctx.Err() }
 	waitFor = func(time.Duration) time.Duration { return time.Millisecond }
-	os.Exit(m.Run())
+	os.Exit(loopback.Run(m))
 }
 
 func discard() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

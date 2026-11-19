@@ -43,14 +43,14 @@ func TestAddListRemoveProvider(t *testing.T) {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	c.Stdin = strings.NewReader(lines(""))
-	if code := c.Run([]string{"add-provider", "lan", "http://studio.lan:1234/v1"}); code != 0 {
+	if code := c.Run([]string{"add-provider", "lan", "http://provider.example:8080/v1"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	c.Stdin = strings.NewReader(lines("x"))
 	if code := c.Run([]string{"add-provider", "lan", "http://other:1/v1"}); code == 0 {
 		t.Error("a second provider with one name was added")
 	}
-	want := []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}
+	want := []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://provider.example:8080/v1"}}
 	if got := providers(t, c); !slices.Equal(got, want) {
 		t.Fatalf("providers %v, want %v", got, want)
 	}
@@ -72,7 +72,7 @@ func TestAddListRemoveProvider(t *testing.T) {
 
 	out.Reset()
 	if code := c.Run([]string{"list-providers"}); code != 0 ||
-		out.String() != "cerebellum\thttp://localhost:8080/v1\tkey set\nlan\thttp://studio.lan:1234/v1\tno key\n" {
+		out.String() != "cerebellum\thttp://localhost:8080/v1\tkey set\nlan\thttp://provider.example:8080/v1\tno key\n" {
 		t.Errorf("list-providers: code %d, %q", code, out.String())
 	}
 	out.Reset()
@@ -97,7 +97,7 @@ func TestAddListRemoveProvider(t *testing.T) {
 // A runner without projects can still have providers.
 func TestAddProviderWithoutProjects(t *testing.T) {
 	c, _, errb := newCLI(t, lines(""))
-	if code := c.Run([]string{"add-provider", "lan", "http://studio.lan:1234/v1"}); code != 0 {
+	if code := c.Run([]string{"add-provider", "lan", "http://provider.example:8080/v1"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	if got := providers(t, c); len(got) != 1 {
@@ -112,7 +112,7 @@ func TestAddProviderWithoutKeyDropsAStaleOne(t *testing.T) {
 	if _, err := c.Secrets.Set(secrets.Runner, secrets.ProviderKey("lan"), "old"); err != nil {
 		t.Fatal(err)
 	}
-	if code := c.Run([]string{"add-provider", "lan", "http://studio.lan:1234/v1"}); code != 0 {
+	if code := c.Run([]string{"add-provider", "lan", "http://provider.example:8080/v1"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	if v := secret(t, c, secrets.Runner, secrets.ProviderKey("lan")); v != "" {
@@ -124,7 +124,7 @@ func TestAddProviderWithoutKeyDropsAStaleOne(t *testing.T) {
 // an unknown provider is refused, and the other names still need --project.
 func TestKeyProvider(t *testing.T) {
 	c, out, errb := newCLI(t, lines(""))
-	if code := c.Run([]string{"add-provider", "lan", "http://studio.lan:1234/v1"}); code != 0 {
+	if code := c.Run([]string{"add-provider", "lan", "http://provider.example:8080/v1"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	c.Stdin = strings.NewReader(lines("sk-new"))
@@ -162,7 +162,7 @@ func TestUninstallRemovesProviderKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Providers = []config.Provider{{Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}
+	cfg.Providers = []config.Provider{{Name: "lan", BaseURL: "http://provider.example:8080/v1"}}
 	if err := cfg.Save(c.Paths.File); err != nil {
 		t.Fatal(err)
 	}

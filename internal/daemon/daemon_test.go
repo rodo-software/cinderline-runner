@@ -264,7 +264,10 @@ func TestEveryProjectReportsTheRunnersProviders(t *testing.T) {
 	a, b := newApp(t), newApp(t)
 	p := paths(t)
 	pa, pb := project(a.url, "A"), project(b.url, "B")
-	cfg := &config.Config{Projects: []config.Project{pa, pb}, Providers: []config.Provider{{Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}, StrictHosts: true}
+	// The daemon fetches the provider's models: a loopback provider (CLR-202).
+	lan := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, `{"data":[]}`) }))
+	t.Cleanup(lan.Close)
+	cfg := &config.Config{Projects: []config.Project{pa, pb}, Providers: []config.Provider{{Name: "lan", BaseURL: lan.URL + "/v1"}}, StrictHosts: true}
 	if err := cfg.Save(p.File); err != nil {
 		t.Fatal(err)
 	}

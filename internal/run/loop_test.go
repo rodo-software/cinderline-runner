@@ -351,7 +351,7 @@ func TestTheFirstDetectionPollsAtOnce(t *testing.T) {
 // usable, then each of the runner's, by name only.
 func TestTheReportNamesModelProviders(t *testing.T) {
 	f := newFixture(t)
-	f.p.Providers = []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}
+	f.p.Providers = []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://provider.example:8080/v1"}}
 	f.p.openRouter = true
 	l := &loop{p: f.p, c: cinderline.New("http://x", "t", "0")}
 	if got := l.report().ModelProviders; !slices.Equal(got, []string{"openrouter", "cerebellum", "lan"}) {

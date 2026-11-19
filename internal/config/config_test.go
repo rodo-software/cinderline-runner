@@ -503,7 +503,7 @@ func TestAllowHostsRefusesTheRunnersMachine(t *testing.T) {
 		}
 	}
 	p := ok
-	p.AllowHosts = []string{"studio.lan:1234", "192.168.1.5:8080", "localhost.example.com:443"}
+	p.AllowHosts = []string{"provider.example:8080", "192.168.1.5:8080", "localhost.example.com:443"}
 	if err := (&Config{Projects: []Project{p}}).Validate(); err != nil {
 		t.Errorf("ordinary hosts: %v", err)
 	}

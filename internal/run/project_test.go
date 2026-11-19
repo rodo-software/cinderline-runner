@@ -216,7 +216,7 @@ func TestNewProjectOpenCodeProviders(t *testing.T) {
 	state := t.TempDir()
 	sec := secrets.New(state)
 	pc := cfg
-	providers := []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://studio.lan:1234/v1"}}
+	providers := []config.Provider{{Name: "cerebellum", BaseURL: "http://localhost:8080/v1"}, {Name: "lan", BaseURL: "http://provider.example:8080/v1"}}
 	if _, err := sec.Set(pc, secrets.GitToken, "g"); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestNewProjectOpenCodeProviders(t *testing.T) {
 	if !ok {
 		t.Fatalf("opencode client = %T", p.Clients["opencode"])
 	}
-	want := map[string]client.Provider{"cerebellum": {BaseURL: "http://localhost:8080/v1", Key: "sk-local"}, "lan": {BaseURL: "http://studio.lan:1234/v1"}}
+	want := map[string]client.Provider{"cerebellum": {BaseURL: "http://localhost:8080/v1", Key: "sk-local"}, "lan": {BaseURL: "http://provider.example:8080/v1"}}
 	if c.Credential != "" || !reflect.DeepEqual(c.Providers, want) {
 		t.Errorf("opencode client = %+v", c)
 	}

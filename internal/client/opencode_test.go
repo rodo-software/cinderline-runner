@@ -265,7 +265,7 @@ func TestOpenCodeProviderTurn(t *testing.T) {
 	env := &environment.Fake{Runs: []environment.RunReply{{Output: ""}}}
 	c := &CLI{
 		Name: "opencode", Project: "CSR", Env: env, Credential: "sk-or-k", MCPURL: "u",
-		Providers: map[string]Provider{"cerebellum": {BaseURL: "http://localhost:8080/v1", Key: "sk-local"}, "lan": {BaseURL: "http://studio.lan:1234/v1"}},
+		Providers: map[string]Provider{"cerebellum": {BaseURL: "http://localhost:8080/v1", Key: "sk-local"}, "lan": {BaseURL: "http://provider.example:8080/v1"}},
 		Exec:      func(context.Context, []string, ...string) (string, error) { return "", nil },
 	}
 	turn := Turn{Dir: "/runs/CSR-7", Prompt: "p", MaxTurns: 5, Model: "cerebellum/qwen/qwen3-coder:30b"}
@@ -317,12 +317,12 @@ func TestOpenCodeProviderTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	s = env.Calls()[0].Args[0].(environment.Spec)
-	if !reflect.DeepEqual(s.Allow, []string{"studio.lan:1234"}) {
+	if !reflect.DeepEqual(s.Allow, []string{"provider.example:8080"}) {
 		t.Errorf("Allow = %q", s.Allow)
 	}
 	for _, kv := range s.Env {
 		if strings.HasPrefix(kv, "CINDERLINE_PROVIDER_KEY") || strings.HasPrefix(kv, "OPENCODE_CONFIG_CONTENT=") &&
-			(strings.Contains(kv, "apiKey") || !strings.Contains(kv, `"baseURL":"http://studio.lan:1234/v1"`)) {
+			(strings.Contains(kv, "apiKey") || !strings.Contains(kv, `"baseURL":"http://provider.example:8080/v1"`)) {
 			t.Errorf("env %q", kv)
 		}
 	}

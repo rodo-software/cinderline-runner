@@ -112,10 +112,10 @@ func TestAProviderWithoutAModelListHasNoModels(t *testing.T) {
 // host.docker.internal, which the host itself need not resolve.
 func TestModelsURLReachesTheHostGatewayOnLoopback(t *testing.T) {
 	for in, want := range map[string]string{
-		"http://host.docker.internal:11434/v1": "http://127.0.0.1:11434/v1/models",
-		"http://host.docker.internal/v1/":      "http://127.0.0.1/v1/models",
-		"https://studio.lan:1234/api/v1/":      "https://studio.lan:1234/api/v1/models",
-		"http://localhost:8080":                "http://localhost:8080/models",
+		"http://host.docker.internal:11434/v1":  "http://127.0.0.1:11434/v1/models",
+		"http://host.docker.internal/v1/":       "http://127.0.0.1/v1/models",
+		"https://provider.example:8080/api/v1/": "https://provider.example:8080/api/v1/models",
+		"http://localhost:8080":                 "http://localhost:8080/models",
 	} {
 		if got := modelsURL(in); got != want {
 			t.Errorf("modelsURL(%q) = %q, want %q", in, got, want)

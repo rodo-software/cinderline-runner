@@ -28,6 +28,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/loopback"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -73,6 +74,7 @@ echo '{"type":"result","subtype":"success","result":"Added hello.txt."}'`
 }
 
 func TestIntegrationOneIssueToForgejo(t *testing.T) {
+	loopback.Off(t) // the pinned CLIs' downloads and Forgejo on Docker's bridge
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Minute)
 	defer cancel()
 	log := slog.New(slog.NewTextHandler(t.Output(), nil))

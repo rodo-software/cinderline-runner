@@ -6,13 +6,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rodo-software/cinderline-runner/internal/loopback"
 )
 
 // TestMain sends every read once, as the recorded cases expect;
-// TestReadRetries turns the retries on.
+// TestReadRetries turns the retries on. It keeps the tests off the network
+// (CLR-202).
 func TestMain(m *testing.M) {
 	readWaits = nil
-	os.Exit(m.Run())
+	os.Exit(loopback.Run(m))
 }
 
 func withReadWaits(t *testing.T) {
