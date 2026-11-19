@@ -98,13 +98,55 @@ func (d *Docker) composeProject(ctx context.Context, issue string, c *Compose) (
 		return p, fmt.Errorf("reading %s from %s: %w", c.File, c.Base, err)
 	}
 
+	if err := checkComposeFiles(src, filepath.Join(src, file)); err != nil {
+		return p, fmt.Errorf("compose file %s on %s refused: %w", c.File, c.Base, err)
+	}
+
+	// Explicit dotenv input prevents Compose reading the runner's working directory.
+	envFile := filepath.Join(src, ".env")
+	if _, err := os.Stat(envFile); os.IsNotExist(err) {
+		envFile = filepath.Join(dir, "empty.env")
+		if err := os.WriteFile(envFile, nil, 0o600); err != nil {
+			return p, err
+		}
+	} else if err != nil {
+		return p, err
+	}
+
 	project := strings.ToLower(d.network(issue))
 	p.args = []string{"docker", "compose", "--project-name", project, "--file", filepath.Join(src, file)}
-	out, err := d.composeExec(ctx, append(slices.Clip(p.args), "config", "--format", "json")...)
+	p.args = append(p.args, "--env-file", envFile)
+	// Resolve includes without importing their dotenv values into the frozen file.
+	out, err := d.composeExec(ctx, append(slices.Clip(p.args), "config", "--no-interpolate", "--no-env-resolution", "--format", "json")...)
+	if err != nil {
+		return p, fmt.Errorf("compose file %s: %w", c.File, err)
+	}
+	frozen, err := os.CreateTemp(src, "compose-*.json")
+	if err != nil {
+		return p, err
+	}
+	_, writeErr := frozen.WriteString(out)
+	if err := errors.Join(writeErr, frozen.Close()); err != nil {
+		return p, err
+	}
+	p.args[5] = frozen.Name()
+	// Keep env_file paths visible until the path check has approved them.
+	out, err = d.composeExec(ctx, append(slices.Clip(p.args), "config", "--no-env-resolution", "--format", "json")...)
 	if err != nil {
 		return p, fmt.Errorf("compose file %s: %w", c.File, err)
 	}
 	var cfg composeConfig
+	if err := json.Unmarshal([]byte(out), &cfg); err != nil {
+		return p, fmt.Errorf("compose file %s: reading its config: %w", c.File, err)
+	}
+	if err := cfg.check(src, c.Service); err != nil {
+		return p, fmt.Errorf("compose file %s on %s refused: %w", c.File, c.Base, err)
+	}
+
+	out, err = d.composeExec(ctx, append(slices.Clip(p.args), "config", "--format", "json")...)
+	if err != nil {
+		return p, fmt.Errorf("compose file %s: %w", c.File, err)
+	}
 	if err := json.Unmarshal([]byte(out), &cfg); err != nil {
 		return p, fmt.Errorf("compose file %s: reading its config: %w", c.File, err)
 	}

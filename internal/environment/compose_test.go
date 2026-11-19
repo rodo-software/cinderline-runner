@@ -225,7 +225,7 @@ func composeRunner(t *testing.T, config string) (*Docker, func() []execCall, *st
 		switch {
 		case strings.Contains(a, " archive --format=tar refs/heads/main"):
 			return tarball, err
-		case strings.HasSuffix(a, " config --format json"):
+		case argv[1] == "compose" && slices.Contains(argv, "config"):
 			return config, err
 		case argv[1] == "compose" && slices.Contains(argv, "build"):
 			b, rerr := os.ReadFile(argv[slices.Index(argv, "build")-1])
@@ -261,8 +261,8 @@ func TestRunInCompose(t *testing.T) {
 	record := d.Exec
 	d.Exec = func(ctx context.Context, env []string, argv ...string) (string, error) {
 		out, err := record(ctx, env, argv...)
-		if strings.HasSuffix(strings.Join(argv, " "), " config --format json") {
-			out = strings.ReplaceAll(out, "SRC", filepath.ToSlash(filepath.Dir(filepath.Dir(argv[5]))))
+		if argv[1] == "compose" && slices.Contains(argv, "config") {
+			out = strings.ReplaceAll(out, "SRC", filepath.ToSlash(filepath.Dir(argv[5])))
 		}
 		return out, err
 	}
@@ -286,7 +286,7 @@ func TestRunInCompose(t *testing.T) {
 			if !reflect.DeepEqual(c.Env, composeEnv(os.Environ())) {
 				t.Errorf("compose env = %q, want the minimal one", c.Env)
 			}
-			dir = filepath.Dir(filepath.Dir(filepath.Dir(c.Argv[5])))
+			dir = filepath.Dir(filepath.Dir(c.Argv[5]))
 			if c.Argv[0] != "docker" || c.Argv[3] != "cinderline-csr-csr-31" {
 				t.Errorf("compose call %q, want project cinderline-csr-csr-31", c.Argv)
 			}

@@ -5,6 +5,7 @@ go 1.27.4
 require (
 	github.com/kardianos/service v1.3.0
 	github.com/zalando/go-keyring v0.2.8
+	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/term v0.48.0
 )
 
