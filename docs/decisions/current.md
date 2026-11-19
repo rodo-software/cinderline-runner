@@ -101,7 +101,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - Client sessions and config live on one Docker state volume per client and project; the host state folder holds the log, session notes, the outbox and attachments. Both are caches. (2026-11-05-runner-state-location; 2026-11-11-audit-fixes)
 - A turn without a scoped token runs without the project's `CLAUDE.md`, `AGENTS.md` and OpenCode config. (2026-11-06-m3-parity-gaps)
 - The tools volume carries Gemini CLI's npm tarball (checked by sha512) and Node 22: from nodejs.org checked by SHA-256 on glibc, from the digest-pinned `node:22-alpine` on musl, so Gemini runs on any agent image. (2026-11-08-gemini-node-in-tools-volume)
-- Model keys are per project; `add` asks for the four, each optional, and offers to copy them from another project. A stored key wins over a login. No key is printed back. (2026-11-05-runner-rewrite-details; 2026-11-10-model-keys)
+- Model keys are per project; `add` asks for the four, each optional, and offers to copy them from another project. A stored key wins over a login; a successful `login` deletes the client's stored key, a later `key set` wins again. No key is printed back. (2026-11-05-runner-rewrite-details; 2026-11-10-model-keys; 2026-11-19-login-replaces-key)
 
 ## Model providers
 

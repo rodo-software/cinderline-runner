@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
 
@@ -68,7 +71,21 @@ func (c *CLI) login(args []string) int {
 		return c.fail(fmt.Errorf("%s login ended, but its credentials are not on %s; the runs cannot use it, sign in again", clientName, client.StateVolume(key, clientName)))
 	}
 
-	fmt.Fprintf(c.Stdout, "%s is signed in for project %s; the credentials are on its %s state volume\n", clientName, p.Key, clientName)
+	// A stored key wins over a login in detection and runs, so the login
+	// replaces it (CLR-210, decision 2026-11-19-login-replaces-key).
+	kind, replaced := secrets.ClientKeys[clientName], ""
+	switch _, _, err := c.Secrets.Get(p, kind); {
+	case err == nil:
+		if err := c.Secrets.Delete(p, kind); err != nil {
+			return c.fail(fmt.Errorf("%s is signed in, but the %s key stored for project %s, which wins over the login, is not deleted: %w; delete it with `%s key delete %s --project %s`",
+				clientName, clientName, p.Key, err, name.Name, clientName, p.Key))
+		}
+		replaced = fmt.Sprintf(" and replace the %s key stored for it, now deleted", clientName)
+	case !errors.Is(err, secrets.ErrNotFound):
+		return c.fail(fmt.Errorf("%s is signed in, but the %s key stored for project %s, which wins over the login, is not checked: %w", clientName, clientName, p.Key, err))
+	}
+
+	fmt.Fprintf(c.Stdout, "%s is signed in for project %s; the credentials are on its %s state volume%s\n", clientName, p.Key, clientName, replaced)
 	c.reload()
 	return 0
 }

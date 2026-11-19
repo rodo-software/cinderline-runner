@@ -21,3 +21,4 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-17-hosts-from-cinderline](2026-11-17-hosts-from-cinderline.md): a person's answer in Cinderline opens a refused host for one issue's runs; refused hosts per step; strict host blocking. Supersedes point 2 of 2026-11-09-network-allowlist.
 - [2026-11-18-drain-before-reload](2026-11-18-drain-before-reload.md): commands that reload the runner drain it first while runs are in flight, with `s` to stop at once.
 - [2026-11-18-verbose-agent-output](2026-11-18-verbose-agent-output.md): container output in `run -v` as plain lines with colours only, cleaned in the log file.
+- [2026-11-19-login-replaces-key](2026-11-19-login-replaces-key.md): a successful `login` deletes the client's stored model key; a later `key set` wins again.
