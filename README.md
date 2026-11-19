@@ -143,6 +143,8 @@ Files attached to an issue in Cinderline (at most 5, 10 MB in total) reach its r
 
 The daemon reports each client's state (ready, missing the binary, missing a credential, or the provider refused the key) in its runner report, so the Cinderline instance can show what a project is set up for. Logins on the state volume count as configured but are not tested, so an expired login only fails on the first run.
 
+Claude Code subscription limits are reported as `usage_limit` when its result has `api_error: usage_limit_reached` or its last `rate_limit_event` is `rejected`. The reset time, when reported as `resetsAt`, is sent in UTC. The session is kept so a person can continue it after the limit resets; the runner does not wait or retry automatically. Codex, Gemini CLI and OpenCode currently keep reporting `failed`: their supported output formats have no verified subscription-limit signal distinct from ordinary rate limiting. A generic HTTP 429 remains `failed` for every client. Deploy the app's CL-269 support before releasing a runner that sends `usage_limit`.
+
 ## Run as a service
 
 `cinderline service install` registers a user-level service (a launchd LaunchAgent on macOS, a systemd user unit on Linux, a logon scheduled task on Windows) that runs `cinderline run` at login and starts it now; `cinderline status`, `cinderline logs` and `cinderline stop` talk to it; `cinderline service uninstall` stops and removes it. On Linux it needs systemd. `cinderline stop` stops it until the next login. Linux and Windows restart it after a crash; macOS does not, so check `cinderline status` there.

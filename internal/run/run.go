@@ -455,6 +455,11 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Outcome = "stopped"
 	case errors.Is(err, environment.ErrIdle):
 		last.Outcome = "idle"
+	case step.Kind == "run" && res.HitUsageLimit:
+		last.Outcome = "usage_limit"
+		if !res.ResetsAt.IsZero() {
+			last.ResetsAt = ptr(res.ResetsAt.UTC().Format(time.RFC3339))
+		}
 	case res.HitTurnLimit:
 		last.Outcome = "turn_limit"
 	case errors.Is(err, environment.ErrTimeout):

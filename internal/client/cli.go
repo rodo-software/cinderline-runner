@@ -115,6 +115,9 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	res := k.parse(out)
 	res.SessionID = cmp.Or(res.SessionID, t.SessionID)
 	res.Tail = environment.Tail(out)
+	if err == nil && res.HitUsageLimit {
+		err = fmt.Errorf("%s: usage limit reached", c.Name)
+	}
 	if err == nil && res.HitTurnLimit {
 		err = fmt.Errorf("%s: stopped at the turn limit", c.Name)
 	}

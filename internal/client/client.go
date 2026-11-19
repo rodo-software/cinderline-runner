@@ -50,11 +50,13 @@ type Turn struct {
 
 // Result is the parsed outcome of a turn.
 type Result struct {
-	SessionID    string
-	Report       string // the agent's final text
-	HitTurnLimit bool
-	Tail         string // the end of the output, for comments
-	Usage        *Usage // nil when the CLI printed none
+	SessionID     string
+	Report        string // the agent's final text
+	HitUsageLimit bool
+	ResetsAt      time.Time // zero when the client did not report a reset
+	HitTurnLimit  bool
+	Tail          string // the end of the output, for comments
+	Usage         *Usage // nil when the CLI printed none
 }
 
 // Usage is the tokens and cost of one turn (EMBER-112).

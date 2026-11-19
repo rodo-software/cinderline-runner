@@ -704,8 +704,8 @@ components:
 
         | `step` | `outcome` | Other facts |
         | --- | --- | --- |
-        | `run` | `finished`, `failed`, `turn_limit`, `time_limit`, `stopped` (the poll's `stop`), `idle` (the idle limit), `not_started` | `report`, `tail`, `error`, `usage` |
-        | `resolve` | as `run`, and `not_verified` (the runner undid a merge it could not verify) | as `run` |
+        | `run` | `finished`, `failed`, `turn_limit`, `time_limit`, `usage_limit` (the client's usage limit), `stopped` (the poll's `stop`), `idle` (the idle limit), `not_started` | `report`, `tail`, `error`, `usage`, `resets_at` |
+        | `resolve` | as `run` except `usage_limit`, and `not_verified` (the runner undid a merge it could not verify) | `report`, `tail`, `error`, `usage` |
         | `check` | `passed`, `failed`, `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's) |
         | `merge` | `conflict` | `conflicts`, `commits` |
         | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request`, `conflicts`, `merge`, `commit`, `error`, `checks` |
@@ -717,6 +717,13 @@ components:
 
         A `check` that was `stopped` ends as a `stopped` turn: `stop`, then
         `done` with session `paused`, and no fix turn.
+
+        A `run` with `usage_limit` ends without a retry or spending an attempt:
+        `stop`, then Blocked and `done` with session `paused`. No sub-issue is
+        reported failed for it. The comment names `resets_at` in UTC when
+        supplied. Moving the issue back to To do continues the paused session,
+        rather than following up on finished work. Deploy app support before
+        releasing a runner that sends this outcome (CL-269, CLR-209).
 
         A `publish` during which the poll stopped the issue before the runner
         asked the forge to merge still pushes and opens the pull request but
@@ -743,7 +750,12 @@ components:
           maxLength: 100
         outcome:
           type: string
-          enum: [finished, failed, turn_limit, time_limit, stopped, idle, not_started, not_verified, passed, conflict, published, unchanged, pushed, not_pushed]
+          enum: [finished, failed, turn_limit, time_limit, usage_limit, stopped, idle, not_started, not_verified, passed, conflict, published, unchanged, pushed, not_pushed]
+        resets_at:
+          type: [string, 'null']
+          format: date-time
+          maxLength: 40
+          description: 'With run outcome usage_limit: when the client says its limit resets, as an ISO-8601 timestamp with a timezone (Z or an explicit offset). Omitted or null when unknown. The app displays it explicitly in UTC; it never schedules an automatic pickup.'
         error:
           type: [string, 'null']
           maxLength: 16000

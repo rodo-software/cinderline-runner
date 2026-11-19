@@ -225,6 +225,7 @@ type LastStep struct {
 	Issue       string   `json:"issue"`
 	Agent       *string  `json:"agent"`
 	Outcome     string   `json:"outcome"`
+	ResetsAt    *string  `json:"resets_at,omitempty"` // usage_limit only, UTC; nil when unknown
 	Error       *string  `json:"error"`
 	Report      *string  `json:"report"`
 	Tail        *string  `json:"tail"`
