@@ -111,8 +111,14 @@ func binaryArgv(mount tools.Mount, image, name string) []string {
 	return nil
 }
 
+// keyScript makes a GET to URL with the key in header HEADER after PREFIX,
+// plus an anthropic-version header when VERSION is set. 401 or 403 exits 3;
+// any other answer and a network error count as ready.
+const keyScript = `const h={[process.env.HEADER]:process.env.PREFIX+process.env.KEY};if(process.env.VERSION)h['anthropic-version']=process.env.VERSION;fetch(process.env.URL,{headers:h}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`
+
 // checkKey checks whether the key works via a free HTTP GET.
 func checkKey(ctx context.Context, exec workspace.Exec, mount tools.Mount, image, name, cred string, cfg config.Project, log *slog.Logger) string {
+	var url, header, prefix, version string
 	switch name {
 	case "claude":
 		if strings.HasPrefix(cred, "sk-ant-oat") {
@@ -120,34 +126,34 @@ func checkKey(ctx context.Context, exec workspace.Exec, mount tools.Mount, image
 			// a free endpoint accepts OAuth tokens
 			return "ready"
 		}
-		return checkHTTP(ctx, exec, mount, image, "KEY", cred,
-			`fetch(process.env.URL,{headers:{'x-api-key':process.env.KEY,'anthropic-version':'2023-06-01'}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`, "https://api.anthropic.com/v1/models", name, log)
+		url, header, version = "https://api.anthropic.com/v1/models", "x-api-key", "2023-06-01"
 	case "codex":
 		base := strings.TrimRight(cfg.OpenAIBaseURL, "/")
 		if base == "" {
 			base = "https://api.openai.com/v1"
 		}
-		url := base + "/models"
-		return checkHTTP(ctx, exec, mount, image, "KEY", cred,
-			`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`, url, name, log)
+		url, header, prefix = base+"/models", "Authorization", "Bearer "
 	case "opencode":
-		return checkHTTP(ctx, exec, mount, image, "KEY", cred,
-			`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`, "https://openrouter.ai/api/v1/key", name, log)
+		url, header, prefix = "https://openrouter.ai/api/v1/key", "Authorization", "Bearer "
 	case "gemini":
 		if cfg.GeminiVertex {
 			// shortcut: Vertex keys are not checked, add a check once
 			// a free endpoint accepts Vertex tokens
 			return "ready"
 		}
-		return checkHTTP(ctx, exec, mount, image, "KEY", cred,
-			`fetch(process.env.URL,{headers:{'x-goog-api-key':process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`, "https://generativelanguage.googleapis.com/v1beta/models", name, log)
+		url, header = "https://generativelanguage.googleapis.com/v1beta/models", "x-goog-api-key"
+	default:
+		return "ready"
 	}
-	return "ready"
+	// Every variable is set, even when empty: docker -e NAME takes an unset
+	// one from the runner's own environment.
+	env := []string{"KEY=" + cred, "URL=" + url, "HEADER=" + header, "PREFIX=" + prefix, "VERSION=" + version}
+	return checkHTTP(ctx, exec, mount, image, env, name, log)
 }
 
-// checkHTTP runs a node container that makes an HTTP GET. The key is passed
-// through the exec's env, never in argv.
-func checkHTTP(ctx context.Context, exec workspace.Exec, mount tools.Mount, image, envName, cred, script, url, name string, log *slog.Logger) string {
+// checkHTTP runs keyScript in a node container. The variables, the key among
+// them, go through the exec's env and only their names into argv.
+func checkHTTP(ctx context.Context, exec workspace.Exec, mount tools.Mount, image string, env []string, name string, log *slog.Logger) string {
 	argv := []string{"docker", "run", "--rm"}
 	argv = append(argv, mount.Args...)
 	for _, e := range mount.Env {
@@ -156,10 +162,12 @@ func checkHTTP(ctx context.Context, exec workspace.Exec, mount tools.Mount, imag
 	for _, e := range mount.OpenCodeEnv {
 		argv = append(argv, "-e", e)
 	}
-	argv = append(argv, "--user", workspace.AgentUser, "-e", envName, "-e", "URL")
-	argv = append(argv, image, tools.Path+"/bin/node", "-e", script)
-
-	env := []string{envName + "=" + cred, "URL=" + url}
+	argv = append(argv, "--user", workspace.AgentUser)
+	for _, e := range env {
+		k, _, _ := strings.Cut(e, "=")
+		argv = append(argv, "-e", k)
+	}
+	argv = append(argv, image, tools.Path+"/bin/node", "-e", keyScript)
 
 	_, err := exec(ctx, env, argv...)
 	var exit interface{ ExitCode() int }

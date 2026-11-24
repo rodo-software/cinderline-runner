@@ -177,8 +177,8 @@ func TestDetectKeyAnd200(t *testing.T) {
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js", "--version"}, "0.1.0\n", nil)
 
 	// OpenCode HTTP check returning 200 (exit 0)
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", nil)
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", nil)
 
 	got := testDetect(ctx, s.exec, sec, testCfg)
 	m := map[string]cinderline.ReportClient{}
@@ -213,8 +213,8 @@ func TestDetectKeyAnd401(t *testing.T) {
 
 	// claude key check returning 401 (node exits 3 now)
 	exit3 := exitCodeError(3)
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'x-api-key':process.env.KEY,'anthropic-version':'2023-06-01'}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", exit3)
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", exit3)
 
 	got := testDetect(ctx, s.exec, sec, testCfg)
 	m := map[string]cinderline.ReportClient{}
@@ -244,8 +244,8 @@ func TestDetectKeyAndNetworkError(t *testing.T) {
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js", "--version"}, "0.1.0\n", nil)
 
 	// claude key check: network error → ready (docker fails with non-3 exit)
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'x-api-key':process.env.KEY,'anthropic-version':'2023-06-01'}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", errors.New("docker: connection refused"))
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", errors.New("docker: connection refused"))
 
 	got := testDetect(ctx, s.exec, sec, testCfg)
 	m := map[string]cinderline.ReportClient{}
@@ -419,8 +419,8 @@ func TestDetectNodeExitCode1IsReady(t *testing.T) {
 
 	// node exits with code 1 (uncaught error) → ready, not invalid_credential
 	exit1 := exitCodeError(1)
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'x-api-key':process.env.KEY,'anthropic-version':'2023-06-01'}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", exit1)
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", exit1)
 
 	got := testDetect(ctx, s.exec, sec, testCfg)
 	m := map[string]cinderline.ReportClient{}
@@ -447,8 +447,8 @@ func TestDetectNodeExitCode3IsInvalidCredential(t *testing.T) {
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/claude", "--version"}, "1.0.0\n", nil)
 
 	exit3 := exitCodeError(3)
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'x-api-key':process.env.KEY,'anthropic-version':'2023-06-01'}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", exit3)
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", exit3)
 
 	got := testDetect(ctx, s.exec, sec, testCfg)
 	m := map[string]cinderline.ReportClient{}
@@ -473,8 +473,8 @@ func TestDetectVersionInReport(t *testing.T) {
 	s := newScriptedExec()
 	ctx := context.Background()
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/opencode", "--version"}, "3.5.0\n", nil)
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", nil)
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", nil)
 
 	got := testDetect(ctx, s.exec, sec, testCfg)
 	for _, rc := range got {
@@ -496,8 +496,8 @@ func TestDetectScriptNoKeyOrBaseURLValueInArgv(t *testing.T) {
 	s := newScriptedExec()
 	ctx := context.Background()
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/codex", "--version"}, "1.0.0\n", nil)
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", nil)
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", nil)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	got, _ := detectClients(ctx, s.exec, cfg, false, sec, "test-image", testMount, log)
@@ -529,8 +529,8 @@ func TestDetectMountOpenCodeEnvInKeyCheck(t *testing.T) {
 	}
 	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/opencode", "--version"}, "1.0.0\n", nil)
 	// The key check argv must carry -e LD_LIBRARY_PATH=/opt/cinderline/lib
-	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "-e", "LD_LIBRARY_PATH=/opt/cinderline/lib", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}, "", nil)
+	s.add([]string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "-e", "LD_LIBRARY_PATH=/opt/cinderline/lib", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}, "", nil)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	got, _ := detectClients(ctx, s.exec, testCfg, false, sec, "test-image", openCodeMount, log)
@@ -569,8 +569,8 @@ func TestDetectRefreshes(t *testing.T) {
 // usable is reported apart. Configured providers are not checked.
 func TestDetectOpenCodeProviders(t *testing.T) {
 	versionArgv := []string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "test-image", tools.Path + "/bin/opencode", "--version"}
-	keyArgv := []string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "test-image", tools.Path + "/bin/node", "-e",
-		`fetch(process.env.URL,{headers:{'Authorization':'Bearer '+process.env.KEY}}).then(r=>process.exit(r.status==401||r.status==403?3:0)).catch(()=>process.exit(0))`}
+	keyArgv := []string{"docker", "run", "--rm", "-v", "cinderline-tools-test:/opt/cinderline:ro", "-e", "DISABLE_AUTOUPDATER=1", "--user", workspace.AgentUser, "-e", "KEY", "-e", "URL", "-e", "HEADER", "-e", "PREFIX", "-e", "VERSION", "test-image", tools.Path + "/bin/node", "-e",
+		keyScript}
 	for _, tt := range []struct {
 		name       string
 		providers  bool
@@ -603,5 +603,35 @@ func TestDetectOpenCodeProviders(t *testing.T) {
 				t.Errorf("opencode = %+v, openrouter %v; want %s, %v", got, openRouter, tt.state, tt.openRouter)
 			}
 		})
+	}
+}
+
+// Each client's key check runs the one keyScript; only the variables differ,
+// and every one of them is set so docker never takes it from the runner.
+func TestCheckKeyEnv(t *testing.T) {
+	cfg := config.Project{OpenAIBaseURL: "https://custom.openai.com/v1/"}
+	for _, tt := range []struct {
+		name string
+		want []string
+	}{
+		{"claude", []string{"KEY=k", "URL=https://api.anthropic.com/v1/models", "HEADER=x-api-key", "PREFIX=", "VERSION=2023-06-01"}},
+		{"codex", []string{"KEY=k", "URL=https://custom.openai.com/v1/models", "HEADER=Authorization", "PREFIX=Bearer ", "VERSION="}},
+		{"opencode", []string{"KEY=k", "URL=https://openrouter.ai/api/v1/key", "HEADER=Authorization", "PREFIX=Bearer ", "VERSION="}},
+		{"gemini", []string{"KEY=k", "URL=https://generativelanguage.googleapis.com/v1beta/models", "HEADER=x-goog-api-key", "PREFIX=", "VERSION="}},
+	} {
+		var env, argv []string
+		exec := func(_ context.Context, e []string, a ...string) (string, error) {
+			env, argv = e, a
+			return "", nil
+		}
+		if got := checkKey(context.Background(), exec, testMount, "test-image", tt.name, "k", cfg, discard()); got != "ready" {
+			t.Errorf("%s: %s, want ready", tt.name, got)
+		}
+		if !slices.Equal(env, tt.want) {
+			t.Errorf("%s env = %q, want %q", tt.name, env, tt.want)
+		}
+		if argv[len(argv)-1] != keyScript || slices.ContainsFunc(argv, func(a string) bool { return strings.Contains(a, "=k") }) {
+			t.Errorf("%s argv = %q", tt.name, argv)
+		}
 	}
 }
