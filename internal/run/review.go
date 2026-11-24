@@ -108,9 +108,8 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 	}
 	state, pushed := pull.State, false
 	open := state == forge.MergePending || state == forge.MergeFailed
-	// CLR-204: the agent controls its branch name; only its own folder belongs to this item.
 	if i := slices.IndexFunc(stranded, func(c workspace.Clone) bool {
-		return c.Branch == branch && c.Dir == workspace.RunsPath+"/"+it.Ref
+		return c.Branch == branch && ownClone(c)
 	}); i >= 0 && (open || state == "") {
 		if _, err := p.Workspace.Push(ctx, stranded[i].Dir, branch); err != nil {
 			// The unpushed work must not be replaced by a fresh clone.

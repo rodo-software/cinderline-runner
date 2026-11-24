@@ -55,6 +55,13 @@ func (p *Project) held(ctx context.Context) (refs []string, stranded []workspace
 	return refs, stranded, true
 }
 
+// ownClone reports whether c is on its own issue's branch. The agent picks
+// its clone's branch (CLR-204), so only a clone whose folder names the
+// issue of its branch may be pushed to that branch.
+func ownClone(c workspace.Clone) bool {
+	return c.Branch == name.Name+"/"+path.Base(c.Dir)
+}
+
 // tidy pushes the stranded clones and then does what the app answered for
 // each held issue: drop deletes its clone, session files and note, expire
 // deletes a clone without a note at once and applies keep_sessions_for and
@@ -64,9 +71,13 @@ func (p *Project) held(ctx context.Context) (refs []string, stranded []workspace
 // app's answer never names a path. Every failure only logs.
 func (p *Project) tidy(ctx context.Context, asked []string, items []cinderline.HeldItem, stranded []workspace.Clone) {
 	for _, c := range stranded {
-		ref, _ := strings.CutPrefix(c.Branch, name.Name+"/")
-		if n, _ := p.readNote(path.Base(c.Dir)); n.Manager {
+		ref := path.Base(c.Dir)
+		if n, _ := p.readNote(ref); n.Manager {
 			continue // a Project Manager's clone is never pushed, only deleted (CLR-194)
+		}
+		if !ownClone(c) {
+			p.Log.Warn("stranded branch not pushed: the clone is on another issue's branch", "project", p.Config.Key, "issue", ref, "branch", c.Branch)
+			continue
 		}
 		if _, err := p.Workspace.Push(ctx, c.Dir, c.Branch); err != nil {
 			p.Log.Warn("stranded branch not pushed", "project", p.Config.Key, "issue", ref, "err", err)

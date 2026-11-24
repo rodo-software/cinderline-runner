@@ -195,6 +195,41 @@ func TestUpkeepPushesOnlyTheIssuesOwnClone(t *testing.T) {
 	}
 }
 
+// CLR-224: tidy pushes a stranded clone only to the branch of the issue whose
+// folder it is, so one issue's work never lands on another's pull request.
+func TestTidyPushesOnlyTheIssuesOwnClone(t *testing.T) {
+	branch := name.Name + "/CSR-7"
+	foreign := workspace.Clone{Dir: workspace.RunsPath + "/CSR-8", Branch: branch}
+	own := workspace.Clone{Dir: workspace.RunsPath + "/CSR-7", Branch: branch}
+	for _, tc := range []struct {
+		name   string
+		clones []workspace.Clone
+		want   []string
+	}{
+		{name: "foreign clone", clones: []workspace.Clone{foreign}},
+		{name: "own clone", clones: []workspace.Clone{own}, want: []string{own.Dir}},
+		{name: "foreign clone before own", clones: []workspace.Clone{foreign, own}, want: []string{own.Dir}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.ws.Pushes = []error{nil}
+			f.p.tidy(context.Background(), nil, nil, tc.clones)
+			var pushes []string
+			for _, c := range f.ws.Calls() {
+				if c.Method == "Push" {
+					pushes = append(pushes, c.Args[0].(string))
+					if c.Args[1].(string) != branch {
+						t.Errorf("pushed branch %v; want %s", c.Args[1], branch)
+					}
+				}
+			}
+			if !slices.Equal(pushes, tc.want) {
+				t.Errorf("pushes %v; want %v", pushes, tc.want)
+			}
+		})
+	}
+}
+
 // verifyMerge holds only for a clean clone that contains the base and the
 // branch's own head, without conflict markers.
 func TestVerifyMerge(t *testing.T) {
