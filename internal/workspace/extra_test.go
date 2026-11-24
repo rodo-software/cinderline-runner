@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ func TestFetchExtras(t *testing.T) {
 		}
 		return "", nil
 	}
-	failed := FetchExtras(context.Background(), x, "CSR", ExtraPath, []Extra{
+	failed := FetchExtras(context.Background(), x, slog.New(slog.DiscardHandler), "CSR", ExtraPath, []Extra{
 		{Name: "lib", URL: "https://git.example.com/o/lib", Ref: "v1.0", Token: "tok-lib"},
 		{Name: "bad", URL: "https://git.example.com/o/bad", Token: "tok-bad"},
 	})
@@ -52,7 +53,7 @@ func TestFetchExtras(t *testing.T) {
 
 func TestFetchExtrasVolumeFailureFailsAll(t *testing.T) {
 	x := func(context.Context, []string, ...string) (string, error) { return "", errors.New("no docker") }
-	failed := FetchExtras(context.Background(), x, "CSR", ExtraPath, []Extra{{Name: "a"}, {Name: "b"}})
+	failed := FetchExtras(context.Background(), x, slog.New(slog.DiscardHandler), "CSR", ExtraPath, []Extra{{Name: "a"}, {Name: "b"}})
 	if len(failed) != 2 {
 		t.Fatalf("failed = %v", failed)
 	}
@@ -71,7 +72,7 @@ func TestLsRemote(t *testing.T) {
 			call = execCall{env, argv}
 			return "", nil
 		}
-		if err := LsRemote(context.Background(), x, "CSR", "https://h/o/r", tt.ref, "tok"); err != nil {
+		if err := LsRemote(context.Background(), x, slog.New(slog.DiscardHandler), "CSR", "https://h/o/r", tt.ref, "tok"); err != nil {
 			t.Fatal(err)
 		}
 		if !slices.Equal(call.Env, []string{"GIT_TOKEN=tok"}) || !slices.Equal(call.Argv[len(call.Argv)-len(tt.want)-1:], append([]string{"https://h/o/r"}, tt.want...)) {

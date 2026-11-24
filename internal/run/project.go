@@ -113,7 +113,7 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 	}
 	// One Exec for all the project's docker and git commands, set here.
 	exec := workspace.OnceVolumes(env.Exec)
-	ws := &workspace.Docker{Project: cfg.ID(), Repository: cfg.Repository, Token: gitToken, Exec: exec}
+	ws := &workspace.Docker{Project: cfg.ID(), Repository: cfg.Repository, Token: gitToken, Exec: exec, Logger: log}
 	p := &Project{
 		detected:  make(chan struct{}),
 		Config:    cfg,
@@ -190,7 +190,7 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 		return memory, nil
 	}
 	p.fetchExtras = func(ctx context.Context, path string, repos []workspace.Extra) map[string]error {
-		return workspace.FetchExtras(ctx, exec, cfg.ID(), path, repos)
+		return workspace.FetchExtras(ctx, exec, log, cfg.ID(), path, repos)
 	}
 	p.deleteSession = func(ctx context.Context, ref, session string) error {
 		return client.DeleteSession(ctx, exec, cfg.ID(), ref, session)

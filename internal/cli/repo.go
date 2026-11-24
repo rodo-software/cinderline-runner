@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -100,7 +101,7 @@ func (c *CLI) addRepo(args []string) int {
 			}
 			token = v
 		}
-		if err := workspace.LsRemote(context.Background(), c.exec, p.ID(), r.URL, r.Ref, token); err != nil {
+		if err := workspace.LsRemote(context.Background(), c.exec, slog.New(slog.NewTextHandler(c.Stderr, nil)), p.ID(), r.URL, r.Ref, token); err != nil {
 			say("This token cannot read %s at %s: %v", r.URL, cmpRef(r.Ref), err)
 			continue
 		}

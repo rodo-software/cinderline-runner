@@ -3,6 +3,7 @@ package workspace
 import (
 	"cmp"
 	"context"
+	"log/slog"
 	"strings"
 )
 
@@ -60,8 +61,9 @@ const fetchExtraScript = `d=$PWD/$1
 // FetchExtras brings the project's volume of path (ExtraPath or LinkedPath)
 // up to repos, each in its own throwaway helper container that gets only
 // that repository's token. It returns the error of each repository that
-// failed, by name; a failure to prepare the volume fails them all.
-func FetchExtras(ctx context.Context, x Exec, project, path string, repos []Extra) map[string]error {
+// failed, by name; a failure to prepare the volume fails them all. Retries
+// are logged to log.
+func FetchExtras(ctx context.Context, x Exec, log *slog.Logger, project, path string, repos []Extra) map[string]error {
 	fail := func(err error) map[string]error {
 		m := map[string]error{}
 		for _, r := range repos {
@@ -85,7 +87,7 @@ func FetchExtras(ctx context.Context, x Exec, project, path string, repos []Extr
 	}
 	failed := map[string]error{}
 	for _, r := range repos {
-		if err := withToken(ctx, x, labels, mount, r.Token, fetchExtraScript, r.Name, r.URL, cmp.Or(r.Ref, "HEAD")); err != nil {
+		if err := withToken(ctx, x, log, project, labels, mount, r.Token, fetchExtraScript, r.Name, r.URL, cmp.Or(r.Ref, "HEAD")); err != nil {
 			failed[r.Name] = err
 		}
 	}
@@ -93,24 +95,26 @@ func FetchExtras(ctx context.Context, x Exec, project, path string, repos []Extr
 }
 
 // LsRemote checks that token can read ref (empty: the default branch) of the
-// repository at url, as a branch or a tag.
-func LsRemote(ctx context.Context, x Exec, project, url, ref, token string) error {
+// repository at url, as a branch or a tag. Retries are logged to log.
+func LsRemote(ctx context.Context, x Exec, log *slog.Logger, project, url, ref, token string) error {
 	refs := []string{"HEAD"}
 	if ref != "" {
 		refs = []string{"refs/heads/" + ref, "refs/tags/" + ref}
 	}
-	return withToken(ctx, x, Labels(project, ""), nil, token,
+	return withToken(ctx, x, log, project, Labels(project, ""), nil, token,
 		`exec git ls-remote --quiet --exit-code "$@"`, append([]string{url}, refs...)...)
 }
 
 // withToken runs script with args as $1... in a throwaway git container
 // that gets token by name, so its value travels in the docker command's
-// environment, never in argv, and askpass answers git with it.
-func withToken(ctx context.Context, x Exec, labels, mounts []string, token, script string, args ...string) error {
+// environment, never in argv, and askpass answers git with it. It needs the
+// network, so a transient network error is retried.
+func withToken(ctx context.Context, x Exec, log *slog.Logger, project string, labels, mounts []string, token, script string, args ...string) error {
 	argv := append([]string{"docker", "run", "--rm"}, labels...)
 	argv = append(argv, "-e", "GIT_TOKEN", "-e", "GIT_ASKPASS=/tmp/askpass", "-e", "GIT_TERMINAL_PROMPT=0")
 	argv = append(argv, mounts...)
 	argv = append(argv, "--entrypoint", "sh", GitImage, "-c", askpassScript, "sh", "sh", "-c", script, "sh")
-	_, err := x(ctx, []string{"GIT_TOKEN=" + token}, append(argv, args...)...)
+	argv = append(argv, args...)
+	_, err := retryNetwork(ctx, log, project, func() (string, error) { return x(ctx, []string{"GIT_TOKEN=" + token}, argv...) })
 	return err
 }

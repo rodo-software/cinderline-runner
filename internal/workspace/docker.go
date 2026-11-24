@@ -2,9 +2,11 @@ package workspace
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path"
@@ -141,6 +143,7 @@ type Docker struct {
 	Repository string // the configured repository URL, the only remote
 	Token      string // the git token; reaches only the helper's environment
 	Exec       Exec
+	Logger     *slog.Logger // retries of git network calls; nil means slog.Default()
 
 	// repoMu lets one fetch or push write the bare clone at a time: a
 	// project's team run and Project Manager run share it (CLR-194), and
@@ -194,6 +197,8 @@ func (d *Docker) Push(ctx context.Context, dir, branch string) ([]Secret, error)
 	if hasKnown(found) {
 		return found, fmt.Errorf("push %s: %w: %s", branch, ErrSecret, describe(found))
 	}
+	// No "+" and no --force: a retry after a push whose answer got lost is
+	// "up to date", never a force push (CLR-220).
 	if err := d.helper(ctx, labels, true, false, "-C", RepoPath, "push", "--quiet", d.Repository, scratch+":refs/heads/"+branch); err != nil {
 		return found, err
 	}
@@ -207,7 +212,8 @@ func (d *Docker) Push(ctx context.Context, dir, branch string) ([]Secret, error)
 // helper runs git with args in a throwaway helper container with the repo
 // volume, and the runs volume read-only when runs is set. Only with token
 // does the container get the token, by name: its value travels in the docker
-// command's environment, never in argv.
+// command's environment, never in argv. A command with the token is one that
+// needs the network, and is retried on a transient network error.
 func (d *Docker) helper(ctx context.Context, labels []string, token, runs bool, args ...string) error {
 	_, err := d.helperOutput(ctx, labels, token, runs, args...)
 	return err
@@ -226,7 +232,12 @@ func (d *Docker) helperOutput(ctx context.Context, labels []string, token, runs 
 		argv = append(argv, "-v", d.volume("runs")+":"+RunsPath+":ro")
 	}
 	argv = append(argv, "--entrypoint", "sh", GitImage, "-c", askpassScript, "sh", "git")
-	return d.output(ctx, env, append(argv, args...)...)
+	argv = append(argv, args...)
+	if !token {
+		return d.output(ctx, env, argv...)
+	}
+	log := cmp.Or(d.Logger, slog.Default())
+	return retryNetwork(ctx, log, d.Project, func() (string, error) { return d.output(ctx, env, argv...) })
 }
 
 func (d *Docker) run(ctx context.Context, env []string, argv ...string) error {
