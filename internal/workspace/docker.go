@@ -234,19 +234,20 @@ func (d *Docker) helperOutput(ctx context.Context, labels []string, token, runs 
 	argv = append(argv, "--entrypoint", "sh", GitImage, "-c", askpassScript, "sh", "git")
 	argv = append(argv, args...)
 	if !token {
-		return d.output(ctx, env, argv...)
+		return d.Exec(ctx, env, argv...)
 	}
 	log := cmp.Or(d.Logger, slog.Default())
-	return retryNetwork(ctx, log, d.Project, func() (string, error) { return d.output(ctx, env, argv...) })
+	return retryNetwork(ctx, log, d.Project, func() (string, error) { return d.Exec(ctx, env, argv...) })
 }
 
 func (d *Docker) run(ctx context.Context, env []string, argv ...string) error {
-	_, err := d.output(ctx, env, argv...)
+	_, err := d.Exec(ctx, env, argv...)
 	return err
 }
 
-func (d *Docker) output(ctx context.Context, env []string, argv ...string) (string, error) {
-	return d.Exec(ctx, env, argv...)
+// runsVolume makes sure the project's runs volume exists.
+func (d *Docker) runsVolume(ctx context.Context) error {
+	return d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, d.labels("")...), d.volume("runs"))...)
 }
 
 // volume is the name of the project's volume of the given kind.
@@ -354,7 +355,7 @@ func (d *Docker) Prepare(ctx context.Context, branch, base string) (string, erro
 	if err := d.Fetch(ctx); err != nil {
 		return "", err
 	}
-	if err := d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, d.labels("")...), d.volume("runs"))...); err != nil {
+	if err := d.runsVolume(ctx); err != nil {
 		return "", err
 	}
 	// The volume's root belongs to root, so root makes the clone's dir.
@@ -532,15 +533,14 @@ func (d *Docker) gitAs(ctx context.Context, dir, author string, args ...string) 
 	for _, kv := range gitConfig {
 		argv = append(argv, "-c", kv[0]+"="+kv[1])
 	}
-	return d.output(ctx, nil, append(argv, args...)...)
+	return d.Exec(ctx, nil, append(argv, args...)...)
 }
 
 // Stranded lists clones whose branch has commits that no remote branch has
 // (decision 2026-11-07-publish-resilience). One docker run loops over every
 // directory under /runs, checking with git symbolic-ref and branch -r.
 func (d *Docker) Stranded(ctx context.Context) ([]Clone, error) {
-	labels := d.labels("")
-	if err := d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, labels...), d.volume("runs"))...); err != nil {
+	if err := d.runsVolume(ctx); err != nil {
 		return nil, err
 	}
 	script := `for d in /runs/*/; do
@@ -555,7 +555,7 @@ func (d *Docker) Stranded(ctx context.Context) ([]Clone, error) {
   fi
   printf '%s\t%s\n' "${d%/}" "$branch"
 done`
-	argv := append([]string{"docker", "run", "--rm"}, labels...)
+	argv := append([]string{"docker", "run", "--rm"}, d.labels("")...)
 	argv = append(argv, "--network", "none", "--user", AgentUser,
 		"-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_CONFIG_GLOBAL=/dev/null",
 		"-e", "GIT_CONFIG_COUNT="+strconv.Itoa(len(gitConfig)))
@@ -565,7 +565,7 @@ done`
 	argv = append(argv,
 		"-v", d.volume("repo")+":"+RepoPath+":ro", "-v", d.volume("runs")+":"+RunsPath,
 		"--entrypoint", "sh", GitImage, "-c", script)
-	out, err := d.output(ctx, nil, argv...)
+	out, err := d.Exec(ctx, nil, argv...)
 	if err != nil {
 		return nil, err
 	}
@@ -601,7 +601,7 @@ func (d *Docker) Behind(ctx context.Context, base string) ([]string, error) {
 	argv := append([]string{"docker", "run", "--rm"}, d.labels("")...)
 	argv = append(argv, "--network", "none", "-v", d.volume("repo")+":"+RepoPath+":ro",
 		"--entrypoint", "sh", GitImage, "-c", behindScript, "sh", "refs/heads/"+base, name.Name)
-	out, err := d.output(ctx, nil, argv...)
+	out, err := d.Exec(ctx, nil, argv...)
 	return strings.Fields(out), err
 }
 
@@ -610,12 +610,12 @@ func (d *Docker) Behind(ctx context.Context, base string) ([]string, error) {
 // belongs to root.
 func (d *Docker) runsShell(ctx context.Context, issue, script string, args ...string) (string, error) {
 	labels := d.labels(issue)
-	if err := d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, d.labels("")...), d.volume("runs"))...); err != nil {
+	if err := d.runsVolume(ctx); err != nil {
 		return "", err
 	}
 	argv := append([]string{"docker", "run", "--rm"}, labels...)
 	argv = append(argv, "--network", "none", "-v", d.volume("runs")+":"+RunsPath, "--entrypoint", "sh", GitImage, "-c", script, "sh")
-	return d.output(ctx, nil, append(argv, args...)...)
+	return d.Exec(ctx, nil, append(argv, args...)...)
 }
 
 // List lists the folders under the runs volume whose name is an issue ref.
