@@ -112,6 +112,44 @@ func parseSize(s string) (int64, error) {
 	return 0, errors.New(`min_free_disk must be "off" or a size such as "10GB", in MB, GB or TB`)
 }
 
+// DefaultMemory is the memory limit of an agent container whose project
+// sets none, and MinMemory the least a project may set (decision
+// 2026-11-24-agent-memory-limit).
+const (
+	DefaultMemory = "4g"
+	MinMemory     = "256m"
+)
+
+// memorySize is a memory value as docker run --memory takes it, limited to
+// whole MiB or GiB: one letter, so "GB" cannot be read as min_free_disk's 1000-based unit.
+var memorySize = regexp.MustCompile(`^([1-9][0-9]{0,8})([mMgG])$`)
+
+// ParseMemory reads a memory size such as "4g" or "512m", 1024-based as in
+// docker run --memory, of at least MinMemory, in bytes.
+func ParseMemory(s string) (int64, error) {
+	m := memorySize.FindStringSubmatch(s)
+	if m == nil {
+		return 0, fmt.Errorf("memory %q must be a whole number of MiB or GiB such as %q or %q, at least %s", s, DefaultMemory, "512m", MinMemory)
+	}
+	n, _ := strconv.ParseInt(m[1], 10, 64) // at most 9 digits: no overflow below
+	if strings.EqualFold(m[2], "g") {
+		n <<= 30
+	} else {
+		n <<= 20
+	}
+	if n < 256<<20 {
+		return 0, fmt.Errorf("memory %q is under the minimum of %s", s, MinMemory)
+	}
+	return n, nil
+}
+
+// MemoryLimit is the memory limit of the project's agent containers in
+// bytes: Memory, or DefaultMemory. Validate has checked the value.
+func (p Project) MemoryLimit() int64 {
+	n, _ := ParseMemory(cmp.Or(p.Memory, DefaultMemory))
+	return n
+}
+
 // Project is one Cinderline project, identified by URL, Workspace and Key (CSR-97).
 type Project struct {
 	// LocalID is the local name ID returns. A key renamed in the app changes
@@ -132,6 +170,11 @@ type Project struct {
 	// Only local config opens a host for every run; Cinderline opens one
 	// for an issue's runs (decision 2026-11-17-hosts-from-cinderline).
 	AllowHosts []string `json:"allow_hosts,omitempty"`
+	// Memory is the memory limit of the project's agent containers, also
+	// their swap limit, such as "8g" or "512m"; empty is DefaultMemory. A
+	// mem_limit on the agent service of its compose file wins (decision
+	// 2026-11-24-agent-memory-limit).
+	Memory string `json:"memory,omitempty"`
 	// ExtraRepositories are other repositories the project's runs may read,
 	// mounted read-only (CSR-160). Configured only here, not in Cinderline
 	// (app decision 2026-11-11-extra-repositories-in-runner).
@@ -421,6 +464,8 @@ func (c *Config) Validate() error {
 			problem = "another project has the same url, workspace and key"
 		} else if errMsg := checkAllowHosts(p.AllowHosts); errMsg != "" {
 			problem = errMsg
+		} else if _, err := ParseMemory(cmp.Or(p.Memory, DefaultMemory)); err != nil {
+			problem = err.Error()
 		} else {
 			problem = checkExtraRepositories(p.ExtraRepositories)
 		}

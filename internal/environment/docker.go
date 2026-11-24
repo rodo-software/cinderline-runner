@@ -2,6 +2,7 @@ package environment
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -49,6 +51,16 @@ var ProxyEnv = []string{
 // profile, which then refuses unshare and clone with new namespaces.
 var hardening = []string{"--cap-drop", "ALL", "--security-opt", "no-new-privileges"}
 
+// proxyMemory is the egress proxy's memory limit, swap included: a fixed
+// small one (decision 2026-11-24-agent-memory-limit).
+const proxyMemory = "64m"
+
+// memoryLimit limits a container to bytes of memory without swap, so going
+// over kills it instead of slowing the machine (decision 2026-11-24-agent-memory-limit).
+func memoryLimit(bytes string) []string {
+	return []string{"--memory", bytes, "--memory-swap", bytes}
+}
+
 // Docker is the default Environment: the default image, an internal network
 // per run with an egress proxy as its only way out (CSR-63) and no other
 // service (a project that needs a database brings a compose file), and every
@@ -61,6 +73,10 @@ type Docker struct {
 	// Allow is the project's hosts every run may reach, as host:port
 	// (ProjectHosts); each run adds its client's Spec.Allow.
 	Allow []string
+	// Memory is the agent container's memory limit in bytes, the project's
+	// MemoryLimit; a mem_limit on the compose file's agent service wins.
+	// Run refuses to start an agent without one.
+	Memory int64
 	// OnRefused is called with each host:port the run's proxy refused, and
 	// the run's issue; nil: none.
 	OnRefused func(issue, hostPort string)
@@ -88,15 +104,19 @@ func streamCommand(ctx context.Context, env []string, stdin string, out io.Write
 
 // Run runs one agent turn: an internal network with the egress proxy
 // allowing d.Allow and s.Allow, then the hardened agent container with only
-// ProxyEnv and s.Env, stopped with docker stop at s.Timeout. With a compose
-// file (SetCompose), its services start beside the proxy, and the agent runs
-// as hardened in the agent service's image with that service's environment
-// too. Its output goes to the log line by line as it comes, then the hosts
+// ProxyEnv and s.Env, limited to d.Memory without swap, stopped with docker
+// stop at s.Timeout. With a compose file (SetCompose), its services start
+// beside the proxy, and the agent runs as hardened in the agent service's
+// image with that service's environment too, and its mem_limit if it sets
+// one. Its output goes to the log line by line as it comes, then the hosts
 // the proxy refused. All are removed afterwards, also after a failure or a
 // stop of the runner.
 func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	if !workspace.IssueRef.MatchString(s.Issue) || len(s.Cmd) == 0 {
 		return "", fmt.Errorf("run: issue %q, command %q", s.Issue, s.Cmd)
+	}
+	if d.Memory <= 0 {
+		return "", fmt.Errorf("run %s: no memory limit set", s.Issue)
 	}
 	var names []string
 	for i, kv := range s.Env {
@@ -145,7 +165,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 			d.log().Warn("run's containers not removed", "project", d.Project, "issue", s.Issue, "err", err)
 		}
 	}()
-	env := ProxyEnv
+	env, memory := ProxyEnv, d.Memory
 	if compose != nil {
 		if p, err = d.composeProject(ctx, s.Issue, compose); err != nil {
 			return "", err
@@ -153,7 +173,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		if err := d.composeUp(ctx, p); err != nil {
 			return "", err
 		}
-		image, env = p.image, p.env
+		image, env, memory = p.image, p.env, cmp.Or(p.memory, memory)
 	}
 
 	net := d.network(s.Issue)
@@ -162,7 +182,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		"--name", agent, "--network", net)
 	// No --add-host host.docker.internal: decision 2026-11-09-network-allowlist;
 	// a local provider maps it in the proxy only (2026-11-17-local-model-providers).
-	argv = append(append(argv, hardening...), "--user", workspace.AgentUser, "--workdir", s.Dir)
+	argv = slices.Concat(argv, hardening, memoryLimit(strconv.FormatInt(memory, 10)), []string{"--user", workspace.AgentUser, "--workdir", s.Dir})
 	for _, kv := range env {
 		argv = append(argv, "-e", kv)
 	}
@@ -369,7 +389,7 @@ func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []strin
 	if hostGateway {
 		proxy = append(proxy, "--add-host", HostGateway+":host-gateway")
 	}
-	proxy = append(append(append(proxy, hardening...), "--read-only", proxyImage), allow...)
+	proxy = slices.Concat(proxy, hardening, []string{"--read-only"}, memoryLimit(proxyMemory), []string{proxyImage}, allow)
 	for _, argv := range [][]string{proxy, {"docker", "network", "connect", "bridge", net + "-proxy"}} {
 		if _, err := d.exec(ctx, argv...); err != nil {
 			return errors.Join(err, d.down(ctx, issue))

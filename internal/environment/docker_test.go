@@ -125,6 +125,7 @@ func TestUp(t *testing.T) {
 		{nil, append(append([]string{"docker", "run", "--detach"}, issueLabels...),
 			"--name", "cinderline-CSR-CSR-31-proxy", "--network", "cinderline-CSR-CSR-31", "--network-alias", "proxy",
 			"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
+			"--memory", "64m", "--memory-swap", "64m",
 			"cinderline-proxy:abc", "cs.example:443", "api.anthropic.com:443")},
 		{nil, []string{"docker", "network", "connect", "bridge", "cinderline-CSR-CSR-31-proxy"}},
 	}
@@ -243,6 +244,7 @@ func runner(fail map[string]error, stream func(ctx context.Context, out io.Write
 	var logs bytes.Buffer
 	d := &Docker{
 		Project: "CSR",
+		Memory:  4 << 30,
 		Log:     slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		Exec: func(ctx context.Context, env []string, argv ...string) (string, error) {
 			record(env, argv)
@@ -293,6 +295,8 @@ func TestRun(t *testing.T) {
 	agent := append(append([]string{"docker", "run", "--rm", "--interactive"}, issueLabels...),
 		"--name", "cinderline-CSR-CSR-31-agent", "--network", "cinderline-CSR-CSR-31",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+		// No swap: going over the limit kills the turn (decision 2026-11-24-agent-memory-limit).
+		"--memory", "4294967296", "--memory-swap", "4294967296",
 		"--user", "1000:1000", "--workdir", "/runs/CSR-31",
 		"-e", "HTTPS_PROXY=http://proxy:3128", "-e", "HTTP_PROXY=http://proxy:3128",
 		"-e", "https_proxy=http://proxy:3128", "-e", "http_proxy=http://proxy:3128",
@@ -618,6 +622,32 @@ func TestRunRefusesBadSpecs(t *testing.T) {
 		if len(calls()) != 0 {
 			t.Errorf("Run(%+v) ran %q", s, calls())
 		}
+	}
+}
+
+// CLR-215: the project's memory setting limits the agent container, swap
+// included; without one Run refuses rather than run the agent unlimited.
+func TestRunMemoryLimit(t *testing.T) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return nil })
+	d.Memory = 8 << 30
+	if _, err := d.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	agent := calls()[5].Argv
+	if !hasPair(agent, "--memory", "8589934592") || !hasPair(agent, "--memory-swap", "8589934592") {
+		t.Errorf("agent argv = %q, want --memory and --memory-swap 8589934592", agent)
+	}
+
+	d, calls, _ = runner(nil, func(context.Context, io.Writer) error {
+		t.Error("agent started without a memory limit")
+		return nil
+	})
+	d.Memory = 0
+	if _, err := d.Run(context.Background(), turn); err == nil {
+		t.Error("Run without a memory limit = nil, want an error")
+	}
+	if len(calls()) != 0 {
+		t.Errorf("Run without a memory limit ran %q", calls())
 	}
 }
 

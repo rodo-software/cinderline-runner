@@ -424,3 +424,52 @@ func TestRunInComposeReachesALocalProviderThroughTheProxyOnly(t *testing.T) {
 		t.Errorf("agent argv %q does not send plain http through the proxy", agent)
 	}
 }
+
+// CLR-215, decision 2026-11-24-agent-memory-limit: a mem_limit on the agent
+// service, which compose writes as a byte count in a string, wins over the
+// project's setting; a plain number is read too. Without one the project's
+// setting holds. The runner sets no limit on the other services.
+func TestRunInComposeMemLimit(t *testing.T) {
+	for _, tt := range []struct{ agent, want string }{
+		{`{"image": "php:8.4", "mem_limit": "2147483648"}`, "2147483648"},
+		{`{"image": "php:8.4", "mem_limit": 1073741824}`, "1073741824"},
+		{`{"image": "php:8.4"}`, "8589934592"},
+	} {
+		d, calls, _ := composeRunner(t, `{"services": {"agent": `+tt.agent+`, "db": {"image": "postgres:17"}}}`)
+		d.Memory = 8 << 30
+		var override string
+		record := d.Exec
+		d.Exec = func(ctx context.Context, env []string, argv ...string) (string, error) {
+			if i := slices.Index(argv, "up"); i > 0 {
+				b, err := os.ReadFile(argv[i-1])
+				if err != nil {
+					t.Error(err)
+				}
+				override = string(b)
+			}
+			return record(ctx, env, argv...)
+		}
+		if _, err := d.Run(context.Background(), turn); err != nil {
+			t.Fatalf("%s: %v", tt.agent, err)
+		}
+		var agent []string
+		for _, c := range calls() {
+			if strings.Contains(strings.Join(c.Argv, " "), "<stdin:") {
+				agent = c.Argv
+			}
+		}
+		if !hasPair(agent, "--memory", tt.want) || !hasPair(agent, "--memory-swap", tt.want) {
+			t.Errorf("%s: agent argv = %q, want --memory and --memory-swap %s", tt.agent, agent, tt.want)
+		}
+		if override == "" || strings.Contains(override, "mem") {
+			t.Errorf("%s: override %q, want one that sets no memory limit", tt.agent, override)
+		}
+	}
+}
+
+func TestRunInComposeRefusesABadMemLimit(t *testing.T) {
+	d, _, _ := composeRunner(t, `{"services": {"agent": {"image": "php:8.4", "mem_limit": "-1"}}}`)
+	if _, err := d.Run(context.Background(), turn); err == nil || !strings.Contains(err.Error(), "mem_limit") {
+		t.Errorf("Run = %v, want the mem_limit refused", err)
+	}
+}

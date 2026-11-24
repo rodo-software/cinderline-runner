@@ -62,6 +62,7 @@ func commands() []command {
 		{"list-repos", projectUsage, "list the project's extra repositories", (*CLI).listRepos},
 		{"remove-repo", projectUsage + " URL|NAME", "remove an extra repository and its git token", (*CLI).removeRepo},
 		{"allow-host", allowHostUsage, "add, list or remove an extra host:port a project's runs may reach (its allow_hosts in config.json), or all current and future projects when --project is omitted, never the runner's own machine", (*CLI).allowHost},
+		{"memory", memoryUsage, "show, set or clear the memory limit of a project's agent containers (its memory in config.json), such as 8g or 512m, at least 256m; the default is 4g, and a mem_limit on the agent service of its compose file wins", (*CLI).memory},
 		{"add-provider", "[--free] NAME URL", "add an OpenAI-compatible model provider for the OpenCode agents of every project, which name a model as NAME/<model id>, asking for its optional API key; --free marks its models as costing nothing per token, which the runner tells Cinderline", (*CLI).addProvider},
 		{"set-provider", setProviderUsage, "mark a model provider free or not, keeping its key", (*CLI).setProvider},
 		{"list-providers", "", "list the runner's model providers, whether each has a key, and which are free", (*CLI).listProviders},

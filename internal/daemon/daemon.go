@@ -253,7 +253,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 	c.Outbox = run.OutboxFile(d.o.Paths.State, p)
 	var proj *run.Project
 	env := &environment.Docker{
-		Project: p.ID(), Log: log, Exec: workspace.RunCommand,
+		Project: p.ID(), Log: log, Exec: workspace.RunCommand, Memory: p.MemoryLimit(),
 		Allow:     environment.ProjectHosts(p.URL, slices.Concat(cfg.AllowHosts, p.AllowHosts)),
 		OnRefused: func(issue, hp string) { proj.AddRefused(issue, hp) },
 	}

@@ -74,6 +74,7 @@ func TestIntegrationAllowlist(t *testing.T) {
 		Exec:    workspace.RunCommand,
 		Log:     slog.New(slog.NewTextHandler(&logs, nil)),
 		Allow:   []string{"example.com:443"},
+		Memory:  4 << 30,
 		OnRefused: func(host string) {
 			mu.Lock()
 			defer mu.Unlock()

@@ -145,6 +145,16 @@ func TestValidate(t *testing.T) {
 		{"allow host wildcard", []Project{with(func(p *Project) { p.AllowHosts = []string{"*.example.com:443"} })}, "project 1 (WEB): allow_hosts"},
 		{"allow host bad port", []Project{with(func(p *Project) { p.AllowHosts = []string{"x.example:0"} })}, "project 1 (WEB): allow_hosts"},
 		{"allow host empty host", []Project{with(func(p *Project) { p.AllowHosts = []string{":443"} })}, "project 1 (WEB): allow_hosts"},
+		// CLR-215, decision 2026-11-24-agent-memory-limit: a size of at least 256m, as docker run --memory takes it.
+		{"memory", []Project{with(func(p *Project) { p.Memory = "8g" })}, ""},
+		{"memory at the minimum", []Project{with(func(p *Project) { p.Memory = "256M" })}, ""},
+		{"memory under the minimum", []Project{with(func(p *Project) { p.Memory = "255m" })}, "project 1 (WEB): memory"},
+		{"memory without unit", []Project{with(func(p *Project) { p.Memory = "4294967296" })}, "project 1 (WEB): memory"},
+		{"memory in GB", []Project{with(func(p *Project) { p.Memory = "4GB" })}, "project 1 (WEB): memory"},
+		{"memory zero", []Project{with(func(p *Project) { p.Memory = "0g" })}, "project 1 (WEB): memory"},
+		{"memory negative", []Project{with(func(p *Project) { p.Memory = "-4g" })}, "project 1 (WEB): memory"},
+		{"memory fraction", []Project{with(func(p *Project) { p.Memory = "1.5g" })}, "project 1 (WEB): memory"},
+		{"memory overflow", []Project{with(func(p *Project) { p.Memory = "99999999999999g" })}, "project 1 (WEB): memory"},
 	}
 	for _, tt := range tests {
 		err := (&Config{Version: 1, Projects: tt.projects}).Validate()
@@ -648,6 +658,34 @@ func TestConfigAllowHosts(t *testing.T) {
 		err := (&Config{AllowHosts: []string{machine}}).Validate()
 		if err == nil || !strings.Contains(err.Error(), "add-provider") {
 			t.Errorf("%q: err = %v, want add-provider error", machine, err)
+		}
+	}
+}
+
+// CLR-215: a project's agent containers get its memory setting, or 4g.
+func TestProjectMemoryLimit(t *testing.T) {
+	for _, tt := range []struct {
+		memory string
+		bytes  int64
+	}{
+		{"", 4 << 30},
+		{"8g", 8 << 30},
+		{"512M", 512 << 20},
+		{"256m", 256 << 20},
+	} {
+		if got := (Project{Memory: tt.memory}).MemoryLimit(); got != tt.bytes {
+			t.Errorf("MemoryLimit(%q) = %d, want %d", tt.memory, got, tt.bytes)
+		}
+	}
+}
+
+func TestParseMemory(t *testing.T) {
+	if n, err := ParseMemory("2G"); err != nil || n != 2<<30 {
+		t.Errorf("ParseMemory(2G) = %d, %v", n, err)
+	}
+	for _, bad := range []string{"", "g", "4", "4 g", " 4g", "4gb", "4k", "100m", "0x10g", "+4g", "04g"} {
+		if _, err := ParseMemory(bad); err == nil {
+			t.Errorf("ParseMemory(%q) accepted it", bad)
 		}
 	}
 }

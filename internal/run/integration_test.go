@@ -84,7 +84,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 
 	// Everything this test creates carries the project's label, also
 	// Forgejo, so the Environment's own Cleanup removes it.
-	env := &scripted{Docker: &environment.Docker{Project: project, Log: log, Exec: workspace.RunCommand}}
+	env := &scripted{Docker: &environment.Docker{Project: project, Log: log, Exec: workspace.RunCommand, Memory: 4 << 30}}
 	label := "label=" + workspace.ProjectLabel(project)
 	cleanup := func() {
 		ctx := context.WithoutCancel(ctx)

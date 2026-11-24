@@ -63,6 +63,7 @@ type composed struct {
 	args     []string // docker compose and its project and file flags
 	image    string   // the agent service's image
 	env      []string // the agent service's environment, then ProxyEnv's for its services
+	memory   int64    // the agent service's mem_limit in bytes; 0: none
 	services []string // the services besides the agent's
 }
 
@@ -156,6 +157,12 @@ func (d *Docker) composeProject(ctx context.Context, issue string, c *Compose) (
 
 	agent := cfg.Services[c.Service]
 	p.image = agent.Image
+	if agent.MemLimit != "" {
+		// Compose checks it is not negative; this keeps docker run from reading a mistake as "no limit".
+		if p.memory, err = agent.MemLimit.Int64(); err != nil || p.memory <= 0 {
+			return p, fmt.Errorf("compose file %s on %s refused: agent service %s: mem_limit %s is not a positive number of bytes", c.File, c.Base, c.Service, agent.MemLimit)
+		}
+	}
 	override := map[string]any{"networks": map[string]any{"default": map[string]any{"name": d.network(issue), "external": true}}}
 	labels := map[string]string{}
 	l := workspace.Labels(d.Project, issue)
@@ -262,7 +269,10 @@ type composeService struct {
 	Image       string             `json:"image"`
 	Build       *composeBuild      `json:"build"`
 	Environment map[string]*string `json:"environment"`
-	EnvFile     []struct {
+	// MemLimit is mem_limit in bytes: compose writes it as a number in a
+	// string ("2147483648"), and leaves it out when unset.
+	MemLimit json.Number `json:"mem_limit"`
+	EnvFile  []struct {
 		Path string `json:"path"`
 	} `json:"env_file"`
 	Networks map[string]any `json:"networks"`
