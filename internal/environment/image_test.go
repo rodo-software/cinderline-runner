@@ -90,28 +90,24 @@ func TestImagePulledByPinnedDigest(t *testing.T) {
 	}
 }
 
-// CSR-49: offline, a failed pull falls back to the local build; CSR-151:
-// announcing the slow step once, not again before the build.
-func TestImageBuiltWhenPullFails(t *testing.T) {
+// CLR-240: a failed pull of the pinned image is an error, not a local build
+// from unpinned inputs: the run does not start and the next poll tries again.
+// CSR-151: the slow step is announced once.
+func TestImagePullFailureIsError(t *testing.T) {
 	pin(t, testDigest, dockerfileSum())
-	d, calls := scripted(nil, map[int]error{0: errors.New("no such image"), 1: errors.New("offline"), 2: errors.New("no such image")})
+	d, calls := scripted(nil, map[int]error{0: errors.New("no such image"), 1: errors.New("offline")})
 	fetches := 0
 	d.OnFetch = func() { fetches++ }
 	ref, err := d.Image(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "offline") || !strings.Contains(err.Error(), pinnedRef()) {
+		t.Fatalf("Image = %q, %v; want the pull's error naming the image", ref, err)
 	}
 	if fetches != 1 {
 		t.Errorf("OnFetch called %d times, want 1", fetches)
 	}
-	if ref != localTag() {
-		t.Errorf("image = %q, want %q", ref, localTag())
-	}
-	if len(*calls) != 4 {
-		t.Fatalf("calls = %q, want inspect, pull, inspect, build", *calls)
-	}
-	if !reflect.DeepEqual((*calls)[2].Argv, inspect(localTag())) || (*calls)[3].Argv[1] != "build" {
-		t.Errorf("calls = %q, want the local inspect and build after the pull", *calls)
+	want := []execCall{{nil, inspect(pinnedRef())}, {nil, []string{"docker", "pull", "--quiet", pinnedRef()}}}
+	if !reflect.DeepEqual(*calls, want) {
+		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
 	}
 }
 
@@ -144,16 +140,35 @@ func TestImageBuiltWhenNotPinned(t *testing.T) {
 	localOnly(t, d, calls)
 }
 
-// CSR-49: the workflow publishes the image the runner pulls; arm64 only
-// (decision 2026-11-12-ci-speedups).
+// CSR-49: the workflow publishes the image the runner pulls. CLR-240: a pin
+// for the current Dockerfile needs an amd64 image too, as amd64 machines no
+// longer build when the pull fails (decision 2026-11-24-default-image-amd64).
 func TestWorkflowDraft(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "default-image.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{PublishedImage, "linux/arm64", "images/default", "tags:", "attest"} {
+	want := []string{PublishedImage, "linux/arm64", "images/default", "attest"}
+	if publishedDigest != "" && publishedSum == dockerfileSum() {
+		want = append(want, "linux/amd64")
+	}
+	for _, s := range want {
 		if !strings.Contains(string(b), s) {
 			t.Errorf("default-image.yml lacks %q", s)
+		}
+	}
+}
+
+// CLR-240: the draft that replaces the workflow publishes both platforms as
+// one manifest list and attests it.
+func TestWorkflowDraftMultiArch(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "ci", "default-image.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{PublishedImage, "linux/arm64", "linux/amd64", "imagetools create", "images/default", "attest"} {
+		if !strings.Contains(string(b), s) {
+			t.Errorf("docs/ci/default-image.yml lacks %q", s)
 		}
 	}
 }

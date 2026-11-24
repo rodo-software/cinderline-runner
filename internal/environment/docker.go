@@ -34,7 +34,9 @@ const PublishedImage = "ghcr.io/rodo-software/" + name.Name + "-runner-default"
 // of the SHA-256 of the images/default/Dockerfile it was built from, so a
 // changed Dockerfile is built locally until it is published and pinned again.
 // Pinned to tag v0.1.1 (CSR-151); repeat the pin after every Dockerfile
-// change (.github/workflows/default-image.yml, its header).
+// change (.github/workflows/default-image.yml, its header). Pin only a
+// manifest list with linux/amd64 and linux/arm64: a pinned image that fails
+// to pull stops the runs (decision 2026-11-24-default-image-amd64).
 var publishedDigest, publishedSum = "sha256:22dc9fdeda6197570675db35feb6826639a35ae3f16079151c7b3cddcb95e95d", "8bc0a5e245dc"
 
 // ProxyEnv sends the agent's HTTP(S) traffic through the run's egress proxy;
@@ -81,7 +83,7 @@ type Docker struct {
 	// the run's issue; nil: none.
 	OnRefused func(issue, hostPort string)
 	// OnFetch is called before the default image is pulled or built, a slow
-	// first-time step; nil: none. A failed pull calls it again for the build.
+	// first-time step; nil: none.
 	OnFetch func()
 
 	compose atomic.Pointer[Compose] // the project's own compose file; nil: the default environment
@@ -393,28 +395,27 @@ func DockerMemory(ctx context.Context, exec workspace.Exec) (int64, error) {
 // Image returns the default image: the published one by its pinned digest
 // when a pin is set for this Dockerfile, else the locally built one, whose
 // tag is the Dockerfile's hash, so a runner with a changed Dockerfile
-// builds its own.
+// builds its own. A failed pull of the pinned image is an error, not a
+// local build from unpinned inputs; the next poll tries again (decision
+// 2026-11-24-default-image-amd64).
 func (d *Docker) Image(ctx context.Context) (string, error) {
 	sum := sha256.Sum256(defaultimage.Dockerfile)
 	sumHex := hex.EncodeToString(sum[:6])
-	tag := name.Name + "-default:" + sumHex
-	onFetch := d.OnFetch
-	if publishedDigest != "" && publishedSum == sumHex {
-		ref := PublishedImage + "@" + publishedDigest
-		if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref); err == nil {
-			return ref, nil
-		}
-		if onFetch != nil {
-			onFetch()
-			onFetch = nil // announced once, also when the pull fails and we build
-		}
-		_, err := d.exec(ctx, "docker", "pull", "--quiet", ref)
-		if err == nil {
-			return ref, nil
-		}
-		d.log().Warn("default image pull failed, building it locally", "image", ref, "err", err)
+	if publishedDigest == "" || publishedSum != sumHex {
+		tag := name.Name + "-default:" + sumHex
+		return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile}, d.OnFetch)
 	}
-	return d.localImage(ctx, tag, map[string][]byte{"Dockerfile": defaultimage.Dockerfile}, onFetch)
+	ref := PublishedImage + "@" + publishedDigest
+	if _, err := d.exec(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref); err == nil {
+		return ref, nil
+	}
+	if d.OnFetch != nil {
+		d.OnFetch()
+	}
+	if _, err := d.exec(ctx, "docker", "pull", "--quiet", ref); err != nil {
+		return "", fmt.Errorf("pull default image %s: %w", ref, err)
+	}
+	return ref, nil
 }
 
 // ProxyImage returns the egress proxy's image, built locally from the

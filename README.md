@@ -262,7 +262,7 @@ services:
 
 When Cinderline needs a newer runner, it answers `426` with the minimum version. The runner then takes no new work for that project, logs one error and shows it in `cinderline status` ("cinderline needs runner ≥ X; run `cinderline update` and then `cinderline run`"), and asks again only once an hour.
 
-Agent containers run the default image, `ghcr.io/rodo-software/cinderline-runner-default`, pulled by a pinned digest. Offline, the runner builds it locally from `images/default/Dockerfile` instead.
+Agent containers run the default image, `ghcr.io/rodo-software/cinderline-runner-default`, pulled by a pinned digest for linux/amd64 and linux/arm64. When the pull fails, the run waits for the next poll; the runner builds the image locally from `images/default/Dockerfile` only while that file has no published pin.
 
 ## Build
 
