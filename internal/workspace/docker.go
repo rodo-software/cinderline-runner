@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,16 +42,56 @@ const askpassScript = `printf '%s\n' '#!/bin/sh' 'case "$1" in Username*) echo x
 type Exec func(ctx context.Context, env []string, argv ...string) (string, error)
 
 // RunCommand is the real Exec. Standard error goes only into the error, so
-// docker's pull progress never mixes into git's output.
+// docker's pull progress never mixes into git's output. A failed command
+// returns a *CommandError.
 func RunCommand(ctx context.Context, env []string, argv ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), env...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return stdout.String(), fmt.Errorf("%s: %w\n%s", strings.Join(argv, " "), err, tail(stdout.String()+stderr.String(), 2000))
+		return stdout.String(), &CommandError{Argv: argv, Err: err, Output: tail(stdout.String()+stderr.String(), 2000)}
 	}
 	return stdout.String(), nil
+}
+
+// CommandError is a command that failed: its whole argv and error on the
+// first line, for the log, and the end of its output, git's or docker's own
+// reason, on the lines after.
+type CommandError struct {
+	Argv   []string
+	Err    error
+	Output string // the tail of standard output and error
+}
+
+func (e *CommandError) Error() string {
+	return fmt.Sprintf("%s: %v\n%s", strings.Join(e.Argv, " "), e.Err, e.Output)
+}
+
+func (e *CommandError) Unwrap() error { return e.Err }
+
+// Command is the argv shortened to what it ran: "git fetch" for git in the
+// git image, else the leading words, such as "docker volume create".
+func (e *CommandError) Command() string {
+	if i := slices.Index(e.Argv, GitImage); i > 0 {
+		rest := e.Argv[i+1:]
+		j := slices.Index(rest, "git")      // the helper's sh -c <askpass> sh git <args>
+		if j >= 0 || e.Argv[i-1] == "git" { // or the agent side's --entrypoint git
+			for k := j + 1; k < len(rest); k++ {
+				switch a := rest[k]; {
+				case a == "-C" || a == "-c":
+					k++ // and its value
+				case !strings.HasPrefix(a, "-"):
+					return "git " + a
+				}
+			}
+		}
+	}
+	n := 0
+	for n < len(e.Argv) && (n == 0 || !strings.HasPrefix(e.Argv[n], "-")) {
+		n++
+	}
+	return strings.Join(e.Argv[:n], " ")
 }
 
 // OnceVolumes is x, except that it runs each "docker volume create" once:

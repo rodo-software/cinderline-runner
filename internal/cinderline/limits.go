@@ -15,7 +15,7 @@ const (
 	maxRunning       = 20    // poll running
 	maxListed        = 200   // poll held and review
 	maxErrors        = 50    // poll report.errors
-	maxErrorMessage  = 2000  // poll report.errors[].message
+	MaxErrorMessage  = 2000  // poll report.errors[].message
 	maxConflicts     = 1000  // conflicts of a review fact or a step
 	maxText          = 1000  // one conflict or workspace note
 	maxNotes         = 20    // workspace.notes

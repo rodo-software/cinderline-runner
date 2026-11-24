@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -221,6 +224,50 @@ func TestARunThatDoesNotStartIsReported(t *testing.T) {
 	}
 	if len(app.requests()) != 0 {
 		t.Error("a run that did not start called next")
+	}
+}
+
+// A run whose environment fails on a git command reports git's own reason,
+// not the helper's docker command line (CLR-219).
+func TestANotStartedReportCarriesGitsReason(t *testing.T) {
+	f := newFixture(t)
+	fatal := "fatal: Authentication failed for 'https://git.example.com/o/r.git/'"
+	ws := &workspace.Docker{Project: "CSR", Repository: "https://git.example.com/o/r.git", Token: "t",
+		Exec: func(_ context.Context, _ []string, argv ...string) (string, error) {
+			if slices.Contains(argv, "fetch") {
+				return "", &workspace.CommandError{Argv: argv, Err: errors.New("exit status 128"), Output: fatal + "\n"}
+			}
+			return "", nil
+		}}
+	f.p.prepare = func(ctx context.Context, _ cinderline.Project, _ string) (int64, error) { return 0, ws.Fetch(ctx) }
+	polls := runLoop(t, f, &fakeApp{}, nil, nil, stopAt(2, answer(t, proj, jobJSON)))
+	errs := polls[2].Report.Errors
+	want := "the run's environment could not be prepared: git fetch: exit status 128\n" + fatal
+	if len(errs) != 1 || errs[0].Kind != cinderline.KindNotStarted || errs[0].Message != want {
+		t.Errorf("report errors %+v, want the message %q", errs, want)
+	}
+}
+
+// A long output is cut in the middle: the first line and the output's last
+// line stay, within the contract's limit, and a secret in it is redacted.
+func TestNotStartedMessageKeepsTheEnd(t *testing.T) {
+	secret := "clr219-secret-value-0123456789"
+	redact.Add("test secret", secret)
+	out := strings.Repeat("é", 3000) + secret + "\n" + strings.Repeat("x\n", 500) + "fatal: the last line\n"
+	err := fmt.Errorf("prepared: %w", &workspace.CommandError{Argv: []string{"docker", "run", "--rm", "img"}, Err: errors.New("exit status 1"), Output: out})
+	msg := notStartedMessage(err)
+	if n := utf8.RuneCountInString(msg); n != cinderline.MaxErrorMessage {
+		t.Errorf("message is %d characters, want %d", n, cinderline.MaxErrorMessage)
+	}
+	if !strings.HasPrefix(msg, "prepared: docker run: exit status 1\n…") || !strings.HasSuffix(msg, "\nfatal: the last line") {
+		t.Errorf("message = %q, want the first line and the last", msg)
+	}
+	msg = notStartedMessage(errors.New("token " + secret + " refused\n" + secret))
+	if strings.Contains(msg, secret) || !strings.Contains(msg, "[redacted test secret]") {
+		t.Errorf("message = %q, want the secret redacted", msg)
+	}
+	if msg := notStartedMessage(errors.New(strings.Repeat("a", 3000))); len(msg) != cinderline.MaxErrorMessage {
+		t.Errorf("a one-line message is %d characters, want %d", len(msg), cinderline.MaxErrorMessage)
 	}
 }
 

@@ -182,6 +182,38 @@ func TestRunCommand(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "go no-such-command") || !strings.Contains(err.Error(), "unknown command") {
 		t.Errorf("RunCommand error = %v, want the argv and the output's tail", err)
 	}
+	var ce *CommandError
+	if !errors.As(err, &ce) || !strings.Contains(ce.Output, "unknown command") || ce.Command() != "go no-such-command" {
+		t.Errorf("RunCommand error = %#v, want a *CommandError with the output", err)
+	}
+	var exit interface{ ExitCode() int }
+	if !errors.As(err, &exit) || exit.ExitCode() == 0 {
+		t.Errorf("RunCommand error = %v, want its exit code", err)
+	}
+}
+
+// A failed command names what it ran in a few words: the git subcommand for
+// git in the git image, on the helper's side and the agent's.
+func TestCommandErrorCommand(t *testing.T) {
+	d, calls := recorder(nil)
+	if _, err := d.Prepare(context.Background(), "cinderline/CSR-29", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Push(context.Background(), "/runs/CSR-29", "cinderline/CSR-29"); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, c := range *calls {
+		got = append(got, (&CommandError{Argv: c.Argv}).Command())
+	}
+	want := []string{
+		"docker volume create", "git init", "git fetch", // Fetch
+		"docker volume create", "docker run", "git clone", "git rev-parse", "git checkout", // Prepare
+		"git fetch", "git log", "git push", "git update-ref", // Push
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("commands = %q, want %q", got, want)
+	}
 }
 
 // tokenOnlyInEnv fails when the token shows up anywhere in an argv.

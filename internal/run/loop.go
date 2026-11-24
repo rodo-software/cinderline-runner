@@ -14,6 +14,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -257,6 +258,8 @@ func (l *loop) failed(err error) time.Duration {
 	if l.ctx.Err() != nil {
 		return 0 // stopping
 	}
+	// The first line only: `status` shows one line per project, and a failed
+	// poll's reason is on it; the whole error is in the log line below.
 	p.setStatus(func(s *localapi.ProjectStatus) {
 		s.Connected, s.LastError, s.LastErrorAt = false, firstLine(err.Error()), time.Now()
 	})
@@ -419,7 +422,7 @@ func (l *loop) ended(e ended) {
 	case e.err != nil:
 		h.wait = min(max(2*h.wait, minStartWait), maxStartWait)
 		h.at = time.Now().Add(h.wait)
-		h.notStarted = &cinderline.ReportError{Kind: cinderline.KindNotStarted, Issue: e.ref, Message: firstLine(e.err.Error())}
+		h.notStarted = &cinderline.ReportError{Kind: cinderline.KindNotStarted, Issue: e.ref, Message: notStartedMessage(e.err)}
 		p.Log.Warn("run did not start", "project", p.Config.Key, "issue", e.ref, "err", e.err, "retry_in", h.wait)
 	case e.started:
 		*h = startHold{}
@@ -445,6 +448,30 @@ func (p *Project) pin(proj cinderline.Project) string {
 		return "the project in Cinderline names the repository " + stripURL(proj.RepositoryURL) + ", but this runner is configured for " + stripURL(p.Config.Repository)
 	}
 	return ""
+}
+
+// notStartedMessage is the report's message for a run that did not start:
+// the error's first line, with a failed command's argv shortened to what it
+// ran, and the end of the lines after it, where git's or docker's own reason
+// is (CLR-219). It is redacted before it is cut, so a cut can't leave part of
+// a secret, and fits the contract's limit; the log keeps the whole error.
+func notStartedMessage(err error) string {
+	msg := err.Error()
+	var ce *workspace.CommandError
+	if errors.As(err, &ce) {
+		msg = strings.Replace(msg, strings.Join(ce.Argv, " "), ce.Command(), 1)
+	}
+	head, rest, _ := strings.Cut(strings.TrimSpace(redact.String(msg)), "\n")
+	h := []rune(head)
+	if rest == "" {
+		return string(h[:min(len(h), cinderline.MaxErrorMessage)])
+	}
+	h = h[:min(len(h), cinderline.MaxErrorMessage/2)]
+	r := []rune(rest)
+	if room := cinderline.MaxErrorMessage - len(h) - 1; len(r) > room {
+		r = append([]rune("…"), r[len(r)-room+1:]...)
+	}
+	return string(h) + "\n" + string(r)
 }
 
 func firstLine(s string) string {

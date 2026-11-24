@@ -119,7 +119,7 @@ func (c *Client) Version() string { return c.version }
 func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 	errs := make([]ReportError, 0, len(r.Report.Errors)) // a copy: the caller's slice stays
 	for _, e := range first(r.Report.Errors, maxErrors) {
-		e.Message, e.Issue = clip(redact.String(e.Message), maxErrorMessage), clip(e.Issue, maxRef)
+		e.Message, e.Issue = clip(redact.String(e.Message), MaxErrorMessage), clip(e.Issue, maxRef)
 		errs = append(errs, e)
 	}
 	r.Report.Errors = errs

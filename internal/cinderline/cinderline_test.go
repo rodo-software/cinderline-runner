@@ -410,7 +410,7 @@ func TestRequestsFitTheAppsLimits(t *testing.T) {
 	var poll PollRequest
 	_ = json.Unmarshal([]byte(s.bodies[0]), &poll)
 	if len(poll.Running) != maxRunning || poll.Running[0] != "CSR-0" || len(poll.Held) != maxListed || poll.Held[0] != "CSR-0" ||
-		utf8.RuneCountInString(poll.Report.Errors[0].Message) != maxErrorMessage ||
+		utf8.RuneCountInString(poll.Report.Errors[0].Message) != MaxErrorMessage ||
 		len(poll.Review[0].Conflicts) != maxConflicts || utf8.RuneCountInString(poll.Review[0].Conflicts[0]) != maxText ||
 		len(poll.Report.ModelProviders) != maxProviders || poll.Report.ModelProviders[0] != "CSR-0" {
 		t.Errorf("poll sent running %d, held %d, message %d, conflicts %d", len(poll.Running), len(poll.Held), utf8.RuneCountInString(poll.Report.Errors[0].Message), len(poll.Review[0].Conflicts))
