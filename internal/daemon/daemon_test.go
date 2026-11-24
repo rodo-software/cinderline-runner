@@ -189,6 +189,10 @@ func TestStatus(t *testing.T) {
 	if b := m["B"]; b.Connected || !strings.Contains(b.LastError, "not found") || b.LastErrorAt.IsZero() {
 		t.Errorf("B = %+v, want not connected with its token error", b)
 	}
+	// CLR-216: the status carries the runner's one memory budget.
+	if s, err := c.Status(ctxT(t)); err != nil || s.Memory == nil {
+		t.Errorf("status = %+v, %v; want the memory budget", s, err)
+	}
 	if raw, _ := os.ReadFile(p.Log); strings.Contains(string(raw), "tok-A") {
 		t.Errorf("the token is in the log:\n%s", raw)
 	}

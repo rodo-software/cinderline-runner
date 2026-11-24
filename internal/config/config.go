@@ -143,6 +143,11 @@ func ParseMemory(s string) (int64, error) {
 	return n, nil
 }
 
+// GiB writes bytes as GiB with one decimal, as the log and status show memory.
+func GiB(bytes int64) string {
+	return strconv.FormatFloat(float64(bytes)/(1<<30), 'f', 1, 64) + " GiB"
+}
+
 // MemoryLimit is the memory limit of the project's agent containers in
 // bytes: Memory, or DefaultMemory. Validate has checked the value.
 func (p Project) MemoryLimit() int64 {

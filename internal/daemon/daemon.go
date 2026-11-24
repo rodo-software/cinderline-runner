@@ -45,6 +45,13 @@ const detectInterval = time.Hour
 // runLoop runs a project's loop; a variable so tests can hold a run in flight.
 var runLoop = (*run.Project).Loop
 
+// dockerMemory reads Docker's total memory; a variable so tests need no Docker.
+var dockerMemory = func(ctx context.Context) (int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return environment.DockerMemory(ctx, workspace.RunCommand)
+}
+
 // slot is one project's loop. It holds the project ID's Docker names until it ends.
 type slot struct {
 	id    string
@@ -70,6 +77,7 @@ type daemon struct {
 	models     *run.Models        // one fetch of the providers' models for this config's projects
 	stopModels context.CancelFunc // ends the fetch for the config before
 	ended      chan *slot         // a slot's loop has ended
+	budget     *run.Budget        // the memory every project's runs share, one for the process
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -92,7 +100,7 @@ func Run(ctx context.Context, o Options) error {
 	defer lf.Close()
 	f, isFile := o.Verbose.(*os.File)
 	log := logger(lf, o.Verbose, isFile && term.IsTerminal(int(f.Fd())))
-	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}}
+	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}, budget: run.NewBudget(dockerMemory)}
 	defer func() { d.stopModels() }()
 
 	reloads := make(chan chan error)
@@ -101,9 +109,13 @@ func Run(ctx context.Context, o Options) error {
 	srv := &http.Server{Handler: localapi.Handler(localapi.Handlers{
 		Version: o.Version,
 		Status:  d.status,
-		Stop:    stop,
-		Drain:   func() { drainOnce.Do(func() { close(drain) }) },
-		Follow:  lf.follow,
+		Memory: func() localapi.Memory {
+			size, reserved := d.budget.Status()
+			return localapi.Memory{Budget: size, Reserved: reserved}
+		},
+		Stop:   stop,
+		Drain:  func() { drainOnce.Do(func() { close(drain) }) },
+		Follow: lf.follow,
 		Reload: func() error {
 			reply := make(chan error, 1)
 			select {
@@ -262,7 +274,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 		log.Error("project not started", "project", p.Key, "err", err)
 		return nil, err
 	}
-	proj.KeepFor, proj.MinFree, proj.Others, proj.Models, proj.StrictHosts = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, d.models, cfg.StrictHosts
+	proj.KeepFor, proj.MinFree, proj.Others, proj.Models, proj.StrictHosts, proj.Budget = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, d.models, cfg.StrictHosts, d.budget
 	s := &slot{id: p.ID(), proj: proj, drain: make(chan struct{})}
 	d.mu.Lock()
 	d.slots[s.id] = s

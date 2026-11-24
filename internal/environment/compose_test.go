@@ -379,16 +379,16 @@ func TestRunInComposeRefused(t *testing.T) {
 func TestSetComposeNilIsTheDefault(t *testing.T) {
 	d, _, _ := composeRunner(t, "")
 	d.SetCompose(nil)
-	got, err := d.AgentImage(context.Background())
-	if err != nil || got != imageTag() {
-		t.Errorf("AgentImage = %q, %v, want the default image", got, err)
+	got, memory, err := d.AgentImage(context.Background())
+	if err != nil || got != imageTag() || memory != d.Memory {
+		t.Errorf("AgentImage = %q, %d, %v, want the default image and the project's memory", got, memory, err)
 	}
 }
 
 func TestComposeFileMustBeInTheRepository(t *testing.T) {
 	d, _, _ := composeRunner(t, "")
 	d.SetCompose(&Compose{Base: "main", File: "../compose.yml", Service: "agent"})
-	if _, err := d.AgentImage(context.Background()); err == nil {
+	if _, _, err := d.AgentImage(context.Background()); err == nil {
 		t.Error("a file outside the repository was accepted")
 	}
 }
@@ -471,5 +471,27 @@ func TestRunInComposeRefusesABadMemLimit(t *testing.T) {
 	d, _, _ := composeRunner(t, `{"services": {"agent": {"image": "php:8.4", "mem_limit": "-1"}}}`)
 	if _, err := d.Run(context.Background(), turn); err == nil || !strings.Contains(err.Error(), "mem_limit") {
 		t.Errorf("Run = %v, want the mem_limit refused", err)
+	}
+}
+
+// CLR-216, decision 2026-11-24-agent-memory-limit: a run's share of the
+// memory budget is the agent container's limit plus each other service's
+// mem_limit, or 512 MiB for one without.
+func TestAgentImageMemory(t *testing.T) {
+	for _, tt := range []struct {
+		config string
+		want   int64
+	}{
+		{`{"services": {"agent": {"image": "php:8.4"}}}`, 8 << 30},
+		{`{"services": {"agent": {"image": "php:8.4", "mem_limit": "2147483648"}}}`, 2 << 30},
+		{`{"services": {"agent": {"image": "php:8.4"}, "db": {"image": "postgres:17"}}}`, 8<<30 + 512<<20},
+		{`{"services": {"agent": {"image": "php:8.4", "mem_limit": "1073741824"}, "db": {"image": "postgres:17", "mem_limit": "268435456"}, "cache": {"image": "redis:8"}}}`, 1<<30 + 256<<20 + 512<<20},
+	} {
+		d, _, _ := composeRunner(t, tt.config)
+		d.Memory = 8 << 30
+		image, memory, err := d.AgentImage(context.Background())
+		if err != nil || image != "php:8.4" || memory != tt.want {
+			t.Errorf("%s: AgentImage = %q, %d, %v, want php:8.4, %d", tt.config, image, memory, err, tt.want)
+		}
 	}
 }

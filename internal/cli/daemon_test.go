@@ -444,3 +444,42 @@ func TestInFlightNamesManagerRuns(t *testing.T) {
 		t.Errorf("inFlight = %q", got)
 	}
 }
+
+// CLR-216: status shows the memory budget, what runs reserve of it, and
+// which projects wait for memory.
+func TestStatusPrintsMemory(t *testing.T) {
+	c, out, errb := daemonCLI(t, "")
+	serve(t, c, localapi.Handlers{Version: "4.5.6",
+		Status: func() []localapi.ProjectStatus {
+			return []localapi.ProjectStatus{
+				{Project: "WEB", Connected: true, Issue: "WEB-7", RunMemory: 5 << 29},
+				{Project: "API", Connected: true, RunMemory: 4 << 30, WaitsForMemory: true},
+			}
+		},
+		Memory: func() localapi.Memory { return localapi.Memory{Budget: 7 << 30, Reserved: 5 << 29} },
+	})
+	if code := c.Run([]string{"status"}); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if len(got) != 4 {
+		t.Fatalf("want a version line, two project lines and a memory line:\n%s", out.String())
+	}
+	if !strings.Contains(got[1], "a run takes 2.5 GiB") || strings.Contains(got[1], "waits") {
+		t.Errorf("line %q, want WEB's run size and no wait", got[1])
+	}
+	if !strings.Contains(got[2], "waits for memory") || !strings.Contains(got[2], "a run takes 4.0 GiB") {
+		t.Errorf("line %q, want API waiting for memory", got[2])
+	}
+	if got[3] != "memory: 2.5 GiB of 7.0 GiB reserved for runs" {
+		t.Errorf("memory line %q", got[3])
+	}
+
+	out.Reset()
+	c, out, _ = daemonCLI(t, "")
+	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []localapi.ProjectStatus { return nil },
+		Memory: func() localapi.Memory { return localapi.Memory{} }})
+	if code := c.Run([]string{"status"}); code != 0 || !strings.Contains(out.String(), "memory: Docker's memory not known yet") {
+		t.Errorf("code %d, stdout %q, want the budget not known yet", code, out.String())
+	}
+}

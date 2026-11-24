@@ -56,6 +56,20 @@ type ProjectStatus struct {
 	// starts again with the new config, or ends when the config no longer
 	// has it, once nothing is in flight (decision 2026-11-24-rolling-reload).
 	Draining bool `json:"draining,omitempty"`
+	// RunMemory is what one of the project's runs takes of the runner's
+	// memory budget, in bytes, as the loop last counted it; WaitsForMemory:
+	// a slot of the project is not offered to the app because its run does
+	// not fit in what is left (decision 2026-11-24-agent-memory-limit).
+	RunMemory      int64 `json:"run_memory,omitempty"`
+	WaitsForMemory bool  `json:"waits_for_memory,omitempty"`
+}
+
+// Memory is the runner's memory budget, which the runs of every project
+// share, and what they reserve of it now, in bytes; Budget is 0 while
+// Docker's memory is not known (decision 2026-11-24-agent-memory-limit).
+type Memory struct {
+	Budget   int64 `json:"budget"`
+	Reserved int64 `json:"reserved"`
 }
 
 // Status is the answer of GET /status.
@@ -63,12 +77,14 @@ type Status struct {
 	Version  string          `json:"version"`
 	PID      int             `json:"pid"` // the daemon's process id; stop --drain and update wait for it to exit
 	Projects []ProjectStatus `json:"projects"`
+	Memory   *Memory         `json:"memory,omitempty"`
 }
 
 // Handlers are what the daemon does for each endpoint.
 type Handlers struct {
 	Version string
 	Status  func() []ProjectStatus
+	Memory  func() Memory // nil: no budget
 	Reload  func() error
 	Stop    func()
 	// Drain makes the daemon finish its runs in flight, take no new work, and exit.
@@ -83,7 +99,12 @@ func Handler(h Handlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(Status{Version: h.Version, PID: os.Getpid(), Projects: h.Status()})
+		st := Status{Version: h.Version, PID: os.Getpid(), Projects: h.Status()}
+		if h.Memory != nil {
+			m := h.Memory()
+			st.Memory = &m
+		}
+		json.NewEncoder(w).Encode(st)
 	})
 	mux.HandleFunc("GET /logs", func(w http.ResponseWriter, r *http.Request) {
 		n := 100

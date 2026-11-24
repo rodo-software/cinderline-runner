@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/daemon"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/name"
@@ -76,6 +77,12 @@ func (c *CLI) status(args []string) int {
 		if p.Manager != "" {
 			parts = append(parts, "Project Manager on "+p.Manager)
 		}
+		if p.WaitsForMemory {
+			parts = append(parts, "waits for memory") // decision 2026-11-24-agent-memory-limit
+		}
+		if p.RunMemory > 0 {
+			parts = append(parts, "a run takes "+config.GiB(p.RunMemory))
+		}
 		if p.Draining {
 			parts = append(parts, "takes the new config when its runs have finished") // decision 2026-11-24-rolling-reload
 		}
@@ -83,6 +90,13 @@ func (c *CLI) status(args []string) int {
 			parts = append(parts, "last error "+p.LastErrorAt.Local().Format(time.DateTime)+": "+p.LastError)
 		}
 		fmt.Fprintf(c.Stdout, "%s: %s\n", p.Project, strings.Join(parts, ", "))
+	}
+	if m := s.Memory; m != nil {
+		if m.Budget == 0 {
+			fmt.Fprintln(c.Stdout, "memory: Docker's memory not known yet, so no run starts")
+		} else {
+			fmt.Fprintf(c.Stdout, "memory: %s of %s reserved for runs\n", config.GiB(m.Reserved), config.GiB(m.Budget))
+		}
 	}
 	return 0
 }

@@ -75,6 +75,9 @@ type loop struct {
 	mismatch string        // why the repository pin refuses; "": it holds
 
 	teamHold, managerHold startHold // each slot's own, so a manager run that does not start holds off no team run
+
+	teamWaits, managerWaits bool // the slot's run did not fit in the memory budget at its last offer
+	managerFirst            bool // the manager's slot reserves first at the next poll that offers both
 }
 
 // startHold is a slot's wait after a run that did not start.
@@ -148,7 +151,31 @@ func (l *loop) poll() (wait time.Duration) {
 	idle := l.idle()
 	managerIdle := l.managerIdle()
 	review := l.running == "" && l.manager == "" && !l.upkeep && !l.draining && l.mismatch == "" && time.Since(l.lastUpkeep) >= l.review
-	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs(), Idle: idle && !review, ManagerIdle: managerIdle && !review}
+	// A slot is offered only with its run's memory reserved, so no other
+	// project's loop can offer the same memory; a slot that gets no job
+	// frees it again (decision 2026-11-24-agent-memory-limit).
+	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs()}
+	team, mgr := idle && !review, managerIdle && !review
+	if team && mgr && l.managerFirst {
+		req.ManagerIdle = l.reserve(true, false)
+		req.Idle = l.reserve(false, req.ManagerIdle)
+	} else {
+		req.Idle = team && l.reserve(false, false)
+		req.ManagerIdle = mgr && l.reserve(true, req.Idle)
+	}
+	if team && mgr {
+		// Both free: the slots take turns at going first, so where only one
+		// run fits the team's offer does not shut out the manager's for good.
+		l.managerFirst = !l.managerFirst
+	}
+	defer func() {
+		if req.Idle && l.running == "" {
+			p.release(false)
+		}
+		if req.ManagerIdle && l.manager == "" {
+			p.release(true)
+		}
+	}()
 	var asked []string
 	var stranded []workspace.Clone
 	tidy := idle && l.manager == "" && (l.lastTidy.IsZero() || time.Since(l.lastTidy) >= tidyEvery)
@@ -310,6 +337,46 @@ func (l *loop) managerIdle() bool {
 	return l.manager == "" && !l.upkeep && !l.draining && l.mismatch == "" && l.p.hasClients() && !time.Now().Before(l.managerHold.at)
 }
 
+// reserve holds the slot's run's memory in the budget and says whether it
+// did. A slot whose run does not fit is logged once, when it starts to
+// wait, and shown in the status; turn says the project's other slot has
+// just reserved for this poll, so a slot that does not fit next to it only
+// waits its turn, and its state stays as it was.
+func (l *loop) reserve(manager, turn bool) bool {
+	p := l.p
+	if p.Budget == nil {
+		return true
+	}
+	memory := p.runMemory()
+	ok, err := p.Budget.reserve(l.ctx, p.slot(manager), memory)
+	waits := &l.teamWaits
+	if manager {
+		waits = &l.managerWaits
+	}
+	if !ok && turn {
+		return false
+	}
+	if !ok && !*waits {
+		size, reserved := p.Budget.Status()
+		switch {
+		case err != nil:
+			p.Log.Warn("waits for memory: Docker's memory is not known", "project", p.Config.Key, "manager", manager, "err", err)
+		default:
+			p.Log.Info("waits for memory", "project", p.Config.Key, "manager", manager, "run", config.GiB(memory), "budget", config.GiB(size), "reserved", config.GiB(reserved))
+		}
+	}
+	*waits = !ok
+	p.setStatus(func(s *localapi.ProjectStatus) { s.RunMemory, s.WaitsForMemory = memory, l.teamWaits || l.managerWaits })
+	return ok
+}
+
+// release frees the slot's memory in the budget.
+func (p *Project) release(manager bool) {
+	if p.Budget != nil {
+		p.Budget.release(p.slot(manager))
+	}
+}
+
 // start runs the job in its slot, in its own goroutine. The ref is running
 // at once, so no poll can miss it.
 func (l *loop) start(proj cinderline.Project, jb cinderline.Job, manager bool) {
@@ -322,6 +389,11 @@ func (l *loop) start(proj cinderline.Project, jb cinderline.Job, manager bool) {
 		l.p.setStatus(func(s *localapi.ProjectStatus) { s.Issue = ref })
 	}
 	l.p.Log.Info("run started", "project", l.p.Config.Key, "issue", ref, "manager", manager)
+	if b := l.p.Budget; b != nil {
+		if size := b.Size(); l.p.runMemory() > size {
+			l.p.Log.Warn("run needs more memory than the whole budget, so it runs alone", "project", l.p.Config.Key, "issue", ref, "run", config.GiB(l.p.runMemory()), "budget", config.GiB(size))
+		}
+	}
 	go func() {
 		started, err := l.p.run(l.ctx, l.c, proj, jb, manager)
 		l.runDone <- ended{ref: ref, manager: manager, started: started, err: err}
@@ -333,6 +405,7 @@ func (l *loop) start(proj cinderline.Project, jb cinderline.Job, manager bool) {
 func (l *loop) ended(e ended) {
 	p := l.p
 	l.lastTidy = time.Time{}
+	p.release(e.manager)
 	h := &l.teamHold
 	if e.manager {
 		h = &l.managerHold

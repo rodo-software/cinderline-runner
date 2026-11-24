@@ -91,7 +91,7 @@ func TestComposeRefusesIncludeBeforeDockerReadsHostFiles(t *testing.T) {
 				}
 				return record(ctx, env, argv...)
 			}
-			if _, err := d.AgentImage(t.Context()); err == nil || !strings.Contains(err.Error(), "outside the repository") {
+			if _, _, err := d.AgentImage(t.Context()); err == nil || !strings.Contains(err.Error(), "outside the repository") {
 				t.Fatalf("got %v", err)
 			}
 			for _, call := range calls() {
@@ -214,7 +214,7 @@ func TestComposeChecksEnvFileBeforeReadingIt(t *testing.T) {
 		}
 		return record(ctx, env, argv...)
 	}
-	if _, err := d.AgentImage(t.Context()); err == nil || !strings.Contains(err.Error(), "outside the repository") {
+	if _, _, err := d.AgentImage(t.Context()); err == nil || !strings.Contains(err.Error(), "outside the repository") {
 		t.Fatalf("got %v", err)
 	}
 }

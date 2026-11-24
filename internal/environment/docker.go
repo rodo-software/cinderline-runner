@@ -300,6 +300,20 @@ func (l *lines) flush() {
 	}
 }
 
+// DockerMemory is Docker's total memory in bytes, as `docker info` reports
+// it: the VM's on Docker Desktop, the host's on Linux.
+func DockerMemory(ctx context.Context, exec workspace.Exec) (int64, error) {
+	out, err := exec(ctx, nil, "docker", "info", "--format", "{{.MemTotal}}")
+	if err != nil {
+		return 0, fmt.Errorf("docker info: %w", err)
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(out), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("docker info: memory %q is not a positive number of bytes", strings.TrimSpace(out))
+	}
+	return n, nil
+}
+
 // Image returns the default image: the published one by its pinned digest
 // when a pin is set for this Dockerfile, else the locally built one, whose
 // tag is the Dockerfile's hash, so a runner with a changed Dockerfile

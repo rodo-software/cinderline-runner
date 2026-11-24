@@ -27,5 +27,5 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 
 - [2026-11-19-https-instance](2026-11-19-https-instance.md): the Cinderline URL must be https; plain http only on localhost or a loopback address; an existing config with another http URL fails to load.
 - [2026-11-19-compose-local-files](2026-11-19-compose-local-files.md): validate repository-local composition before Compose reads files; freeze the resolved composition for checks and operations.
-- [2026-11-24-agent-memory-limit](2026-11-24-agent-memory-limit.md): every agent container is limited to 4 GiB without swap, or the project's `memory`, or its compose agent service's `mem_limit`; the proxy to 64 MiB.
+- [2026-11-24-agent-memory-limit](2026-11-24-agent-memory-limit.md): every agent container is limited to 4 GiB without swap, or the project's `memory`, or its compose agent service's `mem_limit`; the proxy to 64 MiB; runs start only while they fit in one memory budget, Docker's memory less 1 GiB, shared by all projects.
 - [2026-11-24-rolling-reload](2026-11-24-rolling-reload.md): a config change reloads each project once its own runs have finished; the runner keeps running; only `remove` and `rename` wait, for their own project.

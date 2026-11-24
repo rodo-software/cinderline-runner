@@ -9,6 +9,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/url"
@@ -72,9 +73,13 @@ type Project struct {
 	// StrictHosts is config's strict_hosts: a step's allow_hosts are ignored.
 	StrictHosts bool
 
+	// Budget is the runner's memory budget, which every project's runs
+	// share (decision 2026-11-24-agent-memory-limit); nil: none.
+	Budget *Budget
+
 	// Set only by NewProject; nil in tests.
-	deleteSession func(ctx context.Context, ref, session string) error                  // a session's files on the state volume
-	prepare       func(ctx context.Context, proj cinderline.Project, base string) error // the environment and the tools mount
+	deleteSession func(ctx context.Context, ref, session string) error                                      // a session's files on the state volume
+	prepare       func(ctx context.Context, proj cinderline.Project, base string) (memory int64, err error) // the environment and the tools mount; memory as environment.Docker.AgentImage
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
 	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
 	image         string // the agent image the tools mount was filled for; only runs touch it, one at a time
@@ -92,6 +97,9 @@ type Project struct {
 	hosts    map[string][]string       // by run's issue ref: the host:port pairs it refused since takeRefused, once each
 	status   localapi.ProjectStatus
 	stopRuns map[string]context.CancelCauseFunc // by run's issue ref: ends its step in flight
+	// memory is a run's share of the budget as the last run's prepare
+	// measured it; 0: none measured yet, so the project's memory setting.
+	memory int64
 
 	openRouter bool // the last detection found OpenCode's OpenRouter key usable; guarded by mu
 }
@@ -140,13 +148,13 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 	p.Forge = func(kind string) (forge.Forge, error) {
 		return forge.New(kind, cfg.Repository, gitToken)
 	}
-	p.prepare = func(ctx context.Context, proj cinderline.Project, base string) error {
+	p.prepare = func(ctx context.Context, proj cinderline.Project, base string) (int64, error) {
 		var compose *environment.Compose
 		// Any environment other than docker is the default one.
 		if proj.Environment == "docker" {
 			// The file is read from the repo volume's base branch: fetch it first.
 			if err := ws.Fetch(ctx); err != nil {
-				return err
+				return 0, err
 			}
 			compose = &environment.Compose{
 				Base:    base,
@@ -155,16 +163,16 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 			}
 		}
 		env.SetCompose(compose)
-		image, err := env.AgentImage(ctx)
+		image, memory, err := env.AgentImage(ctx)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if image == p.image {
-			return nil
+			return memory, nil
 		}
 		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		// Every agent container gets the tools mount's flags; the extra and
 		// linked repositories ride along. Links can change between runs, so
@@ -179,7 +187,7 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 			c.Tools = mount
 		}
 		p.image = image
-		return nil
+		return memory, nil
 	}
 	p.fetchExtras = func(ctx context.Context, path string, repos []workspace.Extra) map[string]error {
 		return workspace.FetchExtras(ctx, exec, cfg.ID(), path, repos)
@@ -307,6 +315,44 @@ func (p *Project) Status() localapi.ProjectStatus {
 	st := p.status
 	st.Project = p.Config.Label()
 	return st
+}
+
+// slot names the project's team slot, or its Project Manager slot, in the budget.
+func (p *Project) slot(manager bool) string {
+	if manager {
+		return p.Config.ID() + " manager"
+	}
+	return p.Config.ID()
+}
+
+// runMemory is a run's share of the budget: as the last run measured it,
+// else the project's memory setting, which a project without a compose file
+// takes, until a run has read the compose file.
+func (p *Project) runMemory() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return cmp.Or(p.memory, p.Config.MemoryLimit())
+}
+
+// errNoMemory: the run, measured, no longer fits in the budget.
+var errNoMemory = errors.New("not enough memory")
+
+// fit makes memory, as the run's prepare measured it from the base's
+// compose file, its slot's reservation and the project's run size. It
+// fails with errNoMemory when that no longer fits: the base's compose file
+// has grown since the last run measured it.
+func (p *Project) fit(ctx context.Context, manager bool, memory int64) error {
+	p.mu.Lock()
+	p.memory = memory
+	p.status.RunMemory = memory
+	p.mu.Unlock()
+	if p.Budget == nil {
+		return nil
+	}
+	if ok, _ := p.Budget.reserve(ctx, p.slot(manager), memory); !ok {
+		return fmt.Errorf("the run needs %s, more than the memory budget has left: %w", config.GiB(memory), errNoMemory)
+	}
+	return nil
 }
 
 func (p *Project) setStatus(change func(*localapi.ProjectStatus)) {

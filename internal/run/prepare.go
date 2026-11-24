@@ -178,8 +178,12 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 	p.prepMu.Lock()
 	defer p.prepMu.Unlock()
 	if p.prepare != nil {
-		if err := p.prepare(ctx, proj, base); err != nil {
+		memory, err := p.prepare(ctx, proj, base)
+		if err != nil {
 			return nil, nil, nil, fmt.Errorf("the run's environment could not be prepared: %w", err)
+		}
+		if err := p.fit(ctx, manager, memory); err != nil {
+			return nil, nil, nil, err
 		}
 	}
 	j := &job{

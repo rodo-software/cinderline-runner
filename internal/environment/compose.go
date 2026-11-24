@@ -3,6 +3,7 @@ package environment
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,11 @@ const (
 	DefaultAgentService = "agent"
 )
 
+// SideServiceMemory is what a compose service other than the agent's
+// counts for in the runner's memory budget when it sets no mem_limit
+// (decision 2026-11-24-agent-memory-limit).
+const SideServiceMemory = 512 << 20
+
 // Compose is a project's own compose file, the environment docker
 // (decision 2026-11-08-m6-environments point 1). The file is read from the
 // base branch only, so a pull request cannot change what runs for its own
@@ -41,30 +47,37 @@ type Compose struct {
 func (d *Docker) SetCompose(c *Compose) { d.compose.Store(c) }
 
 // AgentImage is the image agent turns run in: the agent service's,
-// pulled or built, or the default image.
-func (d *Docker) AgentImage(ctx context.Context) (string, error) {
+// pulled or built, or the default image. Memory is what one run takes of
+// the runner's memory budget (decision 2026-11-24-agent-memory-limit): the
+// agent container's limit plus, with a compose file, each other service's
+// mem_limit, or SideServiceMemory for one that sets none.
+func (d *Docker) AgentImage(ctx context.Context) (image string, memory int64, err error) {
 	c := d.compose.Load()
 	if c == nil {
-		return d.Image(ctx)
+		image, err = d.Image(ctx)
+		return image, d.Memory, err
 	}
 	p, err := d.composeProject(ctx, "", c)
 	if p != nil {
 		defer os.RemoveAll(p.dir)
 	}
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return p.image, nil
+	return p.image, p.runMemory, nil
 }
 
 // composed is a checked compose project for one turn.
 type composed struct {
-	dir      string   // the temporary folder with the base branch's files; remove it after down
-	args     []string // docker compose and its project and file flags
-	image    string   // the agent service's image
-	env      []string // the agent service's environment, then ProxyEnv's for its services
-	memory   int64    // the agent service's mem_limit in bytes; 0: none
-	services []string // the services besides the agent's
+	dir    string   // the temporary folder with the base branch's files; remove it after down
+	args   []string // docker compose and its project and file flags
+	image  string   // the agent service's image
+	env    []string // the agent service's environment, then ProxyEnv's for its services
+	memory int64    // the agent service's mem_limit in bytes; 0: none
+	// runMemory is the run's share of the memory budget: the agent
+	// container's limit plus every other service's (AgentImage).
+	runMemory int64
+	services  []string // the services besides the agent's
 }
 
 // composeProject reads c's file from the base branch in the repo volume
@@ -161,6 +174,17 @@ func (d *Docker) composeProject(ctx context.Context, issue string, c *Compose) (
 		// Compose checks it is not negative; this keeps docker run from reading a mistake as "no limit".
 		if p.memory, err = agent.MemLimit.Int64(); err != nil || p.memory <= 0 {
 			return p, fmt.Errorf("compose file %s on %s refused: agent service %s: mem_limit %s is not a positive number of bytes", c.File, c.Base, c.Service, agent.MemLimit)
+		}
+	}
+	p.runMemory = cmp.Or(p.memory, d.Memory)
+	for s, svc := range cfg.Services {
+		if s != c.Service {
+			// The runner sets no limit on these; one without its own counts as SideServiceMemory.
+			n, err := svc.MemLimit.Int64()
+			if err != nil || n <= 0 {
+				n = SideServiceMemory
+			}
+			p.runMemory += n
 		}
 	}
 	override := map[string]any{"networks": map[string]any{"default": map[string]any{"name": d.network(issue), "external": true}}}

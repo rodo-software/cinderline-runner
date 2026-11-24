@@ -120,6 +120,11 @@ func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline
 		}
 	}()
 	j, cf, h, err := p.prepareRun(ctx, proj, jb, manager)
+	if errors.Is(err, errNoMemory) {
+		// Nothing is claimed yet, so the job is dropped as one taken back; the next poll offers no slot it does not fit.
+		p.Log.Info("job dropped: the base's compose file makes the run larger than the memory left", "project", p.Config.Key, "issue", jb.Issue.Ref, "err", err)
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}

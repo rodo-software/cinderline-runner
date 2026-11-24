@@ -188,6 +188,8 @@ A project runs in the default environment unless an admin sets its environment t
 
 Each agent turn and each check runs in a container limited to 4 GiB of memory, without swap, so a turn that needs more is killed rather than taking memory from other runs or the machine. `cinderline memory set 8g --project KEY` sets another limit for one project (`m` or `g`, 1024-based as in `docker run --memory`, at least `256m`), `cinderline memory show --project KEY` shows it and `cinderline memory clear --project KEY` returns to the default. A `mem_limit` on the agent service of a project's compose file wins over both. The other services of the file keep their own `mem_limit`, or none. The egress proxy is limited to 64 MiB.
 
+Runs start only while their memory fits. The runner shares one budget among the runs of all its projects: Docker's total memory (`docker info`: the VM's size on Docker Desktop, the machine's on Linux) less 1 GiB for the proxies, the git helpers and Docker itself. A run counts its agent container's limit plus each other service of the compose file: its `mem_limit`, or 512 MiB without one. A slot whose run does not fit in what is left is not offered to Cinderline until other runs end; the log says so once, and `cinderline status` shows the budget, what is reserved and which projects wait. A run larger than the whole budget runs only when nothing else does. Docker Desktop's memory is set under Settings, Resources; on macOS the runner sees only that VM, so other apps that fill the Mac's own memory still make macOS swap.
+
 A project that needs a database brings it in that file. For a Laravel project with MySQL 8, as `.cinderline/compose.yml`:
 
 ```yaml

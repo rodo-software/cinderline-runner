@@ -783,3 +783,29 @@ func TestRunReachesALocalProviderThroughTheProxyOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestDockerMemory(t *testing.T) {
+	for _, tt := range []struct {
+		out  string
+		err  error
+		want int64
+		ok   bool
+	}{
+		{"8217108480\n", nil, 8217108480, true},
+		{"", errors.New("Cannot connect to the Docker daemon"), 0, false},
+		{"0\n", nil, 0, false},
+		{"<no value>\n", nil, 0, false},
+	} {
+		var argv []string
+		got, err := DockerMemory(context.Background(), func(_ context.Context, _ []string, a ...string) (string, error) {
+			argv = a
+			return tt.out, tt.err
+		})
+		if got != tt.want || (err == nil) != tt.ok {
+			t.Errorf("DockerMemory on %q, %v = %d, %v; want %d, ok %v", tt.out, tt.err, got, err, tt.want, tt.ok)
+		}
+		if !slices.Equal(argv, []string{"docker", "info", "--format", "{{.MemTotal}}"}) {
+			t.Errorf("ran %q", argv)
+		}
+	}
+}
