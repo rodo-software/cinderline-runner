@@ -222,11 +222,13 @@ func TestForgejoRequestMergeStops(t *testing.T) {
 	}
 }
 
-// pullRequestOutcome on Forgejo: the most recently updated
-// pull request of the branch among the last 50, then the combined commit
-// status of its head.
+// pullRequestOutcome on Forgejo: the open pull request of the branch, else
+// the most recently updated one in any state, among the last 50, then the
+// combined commit status of its head.
 func TestForgejoMergeState(t *testing.T) {
+	const open = "GET " + pulls + "?state=open&sort=recentupdate&limit=50"
 	const list = "GET " + pulls + "?state=all&sort=recentupdate&limit=50"
+	none := reply{200, `[]`}
 	const status = "GET https://git.rodo.nl/api/v1/repos/willem/cinderline/commits/abc/status"
 	pr := func(fields string) reply {
 		return reply{200, `[{"head":{"label":"cinderline/OTHER","ref":"cinderline/OTHER","sha":"x"}},{"head":{"label":"cinderline/EMBER-1","ref":"cinderline/EMBER-1","sha":"abc"},` + fields + `}]`}
@@ -237,12 +239,12 @@ func TestForgejoMergeState(t *testing.T) {
 		want    MergeState
 		urls    []string
 	}{
-		{"merged", []reply{pr(`"merged":true,"state":"closed"`)}, MergeMerged, []string{list}},
-		{"closed", []reply{pr(`"merged":false,"state":"closed"`)}, MergeClosed, []string{list}},
-		{"failure", []reply{pr(`"merged":false,"state":"open"`), {200, `{"state":"failure"}`}}, MergeFailed, []string{list, status}},
-		{"error", []reply{pr(`"state":"open"`), {200, `{"state":"error"}`}}, MergeFailed, []string{list, status}},
-		{"pending", []reply{pr(`"state":"open"`), {200, `{"state":"pending"}`}}, MergePending, []string{list, status}},
-		{"none", []reply{{200, `[]`}}, "", []string{list}},
+		{"merged", []reply{none, pr(`"merged":true,"state":"closed"`)}, MergeMerged, []string{open, list}},
+		{"closed", []reply{none, pr(`"merged":false,"state":"closed"`)}, MergeClosed, []string{open, list}},
+		{"failure", []reply{pr(`"merged":false,"state":"open"`), {200, `{"state":"failure"}`}}, MergeFailed, []string{open, status}},
+		{"error", []reply{pr(`"state":"open"`), {200, `{"state":"error"}`}}, MergeFailed, []string{open, status}},
+		{"pending", []reply{pr(`"state":"open"`), {200, `{"state":"pending"}`}}, MergePending, []string{open, status}},
+		{"none", []reply{none, none}, "", []string{open, list}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", tt.replies...)
@@ -256,6 +258,21 @@ func TestForgejoMergeState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// CLR-239: a closed older pull request of the branch that was updated after
+// the open one does not hide it; the open one is read first, so the state
+// list, where the closed one would come first, is not read at all.
+func TestForgejoMergeStateOpenBeforeClosed(t *testing.T) {
+	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git",
+		reply{200, `[{"number":20,"head":{"label":"cinderline/CSR-7","ref":"cinderline/CSR-7","sha":"new"},"state":"open"}]`},
+		reply{200, `{"state":"pending"}`})
+	s, err := f.MergeState(context.Background(), "cinderline/CSR-7")
+	if s.State != MergePending || s.Head != "new" || err != nil {
+		t.Errorf("MergeState = %+v, %v; want pending at new", s, err)
+	}
+	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50",
+		"GET https://git.rodo.nl/api/v1/repos/willem/cinderline/commits/new/status")
 }
 
 // pullRequestOutcome throws on an error answer (Forgejo).
@@ -279,17 +296,18 @@ func TestForgejoMergeStateError(t *testing.T) {
 // into "success".
 func TestForgejoMergeStateAfterBranchDeletion(t *testing.T) {
 	f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git",
+		reply{200, `[{"number":54,"head":{"label":"cinderline/EMBER-116","ref":"cinderline/EMBER-116","sha":"y"},"state":"open"}]`},
 		reply{200, `[{"number":54,"head":{"label":"cinderline/EMBER-116","ref":"cinderline/EMBER-116","sha":"y"},"state":"open"},` +
 			`{"number":53,"head":{"label":"cinderline/EMBER-115","ref":"refs/pull/53/head","sha":"x"},"merged":true,"state":"closed"}]`})
 	s, err := f.MergeState(context.Background(), "cinderline/EMBER-115")
 	if s.State != MergeMerged || err != nil {
 		t.Errorf("MergeState = %q, %v; want merged", s.State, err)
 	}
-	wantURLs(t, *reqs, "GET "+pulls+"?state=all&sort=recentupdate&limit=50")
+	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50", "GET "+pulls+"?state=all&sort=recentupdate&limit=50")
 }
 
-// CSR-81 point 1: the list is walked page by page, most recently updated
-// first, until the branch's pull request is found, the list ends or three
+// CSR-81 point 1: with no open pull request, the list in any state is
+// walked page by page, most recently updated first, until the branch's pull request is found, the list ends or three
 // pages were read. A page shorter than 50 is the last one.
 func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
 	others := make([]string, 50)
@@ -297,6 +315,8 @@ func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
 		others[i] = `{"number":` + strconv.Itoa(100+i) + `,"head":{"label":"other-` + strconv.Itoa(i) + `","ref":"other-` + strconv.Itoa(i) + `","sha":"o"},"state":"open"}`
 	}
 	full := reply{200, `[` + strings.Join(others, ",") + `]`}
+	none := reply{200, `[]`}
+	const open = "GET " + pulls + "?state=open&sort=recentupdate&limit=50"
 	const page1 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50"
 	const page2 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=2"
 	const page3 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=3"
@@ -306,11 +326,11 @@ func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
 		want    MergeState
 		urls    []string
 	}{
-		{"on page 2", []reply{full, {200, `[{"number":7,"head":{"label":"cinderline/EMBER-1","ref":"refs/pull/7/head","sha":"x"},"merged":true,"state":"closed"}]`}}, MergeMerged, []string{page1, page2}},
-		{"on page 3", []reply{full, full, {200, `[{"number":7,"head":{"label":"cinderline/EMBER-1","ref":"cinderline/EMBER-1","sha":"x"},"merged":false,"state":"closed"}]`}}, MergeClosed, []string{page1, page2, page3}},
-		{"none, list ends with an empty page", []reply{full, {200, `[]`}}, "", []string{page1, page2}},
-		{"none in the pages it reads", []reply{full, full, full}, "", []string{page1, page2, page3}},
-		{"none, list ends with a short page", []reply{{200, `[{"number":1,"head":{"label":"other","ref":"other","sha":"o"},"state":"open"}]`}}, "", []string{page1}},
+		{"on page 2", []reply{none, full, {200, `[{"number":7,"head":{"label":"cinderline/EMBER-1","ref":"refs/pull/7/head","sha":"x"},"merged":true,"state":"closed"}]`}}, MergeMerged, []string{open, page1, page2}},
+		{"on page 3", []reply{none, full, full, {200, `[{"number":7,"head":{"label":"cinderline/EMBER-1","ref":"cinderline/EMBER-1","sha":"x"},"merged":false,"state":"closed"}]`}}, MergeClosed, []string{open, page1, page2, page3}},
+		{"none, list ends with an empty page", []reply{none, full, {200, `[]`}}, "", []string{open, page1, page2}},
+		{"none in the pages it reads", []reply{none, full, full, full}, "", []string{open, page1, page2, page3}},
+		{"none, list ends with a short page", []reply{none, {200, `[{"number":1,"head":{"label":"other","ref":"other","sha":"o"},"state":"open"}]`}}, "", []string{open, page1}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			f, reqs, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", tt.replies...)

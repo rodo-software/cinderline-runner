@@ -107,8 +107,15 @@ func (f *Forgejo) RequestMerge(ctx context.Context, pr PullRequest) error {
 	}
 }
 
+// MergeState reads the open pull request of branch first: the list is by
+// last update, so a closed older one someone commented on would otherwise
+// hide the newer open one (CLR-239). Only when none is open does it read
+// the list in any state.
 func (f *Forgejo) MergeState(ctx context.Context, branch string) (PullState, error) {
-	pr, err := f.find(ctx, "?state=all&sort=recentupdate&limit="+strconv.Itoa(forgejoPageSize), branch)
+	pr, err := f.find(ctx, "?state=open&sort=recentupdate&limit="+strconv.Itoa(forgejoPageSize), branch)
+	if err == nil && pr.Head.Label == "" {
+		pr, err = f.find(ctx, "?state=all&sort=recentupdate&limit="+strconv.Itoa(forgejoPageSize), branch)
+	}
 	switch {
 	case err != nil:
 		return PullState{}, err
