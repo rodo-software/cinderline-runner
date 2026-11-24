@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"regexp"
+	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -16,12 +17,17 @@ type conflict struct {
 	last  cinderline.LastStep
 }
 
-var blocked = regexp.MustCompile(`(?im)^[\s*_>#-]*blocked\b`)
+var blocked = regexp.MustCompile(`(?i)^[\s*_>#-]*blocked\b`)
 
 // reportsBlocked reports whether an agent's final message says it was
-// blocked: a line that starts with "Blocked", maybe after markdown such as
-// ** or "- ".
-func reportsBlocked(msg string) bool { return blocked.MatchString(msg) }
+// blocked: its first non-empty line starts with "Blocked", maybe after
+// markdown such as ** or "- ". Only the first line, as the app's resolver
+// prompt asks for; a later line such as "- Blocked-by links: kept both" is
+// part of a report, not a verdict.
+func reportsBlocked(msg string) bool {
+	first, _, _ := strings.Cut(strings.TrimSpace(msg), "\n")
+	return blocked.MatchString(first)
+}
 
 // updateBranch merges base into the committed clone dir of ref's branch. A
 // merge, not a rebase: the branch is pushed and continued across runs. A

@@ -544,7 +544,7 @@ func TestInTree(t *testing.T) {
 }
 
 func TestReportsBlocked(t *testing.T) {
-	for msg, want := range map[string]bool{"Blocked: no access": true, "**Blocked** by x": true, "- blocked": true, "Not blocked": false, "Done.": false} {
+	for msg, want := range map[string]bool{"Blocked: no access": true, "**Blocked** by x": true, "- blocked": true, "Not blocked": false, "Done.": false, "Merged.\n- Blocked-by links kept": false, "Merged.\n**Blocked:** no": false, "\n\n  Blocked: tests fail\nmore": true} {
 		if got := reportsBlocked(msg); got != want {
 			t.Errorf("reportsBlocked(%q) = %v", msg, got)
 		}
