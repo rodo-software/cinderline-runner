@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // tarOf is a tar stream with the given regular files and a symlink.
@@ -57,6 +60,49 @@ func TestComposeEnvIsMinimal(t *testing.T) {
 	got := composeEnv([]string{"PATH=/bin", "HOME=/home/w", "ANTHROPIC_API_KEY=sk", "DOCKER_HOST=unix:///x", "Path=C:\\x", "COMPOSE_FILE=evil.yml"})
 	if want := []string{"PATH=/bin", "HOME=/home/w", "DOCKER_HOST=unix:///x", "Path=C:\\x"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("composeEnv = %q, want %q", got, want)
+	}
+}
+
+// CLR-223: with the daemon's Exec, a compose command still sees only
+// composeEnvKeys of the runner's environment, and nothing when none is set.
+func TestComposeCommandSeesOnlyComposeEnv(t *testing.T) {
+	envCmd, err := exec.LookPath("env")
+	if err != nil {
+		t.Skip("needs env")
+	}
+	t.Setenv("RUNNER_SECRET", "leaked")
+	t.Setenv("DOCKER_HOST", "unix:///x")
+	d := &Docker{Exec: workspace.RunCommand} // as daemon.start wires it
+	out, err := d.composeExec(t.Context(), envCmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(strings.Split(out, "\n"), "DOCKER_HOST=unix:///x") {
+		t.Errorf("compose env %q lacks DOCKER_HOST", out)
+	}
+	for kv := range strings.Lines(out) {
+		k, _, _ := strings.Cut(kv, "=")
+		if !slices.ContainsFunc(composeEnvKeys, func(key string) bool { return strings.EqualFold(k, key) }) {
+			t.Errorf("compose command sees %q", strings.TrimSpace(kv))
+		}
+	}
+
+	for _, k := range composeEnvKeys {
+		t.Setenv(k, "") // restores it after the test
+		os.Unsetenv(k)
+	}
+	if out, err := d.composeExec(t.Context(), envCmd); err != nil || out != "" {
+		t.Errorf("with no composeEnvKeys set, compose command sees %q, %v; want nothing", out, err)
+	}
+}
+
+// composeVia sends compose commands through d.Exec, read at each call, for
+// the rest of the test.
+func composeVia(t *testing.T, d *Docker) {
+	saved := composeRun
+	t.Cleanup(func() { composeRun = saved })
+	composeRun = func(ctx context.Context, env []string, argv ...string) (string, error) {
+		return d.Exec(ctx, env, argv...)
 	}
 }
 
@@ -215,6 +261,7 @@ func composeRunner(t *testing.T, config string) (*Docker, func() []execCall, *st
 		io.WriteString(out, "done\n")
 		return nil
 	})
+	composeVia(t, d)
 	tarball := tarOf(t, map[string]string{".cinderline/compose.yml": "services: {}\n"})
 	var mu sync.Mutex
 	override := new(string)

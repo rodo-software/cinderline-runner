@@ -531,18 +531,22 @@ func composeEnv(environ []string) []string {
 }
 
 // composeExec runs a docker compose command with composeEnv as its whole
-// environment. Tests' Exec gets that environment as its env.
+// environment.
 func (d *Docker) composeExec(ctx context.Context, argv ...string) (string, error) {
-	env := composeEnv(os.Environ())
-	if d.Exec != nil {
-		return d.Exec(ctx, env, argv...)
-	}
+	return composeRun(ctx, composeEnv(os.Environ()), argv...)
+}
+
+// composeRun runs argv with env as its whole environment. Not d.Exec: that
+// adds env to the runner's environment, which would reach the compose
+// file's interpolation (CLR-223). Tests swap it.
+var composeRun = func(ctx context.Context, env []string, argv ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Env = env
+	cmd.Env = append([]string{}, env...) // never nil: nil means the runner's environment
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return stdout.String(), fmt.Errorf("%s: %w\n%s", strings.Join(argv, " "), err, tail(stdout.String()+stderr.String(), 20, 2000))
+		// A CommandError, as from d.Exec, so a run's report shortens the argv (CLR-219).
+		return stdout.String(), &workspace.CommandError{Argv: argv, Err: err, Output: tail(stdout.String()+stderr.String(), 20, 2000)}
 	}
 	return stdout.String(), nil
 }
