@@ -1,6 +1,6 @@
 # The models of the runner's own providers in the poll
 
-- **Status:** Accepted
+- **Status:** Accepted; points 3 and 4 superseded by [2026-11-24-model-lists](2026-11-24-model-lists.md): a failed fetch keeps the last good list with its age, and `openrouter` is reported. The limit is now 500 ids.
 - **Date:** 2026-11-17
 - **Source:** CLR-192, building on decision 2026-11-17-local-model-providers. Willem on CLR-192: `openrouter` is not reported (choice A), and the models `opencode models` lists are not reported now (choice A). The rest follows the issue's proposal; Claude designed the details. The app side is CL-237.
 

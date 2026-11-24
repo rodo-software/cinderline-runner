@@ -82,7 +82,8 @@ type Project struct {
 	prepare       func(ctx context.Context, proj cinderline.Project, base string) (memory int64, err error) // the environment and the tools mount; memory as environment.Docker.AgentImage
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
 	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
-	image         string // the agent image the tools mount was filled for; only runs touch it, one at a time
+	listModels    func(ctx context.Context, clients []string) map[string][]string // each client's models; none for one that failed
+	image         string                                                          // the agent image the tools mount was filled for; only runs touch it, one at a time
 	// reviewChecks are, by Review issue ref, the failed checks of its pull
 	// request's head, read once per head; only upkeep passes touch it, one at a time.
 	reviewChecks map[string]headChecks
@@ -102,6 +103,8 @@ type Project struct {
 	memory int64
 
 	openRouter bool // the last detection found OpenCode's OpenRouter key usable; guarded by mu
+	// models are by client its last good list (decision 2026-11-24-model-lists); guarded by mu.
+	models map[string]modelList
 }
 
 // NewProject builds a project's dependencies; providers are the runner's
@@ -195,18 +198,56 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 	p.deleteSession = func(ctx context.Context, ref, session string) error {
 		return client.DeleteSession(ctx, exec, cfg.ID(), ref, session)
 	}
-	p.detect = func(ctx context.Context) ([]cinderline.ReportClient, bool) {
+	// toolsMount is the default image and its tools mount, which detection and listing use.
+	toolsMount := func(ctx context.Context) (string, tools.Mount, error) {
 		image, err := env.Image(ctx)
 		if err != nil {
-			p.Log.Warn("detection: no image", "project", cfg.Key, "err", err)
-			return allMissingBinary(), false
+			return "", tools.Mount{}, fmt.Errorf("no image: %w", err)
 		}
 		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
 		if err != nil {
-			p.Log.Warn("detection: no tools mount", "project", cfg.Key, "err", err)
+			return "", tools.Mount{}, fmt.Errorf("no tools mount: %w", err)
+		}
+		return image, mount, nil
+	}
+	p.detect = func(ctx context.Context) ([]cinderline.ReportClient, bool) {
+		image, mount, err := toolsMount(ctx)
+		if err != nil {
+			p.Log.Warn("detection failed", "project", cfg.Key, "err", err)
 			return allMissingBinary(), false
 		}
 		return detectClients(ctx, exec, cfg, len(providers) > 0, sec, image, mount, p.Log)
+	}
+	p.listModels = func(ctx context.Context, names []string) map[string][]string {
+		image, mount, err := toolsMount(ctx)
+		if err != nil {
+			p.Log.Warn("models of the clients not listed", "project", cfg.Key, "err", err)
+			return nil
+		}
+		got := map[string][]string{}
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		for _, cl := range clis {
+			if !slices.Contains(names, cl.Name) {
+				continue
+			}
+			// A new CLI, not a copy: a run's prepare writes the shared one's Tools.
+			c := client.CLI{Name: cl.Name, Project: cl.Project, Env: cl.Env, Exec: cl.Exec, Credential: cl.Credential, BaseURL: cl.BaseURL, Vertex: cl.Vertex, Tools: mount}
+			wg.Go(func() {
+				ids, err := c.Models(ctx, image)
+				if err != nil {
+					if ctx.Err() == nil {
+						p.Log.Info("models of a client not listed", "project", cfg.Key, "client", c.Name, "err", err)
+					}
+					return
+				}
+				mu.Lock()
+				got[c.Name] = ids
+				mu.Unlock()
+			})
+		}
+		wg.Wait()
+		return got
 	}
 	return p, nil
 }
@@ -223,6 +264,39 @@ func modelProviders(providers []config.Provider, sec *secrets.Secrets) (map[stri
 		m[p.Name] = client.Provider{BaseURL: p.BaseURL, Key: key}
 	}
 	return m, nil
+}
+
+// ListModels asks each ready client for its models and keeps the lists for
+// the report. A client that fails keeps its last good list, whose age grows
+// (decision 2026-11-24-model-lists). OpenCode is not asked: its models are
+// its providers'.
+func (p *Project) ListModels(ctx context.Context) {
+	if p.listModels == nil {
+		return
+	}
+	p.mu.Lock()
+	var ready []string
+	for _, c := range p.clients {
+		if c.State == "ready" && c.Name != "opencode" {
+			ready = append(ready, c.Name)
+		}
+	}
+	p.mu.Unlock()
+	if len(ready) == 0 {
+		return
+	}
+	got := p.listModels(ctx, ready)
+	now := time.Now()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.models == nil {
+		p.models = map[string]modelList{}
+	}
+	for name, ids := range got {
+		if ids != nil {
+			p.models[name] = modelList{name, ids, now}
+		}
+	}
 }
 
 // Detect reruns client detection and keeps the result for the report.

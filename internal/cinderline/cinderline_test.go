@@ -317,16 +317,18 @@ func TestAQueuedRequestWaitsOutAnOutage(t *testing.T) {
 	}
 }
 
-// Decision 2026-11-17-provider-models: at most 50 providers and 200 model
-// ids each; an id the app would refuse in a typed model is left out.
+// Decisions 2026-11-17-provider-models and 2026-11-24-model-lists: at most
+// 50 providers and 500 model ids each; an id the app would refuse is left
+// out, and the age goes along.
 func TestProviderModelsFitTheAppsLimits(t *testing.T) {
 	s := &server{status: []int{200}, body: `{"poll_after":30}`}
 	c := s.client(t)
 	ids := []string{"bad id", "badé", strings.Repeat("m", 151), "", strings.Repeat("m", 150), "llama3.1:8b", "org/model_v-2"}
-	for i := range 250 {
+	for i := range 550 {
 		ids = append(ids, "m"+strconv.Itoa(i))
 	}
-	providers := []ProviderModels{{Provider: strings.Repeat("p", 51), Models: []string{"x"}}, {Provider: "studio", Models: ids}, {Provider: "down"}}
+	age := 42
+	providers := []ProviderModels{{Provider: strings.Repeat("p", 51), Models: []string{"x"}}, {Provider: "studio", Models: ids, ModelsAge: &age}, {Provider: "down"}}
 	for i := range 60 {
 		providers = append(providers, ProviderModels{Provider: "p" + strconv.Itoa(i), Models: []string{}})
 	}
@@ -340,11 +342,46 @@ func TestProviderModelsFitTheAppsLimits(t *testing.T) {
 		t.Fatalf("provider_models = %d entries, first %+v", len(pm), pm[:min(2, len(pm))])
 	}
 	got := pm[0].Models
-	if len(got) != maxModels || got[0] != strings.Repeat("m", 150) || got[1] != "llama3.1:8b" || got[2] != "org/model_v-2" || got[3] != "m0" {
+	if len(got) != 500 || got[0] != strings.Repeat("m", 150) || got[1] != "llama3.1:8b" || got[2] != "org/model_v-2" || got[3] != "m0" {
 		t.Errorf("studio's models: %d, first %q", len(got), got[:min(4, len(got))])
 	}
-	if !strings.Contains(s.bodies[0], `"models":[]`) || len(providers[1].Models) != 257 {
+	if pm[0].ModelsAge == nil || *pm[0].ModelsAge != 42 || pm[1].ModelsAge != nil {
+		t.Errorf("ages %v and %v, want 42 and none", pm[0].ModelsAge, pm[1].ModelsAge)
+	}
+	if !strings.Contains(s.bodies[0], `"models":[]`) || strings.Contains(s.bodies[0], `"models_age":null`) || len(providers[1].Models) != 557 {
 		t.Errorf("an empty list must be sent as [] and the caller's list stay: %s", s.bodies[0][:200])
+	}
+}
+
+// Decision 2026-11-24-model-lists: a client's list holds at most 500 ids of
+// at most 100 characters the app accepts, its order kept; a client without
+// a list sends neither key.
+func TestClientModelsFitTheAppsLimits(t *testing.T) {
+	s := &server{status: []int{200}, body: `{"poll_after":30}`}
+	c := s.client(t)
+	ids := []string{"claude-opus-5-5", strings.Repeat("m", 101), strings.Repeat("m", 100), "bad id", "claude-opus-5-5[1m]"}
+	for i := range 550 {
+		ids = append(ids, "m"+strconv.Itoa(i))
+	}
+	age := 7
+	clients := []ReportClient{{Name: "claude", State: "ready", Models: ids, ModelsAge: &age}, {Name: "opencode", State: "ready"}, {Name: "codex", State: "ready", Models: []string{}, ModelsAge: &age}}
+	if _, err := c.Poll(context.Background(), PollRequest{Report: Report{Clients: clients}, Running: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	var poll PollRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &poll)
+	got := poll.Report.Clients
+	if m := got[0].Models; len(m) != 500 || m[0] != "claude-opus-5-5" || m[1] != strings.Repeat("m", 100) || m[2] != "m0" || *got[0].ModelsAge != 7 {
+		t.Errorf("claude's models: %d, first %q", len(m), m[:min(3, len(m))])
+	}
+	if strings.Contains(s.bodies[0], `"name":"opencode","version":null,"state":"ready","models`) {
+		t.Errorf("opencode sent a list: %s", s.bodies[0])
+	}
+	if !strings.Contains(s.bodies[0], `"name":"codex","version":null,"state":"ready","models":[],"models_age":7`) {
+		t.Errorf("an empty list must be sent as []: %s", s.bodies[0])
+	}
+	if len(clients[0].Models) != 555 {
+		t.Error("the caller's list changed")
 	}
 }
 

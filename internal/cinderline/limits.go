@@ -33,7 +33,9 @@ const (
 	maxEnvironments  = 10    // report.environments
 	maxProviders     = 50    // report.model_providers and report.free_providers
 	maxProviderName  = 50    // a model provider's name; a longer one is left out
-	maxModels        = 200   // report.provider_models[].models
+	maxModels        = 500   // report.provider_models[].models and report.clients[].models
+	maxClientModel   = 100   // a client's model id: a team slot's model; a longer one is left out
+	maxProviderModel = 150   // a provider's model id; a longer one is left out
 	maxSessions      = 2     // sessions
 	maxPath          = 255   // workspace branch, base and paths
 	maxSecrets       = 50    // last.secrets
@@ -45,9 +47,24 @@ const (
 // MaxChecks is the most failed checks of a review fact or a step.
 const MaxChecks = 20
 
-// modelID is a model id the app accepts in a typed model
-// (AgentClient::TYPED_MODEL); any other id is left out.
+// modelID is a model id the app accepts (AgentClient::MODEL_ID); any other
+// id is left out.
 var modelID = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,150}$`)
+
+// modelIDs is the first maxModels ids of s the app accepts, of at most chars
+// characters; nil stays nil, as no list.
+func modelIDs(s []string, chars int) []string {
+	if s == nil {
+		return nil
+	}
+	out := []string{}
+	for _, id := range s {
+		if len(out) < maxModels && len(id) <= chars && modelID.MatchString(id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
 
 // clip is s cut to its first n characters, as the app counts them (runes).
 func clip(s string, n int) string {

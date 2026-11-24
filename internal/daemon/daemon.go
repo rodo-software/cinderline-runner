@@ -199,10 +199,15 @@ func warnDropped(log *slog.Logger, cfg *config.Config) {
 func (d *daemon) apply(cfg *config.Config) {
 	d.stopModels()
 	d.models = &run.Models{}
-	if len(cfg.Projects) > 0 && len(cfg.Providers) > 0 {
+	sec := secrets.New(d.o.Paths.State)
+	openRouter := slices.ContainsFunc(cfg.Projects, func(p config.Project) bool {
+		_, _, err := sec.Get(p, secrets.OpenRouterKey)
+		return err == nil
+	})
+	if len(cfg.Projects) > 0 && (len(cfg.Providers) > 0 || openRouter) {
 		var ctx context.Context
 		ctx, d.stopModels = context.WithCancel(d.ctx)
-		go d.models.Watch(ctx, cfg.Providers, secrets.New(d.o.Paths.State), d.log)
+		go d.models.Watch(ctx, cfg.Providers, openRouter, sec, d.log)
 	} else {
 		d.stopModels = func() {}
 	}
@@ -284,13 +289,19 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 		detectCtx, stopDetect := context.WithCancel(ctx)
 		var wg sync.WaitGroup
 		wg.Go(func() {
-			t := time.NewTicker(detectInterval)
-			defer t.Stop()
-			for proj.Detect(detectCtx); ; proj.Detect(detectCtx) {
+			// Each detection, and every ten minutes between, the clients
+			// list their models (decision 2026-11-24-model-lists).
+			detect, models := time.NewTicker(detectInterval), time.NewTicker(run.ModelsEvery)
+			defer detect.Stop()
+			defer models.Stop()
+			for proj.Detect(detectCtx); ; {
+				proj.ListModels(detectCtx)
 				select {
 				case <-detectCtx.Done():
 					return
-				case <-t.C:
+				case <-detect.C:
+					proj.Detect(detectCtx)
+				case <-models.C:
 				}
 			}
 		})

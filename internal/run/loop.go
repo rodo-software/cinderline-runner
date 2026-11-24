@@ -283,9 +283,15 @@ func (l *loop) report() cinderline.Report {
 	p := l.p
 	p.mu.Lock()
 	clients := append([]cinderline.ReportClient{}, p.clients...)
+	for i, c := range clients {
+		if l, ok := p.models[c.Name]; ok {
+			clients[i].Models, clients[i].ModelsAge = l.ids, ageOf(l.at)
+		}
+	}
 	refused := p.refused
 	providers := []string{}
-	if p.openRouter {
+	openRouter := p.openRouter
+	if openRouter {
 		providers = append(providers, "openrouter")
 	}
 	p.mu.Unlock()
@@ -305,7 +311,7 @@ func (l *loop) report() cinderline.Report {
 			errs = append(errs, *h.notStarted)
 		}
 	}
-	return cinderline.Report{RunnerVersion: l.c.Version(), Clients: clients, Environments: Environments, Errors: errs, RefusedConnections: refused, ModelProviders: providers, FreeProviders: free, ProviderModels: p.Models.Get(), StrictHosts: p.StrictHosts}
+	return cinderline.Report{RunnerVersion: l.c.Version(), Clients: clients, Environments: Environments, Errors: errs, RefusedConnections: refused, ModelProviders: providers, FreeProviders: free, ProviderModels: p.Models.Get(openRouter), StrictHosts: p.StrictHosts}
 }
 
 // runningRefs are the runs in flight and the runs whose report waits in the

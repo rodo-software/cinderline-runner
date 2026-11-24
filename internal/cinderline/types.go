@@ -28,9 +28,9 @@ type Report struct {
 	// ModelProviders are the providers OpenCode agents can use here:
 	// openrouter, then the runner's own (decision 2026-11-17-local-model-providers).
 	ModelProviders []string `json:"model_providers"`
-	// ProviderModels are the model ids each of the runner's own providers
-	// served at its last fetch; openrouter is not among them (decision
-	// 2026-11-17-provider-models).
+	// ProviderModels are the model ids each of the runner's providers served
+	// at its last good fetch, openrouter's first when the project's key is
+	// set (decisions 2026-11-17-provider-models, 2026-11-24-model-lists).
 	ProviderModels []ProviderModels `json:"provider_models"`
 	// FreeProviders are the runner's own providers marked free, never
 	// openrouter, each also in ModelProviders; left out when none is
@@ -41,11 +41,13 @@ type Report struct {
 	StrictHosts bool `json:"strict_hosts"`
 }
 
-// ProviderModels is the model ids one provider serves; empty when it did
-// not answer with a model list.
+// ProviderModels is the model ids one provider served at its last good
+// fetch; empty, with no age, when there was none.
 type ProviderModels struct {
 	Provider string   `json:"provider"`
 	Models   []string `json:"models"`
+	// ModelsAge is the seconds since Models was fetched; nil: never.
+	ModelsAge *int `json:"models_age,omitempty"`
 }
 
 // ReportClient is the state of one agent CLI on this machine: ready,
@@ -54,6 +56,12 @@ type ReportClient struct {
 	Name    string  `json:"name"`
 	Version *string `json:"version"`
 	State   string  `json:"state"`
+	// Models are the models the client can run with its credential, its
+	// default first, from its last good fetch; nil: no list yet, and never
+	// for opencode (decision 2026-11-24-model-lists). ModelsAge is the
+	// seconds since that fetch, set with Models.
+	Models    []string `json:"models,omitzero"`
+	ModelsAge *int     `json:"models_age,omitempty"`
 }
 
 // ReportError is one error the runner holds.

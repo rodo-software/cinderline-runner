@@ -131,6 +131,7 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 			v := clip(*cl.Version, maxName)
 			cl.Version = &v
 		}
+		cl.Models = modelIDs(cl.Models, maxClientModel)
 		clients = append(clients, cl)
 	}
 	r.Report.Clients = clients
@@ -146,13 +147,10 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 	models := []ProviderModels{}
 	for _, pm := range r.Report.ProviderModels {
 		if len(models) < maxProviders && utf8.RuneCountInString(pm.Provider) <= maxProviderName {
-			ids := []string{}
-			for _, id := range pm.Models {
-				if len(ids) < maxModels && modelID.MatchString(id) {
-					ids = append(ids, id)
-				}
+			if pm.Models = modelIDs(pm.Models, maxProviderModel); pm.Models == nil {
+				pm.Models = []string{} // the app needs the key
 			}
-			models = append(models, ProviderModels{Provider: pm.Provider, Models: ids})
+			models = append(models, pm)
 		}
 	}
 	r.Report.ProviderModels = models
