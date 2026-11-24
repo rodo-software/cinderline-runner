@@ -32,3 +32,4 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-24-housekeeping-next-to-runs](2026-11-24-housekeeping-next-to-runs.md): up to `max_parallel_runs` team runs per project, one per lane; the Review upkeep pass and tidying run next to them and leave the issues in flight alone.
 - [2026-11-24-rolling-reload](2026-11-24-rolling-reload.md): a config change reloads each project once its own runs have finished; the runner keeps running; only `remove` and `rename` wait, for their own project.
 - [2026-11-24-output-cap](2026-11-24-output-cap.md): a turn's or check's output keeps its first 1 MB and last 128 MB; tool counts and OpenCode's usage miss a cut middle; a line unfinished after 1 MB is not logged.
+- [2026-11-24-codex-usage-difference](2026-11-24-codex-usage-difference.md): a resumed Codex session's usage is sent as the turn's difference from the session's total the runner keeps with the session; the contract stays per turn.

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/rodo-software/cinderline-runner/internal/client"
 )
 
 // Note is a kept or paused session's note: only a cache of where to resume
@@ -24,6 +26,9 @@ type Note struct {
 	// Pruned says why tidying deleted the session, for the next run's
 	// workspace notes; such a note names no session.
 	Pruned string `json:"pruned,omitempty"`
+	// Total is the session's usage total so far, for a client that reports
+	// one (Codex): a resumed turn's usage is its difference (CLR-232).
+	Total *client.Usage `json:"total,omitempty"`
 }
 
 // Why tidying deleted a session, as Note.Pruned.

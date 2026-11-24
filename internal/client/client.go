@@ -57,6 +57,9 @@ type Result struct {
 	HitTurnLimit  bool
 	Tail          string // the end of the output, for comments
 	Usage         *Usage // nil when the CLI printed none
+	// UsageTotal says Usage is the session's total so far, earlier turns
+	// included, not the turn's: Codex's (CLR-232).
+	UsageTotal bool
 	// Tools is the turn's tool calls per tool name, as the CLI names the
 	// tool; nil when it made none (decision 2026-11-24-tool-use-counts).
 	Tools map[string]int
@@ -73,9 +76,25 @@ func (r *Result) countTool(name string) {
 	r.Tools[name]++
 }
 
-// Usage is the tokens and cost of one turn (EMBER-112).
+// Usage is the tokens and cost of one turn (EMBER-112), or a session's total
+// so far (Result.UsageTotal). Its JSON is a session note's.
 type Usage struct {
-	InputTokens, OutputTokens         int
-	CacheReadTokens, CacheWriteTokens int
-	CostUSD                           *float64 // nil: the CLI printed none, so Cinderline estimates it
+	InputTokens      int      `json:"input_tokens"`
+	OutputTokens     int      `json:"output_tokens"`
+	CacheReadTokens  int      `json:"cache_read_tokens"`
+	CacheWriteTokens int      `json:"cache_write_tokens"`
+	CostUSD          *float64 `json:"cost_usd,omitempty"` // nil: the CLI printed none, so Cinderline estimates it
+}
+
+// Since is the usage a session total u added to the earlier total prev,
+// each count at least 0. Its cost is u's: only Codex reports totals, and it
+// prints none.
+func (u Usage) Since(prev Usage) Usage {
+	return Usage{
+		InputTokens:      max(u.InputTokens-prev.InputTokens, 0),
+		OutputTokens:     max(u.OutputTokens-prev.OutputTokens, 0),
+		CacheReadTokens:  max(u.CacheReadTokens-prev.CacheReadTokens, 0),
+		CacheWriteTokens: max(u.CacheWriteTokens-prev.CacheWriteTokens, 0),
+		CostUSD:          u.CostUSD,
+	}
 }

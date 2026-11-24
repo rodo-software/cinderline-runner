@@ -200,7 +200,7 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 		// The manager's clone is read-only and replaced fresh on every run:
 		// only its session may be resumed, in a fresh clone of the base.
 		if n, ok := p.managerResume(j, lead.Client); ok {
-			h.lead.id, h.lead.origin = n.Session, n.Origin
+			h.lead.id, h.lead.origin, h.lead.total = n.Session, n.Origin, n.Total
 		}
 		if err := p.resetAttachments(ref); err != nil {
 			return nil, nil, nil, err
@@ -220,7 +220,7 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 		return nil, nil, nil, err
 	}
 	if resumed {
-		j.dir, h.lead.id, h.lead.origin = n.Dir, n.Session, n.Origin
+		j.dir, h.lead.id, h.lead.origin, h.lead.total = n.Dir, n.Session, n.Origin, n.Total
 	} else if err := p.keepWork(ctx, ref, leadAuthor(team), ref+": "+j.title); err != nil {
 		return nil, nil, nil, err
 	} else if j.dir, err = p.Workspace.Prepare(ctx, j.branch, base); err != nil {

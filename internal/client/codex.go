@@ -124,8 +124,9 @@ func parseCodex(out string) Result {
 			case "command_execution", "file_change", "web_search":
 				res.countTool(it.Type)
 			}
-		case "turn.completed": // the thread's total so far; the last one wins
+		case "turn.completed": // the thread's total so far, a resumed thread's earlier turns included; the last one wins
 			if u := e.Usage; u != nil {
+				res.UsageTotal = true
 				res.Usage = &Usage{
 					InputTokens:      max(u.InputTokens-u.CachedInputTokens, 0),
 					CacheReadTokens:  u.CachedInputTokens,

@@ -49,8 +49,26 @@ type job struct {
 
 func (j *job) isTeam() bool { return len(j.team.Agents) > 1 }
 
-// session is a client session the run can resume: an agent's on an issue.
-type session struct{ issue, agent, id, origin string }
+// session is a client session the run can resume: an agent's on an issue,
+// with its usage total so far for a client that reports one (Codex); nil:
+// none yet.
+type session struct {
+	issue, agent, id, origin string
+	total                    *client.Usage
+}
+
+// continued records a turn that continued the session as id, with the
+// session's usage total if the turn reported one. A new id is a new session,
+// whose total starts at zero.
+func (s *session) continued(id string, total *client.Usage) {
+	if id != s.id {
+		s.total = nil
+	}
+	s.id, s.origin = id, "turn"
+	if total != nil {
+		s.total = total
+	}
+}
 
 // held is what a run holds between its steps, in memory only: the lead's
 // session on the run's issue, the last turn's when that is another's (one
@@ -73,26 +91,30 @@ func (h *held) sessions() []cinderline.Session {
 	return out
 }
 
-// session is the session the run holds for agent on issue; "": none.
-func (h *held) session(issue, agent string) string {
+// session is the session the run holds for agent on issue; its id is "": none.
+func (h *held) session(issue, agent string) session {
 	for _, s := range []session{h.lead, h.other} {
 		if s.issue == issue && s.agent == agent {
-			return s.id
+			return s
 		}
 	}
-	return ""
+	return session{}
 }
 
-// turned records a turn of agent on issue that ended in session id.
-func (h *held) turned(issue, agent, id, report string) {
+// turned records a turn of agent on issue that ended in session id, with the
+// session's usage total if the client reports one.
+func (h *held) turned(issue, agent, id, report string, total *client.Usage) {
 	switch {
 	case issue == h.lead.issue && agent == h.lead.agent:
 		if id != "" {
-			h.lead.id, h.lead.origin = id, "turn"
+			h.lead.continued(id, total)
 		}
 		h.other = session{}
 	case id != "":
-		h.other = session{issue, agent, id, "turn"}
+		if h.other.issue != issue || h.other.agent != agent {
+			h.other = session{issue: issue, agent: agent}
+		}
+		h.other.continued(id, total)
 	default:
 		h.other = session{}
 	}
@@ -260,7 +282,7 @@ func (p *Project) next(ctx context.Context, c *cinderline.Client, ref string, re
 
 // note is the note of the lead's session.
 func (p *Project) note(j *job, h *held, origin string) Note {
-	return Note{Dir: j.dir, Session: h.lead.id, Client: j.team.Agents[0].Client, Origin: origin, Manager: j.manager}
+	return Note{Dir: j.dir, Session: h.lead.id, Total: h.lead.total, Client: j.team.Agents[0].Client, Origin: origin, Manager: j.manager}
 }
 
 // keepLead keeps the lead's session under origin, or drops the note when there is none.
@@ -406,10 +428,12 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		return last, client.Result{}, nil
 	}
 	turn := client.Turn{Dir: j.dir, Attachments: attachmentsDir(p.State, p.Config, j.ref), Prompt: step.Prompt, MaxTurns: j.team.MaxTurns, MaxMinutes: j.team.MaxMinutes, Ponytail: j.team.Ponytail, Idle: j.idle, Allow: p.allowHosts(issue, step.AllowHosts)}
+	var prev *client.Usage // the resumed session's usage total before the turn
 	switch step.Session {
 	case "new":
 	case "resume":
-		if turn.SessionID = h.session(issue, step.Agent); turn.SessionID == "" {
+		s := h.session(issue, step.Agent)
+		if turn.SessionID, prev = s.id, s.total; turn.SessionID == "" {
 			return nil, client.Result{}, malformed(c, step.Kind, "it resumes a session the runner does not hold")
 		}
 	default:
@@ -447,7 +471,17 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		return notStarted(err)
 	}
 	res.SessionID = cmp.Or(res.SessionID, turn.SessionID)
-	h.turned(issue, agent.Name, res.SessionID, res.Report)
+	var total *client.Usage
+	if res.UsageTotal && res.Usage != nil {
+		// The app adds up usage per turn: send what the turn added to the
+		// session's total (Willem on CLR-232, decision 2026-11-24-codex-usage-difference).
+		total = res.Usage
+		if prev != nil && res.SessionID == turn.SessionID {
+			u := total.Since(*prev)
+			res.Usage = &u
+		}
+	}
+	h.turned(issue, agent.Name, res.SessionID, res.Report, total)
 	last.Usage = usage(issue, agent.Name, turn.Model, res.Usage, res.Tools)
 	if res.Report != "" {
 		last.Report = ptr(res.Report)

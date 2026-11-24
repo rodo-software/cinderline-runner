@@ -98,6 +98,9 @@ func TestParseCodex(t *testing.T) {
 		SessionID: "019a5c3e-0000-7000-8000-000000000001",
 		Report:    "Done: added X.",
 		Usage:     &Usage{InputTokens: 200, OutputTokens: 300, CacheReadTokens: 1000},
+		// turn.completed's usage is the thread's total so far, restored on
+		// a resume (checked with 0.167.0, CLR-232).
+		UsageTotal: true,
 		// Codex's events name a tool call by its item type, and an MCP
 		// call by server and tool, as Codex names MCP tools for the model.
 		// One without either is counted by its type.
@@ -108,6 +111,20 @@ func TestParseCodex(t *testing.T) {
 	}
 	if got := parseCodex("no json\n{broken"); !reflect.DeepEqual(got, Result{}) {
 		t.Errorf("parseCodex(no json) = %+v, want zero", got)
+	}
+}
+
+// A resumed thread's turn.completed includes the earlier turns' usage, as
+// measured with 0.167.0 (CLR-232): Since takes the total before it off,
+// each count at least 0, as a lower total must not report a negative turn.
+func TestCodexUsageSince(t *testing.T) {
+	first := parseCodex(`{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":100,"output_tokens":10}}`).Usage
+	second := parseCodex(`{"type":"turn.completed","usage":{"input_tokens":3000,"cached_input_tokens":300,"output_tokens":30}}`).Usage
+	if got, want := second.Since(*first), (Usage{InputTokens: 1800, CacheReadTokens: 200, OutputTokens: 20}); got != want {
+		t.Errorf("Since = %+v, want %+v", got, want)
+	}
+	if got, want := first.Since(*second), (Usage{}); got != want {
+		t.Errorf("Since a larger total = %+v, want %+v", got, want)
 	}
 }
 
