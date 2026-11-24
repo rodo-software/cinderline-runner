@@ -274,3 +274,37 @@ func TestGitLabFailedChecks(t *testing.T) {
 		t.Errorf("CheckLog on a 403 = %v", err)
 	}
 }
+
+// CLR-237: a fork's merge request from a branch of the same name, listed
+// first as the newest, is never found, merged or read as the state.
+func TestGitLabSkipsForkMergeRequest(t *testing.T) {
+	const fork = `{"iid":7,"web_url":"fork","state":"closed","source_branch":"cinderline/EMB-3","source_project_id":99,"target_project_id":1}`
+	const own = `{"iid":5,"web_url":"own","state":"merged","source_branch":"cinderline/EMB-3","source_project_id":1,"target_project_id":1}`
+	ctx := context.Background()
+
+	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
+		reply{200, `[` + fork + `,` + own + `]`}, reply{200, `{"iid":5}`})
+	pr, found, err := g.FindPullRequest(ctx, "cinderline/EMB-3")
+	if pr != (PullRequest{5, "own"}) || !found || err != nil {
+		t.Fatalf("FindPullRequest = %+v, %v, %v; want the project's own !5", pr, found, err)
+	}
+	if err := g.RequestMerge(ctx, pr); err != nil {
+		t.Fatal(err)
+	}
+	wantURLs(t, *reqs, "GET "+mrs+"?state=opened&source_branch=cinderline%2FEMB-3", "PUT "+mrs+"/5/merge")
+
+	g, _ = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{200, `[` + fork + `]`})
+	if pr, found, err := g.FindPullRequest(ctx, "cinderline/EMB-3"); found || err != nil {
+		t.Errorf("FindPullRequest with only a fork's = %+v, %v, %v; want none", pr, found, err)
+	}
+
+	g, _ = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{200, `[` + fork + `,` + own + `]`})
+	if s, err := g.MergeState(ctx, "cinderline/EMB-3"); s.State != MergeMerged || err != nil {
+		t.Errorf("MergeState = %q, %v; want the project's own merged, not the fork's closed", s.State, err)
+	}
+
+	g, _ = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{200, `[` + fork + `]`})
+	if s, err := g.MergeState(ctx, "cinderline/EMB-3"); s.State != "" || err != nil {
+		t.Errorf("MergeState with only a fork's = %q, %v; want none", s.State, err)
+	}
+}

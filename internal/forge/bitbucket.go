@@ -55,12 +55,22 @@ type bitbucketPull struct {
 		Commit struct {
 			Hash string `json:"hash"`
 		} `json:"commit"`
+		Repository bitbucketRepository `json:"repository"`
 	} `json:"source"`
+	// A pull request from a fork has its own source repository; its branch
+	// can have the same name as the runner's (CLR-237).
+	Destination struct {
+		Repository bitbucketRepository `json:"repository"`
+	} `json:"destination"`
 	Links struct {
 		HTML struct {
 			Href string `json:"href"`
 		} `json:"html"`
 	} `json:"links"`
+}
+
+type bitbucketRepository struct {
+	FullName string `json:"full_name"` // workspace/repository
 }
 
 func (p bitbucketPull) pullRequest() PullRequest {
@@ -159,8 +169,8 @@ func sourceBranch(branch string) string {
 }
 
 // find is the first pull request of branch on the first page of the list
-// query names, matched by source branch, or the zero pull request
-// (empty Source.Branch.Name).
+// query names, matched by source branch and coming from the repository
+// itself, not a fork, or the zero pull request (empty Source.Branch.Name).
 func (b *Bitbucket) find(ctx context.Context, query, branch string) (bitbucketPull, error) {
 	var page struct {
 		Values []bitbucketPull `json:"values"`
@@ -169,7 +179,7 @@ func (b *Bitbucket) find(ctx context.Context, query, branch string) (bitbucketPu
 		return bitbucketPull{}, err
 	}
 	for _, pr := range page.Values {
-		if pr.Source.Branch.Name == branch {
+		if pr.Source.Branch.Name == branch && pr.Source.Repository.FullName == pr.Destination.Repository.FullName {
 			return pr, nil
 		}
 	}

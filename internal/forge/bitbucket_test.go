@@ -255,3 +255,29 @@ func TestBitbucketFailedChecks(t *testing.T) {
 		t.Errorf("CheckLog = %q, %v", log, err)
 	}
 }
+
+// CLR-237: a fork's pull request from a branch of the same name, listed
+// first as the newest, is never found or read as the state.
+func TestBitbucketSkipsForkPullRequest(t *testing.T) {
+	const fork = `{"id":9,"state":"DECLINED","source":{"branch":{"name":"cinderline/EMB-3"},"repository":{"full_name":"someone/repo"}},` +
+		`"destination":{"repository":{"full_name":"ws/repo"}},"links":{"html":{"href":"fork"}}}`
+	const own = `{"id":8,"state":"MERGED","source":{"branch":{"name":"cinderline/EMB-3"},"repository":{"full_name":"ws/repo"}},` +
+		`"destination":{"repository":{"full_name":"ws/repo"}},"links":{"html":{"href":"own"}}}`
+	ctx := context.Background()
+
+	b, _ := recordedBitbucket(t, reply{200, `{"values":[` + fork + `,` + own + `]}`}, reply{200, `{"values":[` + fork + `]}`})
+	if pr, found, err := b.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{8, "own"}) || !found || err != nil {
+		t.Errorf("FindPullRequest = %+v, %v, %v; want the repository's own #8", pr, found, err)
+	}
+	if pr, found, err := b.FindPullRequest(ctx, "cinderline/EMB-3"); found || err != nil {
+		t.Errorf("FindPullRequest with only a fork's = %+v, %v, %v; want none", pr, found, err)
+	}
+
+	b, _ = recordedBitbucket(t, reply{200, `{"values":[` + fork + `,` + own + `]}`}, reply{200, `{"values":[` + fork + `]}`})
+	if s, err := b.MergeState(ctx, "cinderline/EMB-3"); s.State != MergeMerged || err != nil {
+		t.Errorf("MergeState = %q, %v; want the repository's own merged, not the fork's declined", s.State, err)
+	}
+	if s, err := b.MergeState(ctx, "cinderline/EMB-3"); s.State != "" || err != nil {
+		t.Errorf("MergeState with only a fork's = %q, %v; want none", s.State, err)
+	}
+}

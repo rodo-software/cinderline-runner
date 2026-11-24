@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +57,14 @@ type gitlabMR struct {
 	WebURL       string `json:"web_url"`
 	State        string `json:"state"`
 	SourceBranch string `json:"source_branch"`
+	// A merge request from a fork has its own source project; its branch
+	// can have the same name as the runner's (CLR-237).
+	SourceProjectID int `json:"source_project_id"`
+	TargetProjectID int `json:"target_project_id"`
 }
+
+// own reports whether mr comes from the project itself, not from a fork.
+func (mr gitlabMR) own() bool { return mr.SourceProjectID == mr.TargetProjectID }
 
 func (g *GitLab) DefaultBranch(ctx context.Context) (string, error) {
 	var r struct {
@@ -89,7 +97,7 @@ func (g *GitLab) FindPullRequest(ctx context.Context, branch string) (PullReques
 		return PullRequest{}, false, err
 	}
 	for _, mr := range mrs {
-		if mr.SourceBranch == branch {
+		if mr.SourceBranch == branch && mr.own() {
 			return PullRequest{Number: mr.IID, URL: mr.WebURL}, true, nil
 		}
 	}
@@ -115,10 +123,12 @@ func (g *GitLab) MergeState(ctx context.Context, branch string) (PullState, erro
 	if err := g.do(ctx, http.MethodGet, g.project+"/merge_requests?source_branch="+url.QueryEscape(branch)+"&state=all", nil, &mrs); err != nil {
 		return PullState{}, err
 	}
-	if len(mrs) == 0 {
+	// The newest of the project's own: GitLab lists by creation, newest first.
+	i := slices.IndexFunc(mrs, gitlabMR.own)
+	if i < 0 {
 		return PullState{}, nil
 	}
-	mr := mrs[0] // the newest: GitLab lists by creation, newest first
+	mr := mrs[i]
 	switch mr.State {
 	case "merged":
 		return PullState{State: MergeMerged}, nil
