@@ -132,7 +132,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 		Issue: cinderline.JobIssue{Ref: ref, Title: "Add hello.txt", Body: "Add a file."},
 		Team:  cinderline.Team{Name: "Dev", MaxMinutes: 10, MaxTurns: 10, Agents: []cinderline.TeamAgent{{Name: "Coder", Client: "claude"}}},
 	}
-	started, err := p.run(ctx, app.client(t), cinderline.Project{Key: project, RepositoryURL: repo, Forge: "forgejo", IdleMinutes: 20}, jb, false)
+	started, err := p.run(ctx, app.client(t), cinderline.Project{Key: project, RepositoryURL: repo, Forge: "forgejo", IdleMinutes: 20}, jb, 0)
 	if !started || err != nil {
 		t.Fatalf("run = %v, %v", started, err)
 	}

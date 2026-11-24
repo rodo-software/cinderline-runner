@@ -100,7 +100,7 @@ func TestStatusPrintsEachProject(t *testing.T) {
 	at := time.Date(2026, 11, 6, 14, 30, 0, 0, time.Local)
 	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []localapi.ProjectStatus {
 		return []localapi.ProjectStatus{
-			{Project: "WEB", Connected: true, LastPoll: at, Issue: "WEB-7", Manager: "WEB-9", Draining: true},
+			{Project: "WEB", Connected: true, LastPoll: at, Issues: []string{"WEB-7"}, Manager: "WEB-9", Draining: true},
 			{Project: "API", LastError: "token not found", LastErrorAt: at},
 		}
 	}})
@@ -333,7 +333,7 @@ func TestStopDrainNamesIssuesInFlight(t *testing.T) {
 			if polls++; drained && polls > 2 {
 				go srv.Close() // the run finished and the daemon exits
 			}
-			return []localapi.ProjectStatus{{Project: "CSR", Connected: true, Issue: "CSR-7"}}
+			return []localapi.ProjectStatus{{Project: "CSR", Connected: true, Issues: []string{"CSR-7"}}}
 		},
 	})
 	go srv.Serve(ln)
@@ -439,7 +439,7 @@ func TestRunVerbose(t *testing.T) {
 
 // CLR-194: a Project Manager run is in flight like the team's run.
 func TestInFlightNamesManagerRuns(t *testing.T) {
-	st := localapi.Status{Projects: []localapi.ProjectStatus{{Issue: "WEB-7", Manager: "WEB-9"}, {Manager: "API-2"}, {}}}
+	st := localapi.Status{Projects: []localapi.ProjectStatus{{Issues: []string{"WEB-7"}, Manager: "WEB-9"}, {Manager: "API-2"}, {}}}
 	if got := inFlight(st.Projects); !slices.Equal(got, []string{"WEB-7", "WEB-9", "API-2"}) {
 		t.Errorf("inFlight = %q", got)
 	}
@@ -452,7 +452,7 @@ func TestStatusPrintsMemory(t *testing.T) {
 	serve(t, c, localapi.Handlers{Version: "4.5.6",
 		Status: func() []localapi.ProjectStatus {
 			return []localapi.ProjectStatus{
-				{Project: "WEB", Connected: true, Issue: "WEB-7", RunMemory: 5 << 29},
+				{Project: "WEB", Connected: true, Issues: []string{"WEB-7"}, RunMemory: 5 << 29},
 				{Project: "API", Connected: true, RunMemory: 4 << 30, WaitsForMemory: true},
 			}
 		},

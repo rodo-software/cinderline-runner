@@ -192,7 +192,7 @@ func TestTwoProjectsThatDoNotBothFitRunOneAtATime(t *testing.T) {
 			t.Errorf("manager %v: reserved during WEB's run %d, want its 4 GiB", manager, got)
 		}
 		close(gw.release["/runs/CSR-1"])
-		until(t, "WEB's run to end", func() bool { return len(w.p.Status().Issue) == 0 && get() == 3 })
+		until(t, "WEB's run to end", func() bool { return len(w.p.Status().Issues) == 0 && get() == 3 })
 		cancel()
 		<-doneA
 		<-doneW
@@ -216,17 +216,16 @@ func TestReservationReleasedWhenNoJobComes(t *testing.T) {
 		}
 		return answer(t, proj, "")
 	})
-	// The first poll asks for the upkeep pass, so it offers no slot.
-	for i, r := range during[1:] {
+	for i, r := range during {
 		if r != 4<<30 {
-			t.Errorf("poll %d: reserved %d, want one slot's 4 GiB", i+1, r)
+			t.Errorf("poll %d: reserved %d, want one slot's 4 GiB", i, r)
 		}
 	}
 	var offered [][2]bool
-	for _, p := range polls[1:] {
+	for _, p := range polls {
 		offered = append(offered, [2]bool{p.Idle, p.ManagerIdle})
 	}
-	if want := [][2]bool{{true, false}, {false, true}, {true, false}, {false, true}}; !slices.Equal(offered, want) {
+	if want := [][2]bool{{true, false}, {false, true}, {true, false}, {false, true}, {true, false}}; !slices.Equal(offered, want) {
 		t.Errorf("idle, manager_idle per poll = %v, want the slots taking turns %v", offered, want)
 	}
 	if got := reserved(b); got != 0 {
@@ -289,8 +288,11 @@ func TestOversizedRunStartsAlone(t *testing.T) {
 	}
 	logMu.Lock()
 	defer logMu.Unlock()
-	if s := logs.String(); !strings.Contains(s, "runs alone") || strings.Count(s, `msg="waits for memory"`) != 2 {
-		t.Errorf("log = %s, want one warning that the run runs alone and one line per slot that it waits", s)
+	// The team's slot starts to wait once; the manager's may start again
+	// when the run takes the memory, after a poll where it only had its turn.
+	if s := logs.String(); !strings.Contains(s, "runs alone") || strings.Count(s, `msg="waits for memory" project=CSR manager=false`) != 1 ||
+		!slices.Contains([]int{1, 2}, strings.Count(s, `msg="waits for memory" project=CSR manager=true`)) {
+		t.Errorf("log = %s, want one warning that the run runs alone and a line each time a slot starts to wait", s)
 	}
 }
 

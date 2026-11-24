@@ -107,11 +107,11 @@ func malformed(c *cinderline.Client, kind, why string) error {
 	return fmt.Errorf("runner %s cannot do the %q step Cinderline asked for: %s; update the runner", c.Version(), kind, why)
 }
 
-// run prepares and does one job, following next until done. It reports
+// run prepares and does one job in the slot, following next until done. It reports
 // started false when the run did not start; err then says why, or is nil
 // when the app took the job back (a 409 on the first call). Nothing is
 // claimed before the first call, so a run that did not start wrote nothing.
-func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline.Project, jb cinderline.Job, manager bool) (started bool, err error) {
+func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline.Project, jb cinderline.Job, slot int) (started bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			p.Log.Error("panic", "project", p.Config.Key, "issue", jb.Issue.Ref, "stack", string(debug.Stack()))
@@ -120,7 +120,7 @@ func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline
 			}
 		}
 	}()
-	j, cf, h, err := p.prepareRun(ctx, proj, jb, manager)
+	j, cf, h, err := p.prepareRun(ctx, proj, jb, slot)
 	if errors.Is(err, errNoMemory) {
 		// Nothing is claimed yet, so the job is dropped as one taken back; the next poll offers no slot it does not fit.
 		p.Log.Info("job dropped: the base's compose file makes the run larger than the memory left", "project", p.Config.Key, "issue", jb.Issue.Ref, "err", err)

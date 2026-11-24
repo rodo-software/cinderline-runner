@@ -155,11 +155,11 @@ func TestAManagerJobStartsWhileATeamRunIsGoing(t *testing.T) {
 	if !slices.Equal(both.Running, []string{"CSR-1", "CSR-2"}) || both.Idle || both.ManagerIdle {
 		t.Errorf("poll during both runs: running %v, idle %v, manager_idle %v", both.Running, both.Idle, both.ManagerIdle)
 	}
-	if during.Issue != "CSR-1" || during.Manager != "CSR-2" {
-		t.Errorf("status during both runs: issue %q, manager %q", during.Issue, during.Manager)
+	if !slices.Equal(during.Issues, []string{"CSR-1"}) || during.Manager != "CSR-2" {
+		t.Errorf("status during both runs: issues %v, manager %q", during.Issues, during.Manager)
 	}
-	if after.Issue != "" || after.Manager != "" {
-		t.Errorf("status after both runs: issue %q, manager %q", after.Issue, after.Manager)
+	if len(after.Issues) != 0 || after.Manager != "" {
+		t.Errorf("status after both runs: issues %v, manager %q", after.Issues, after.Manager)
 	}
 	if l := lastsOf(app, "CSR-2"); len(l) != 1 || l[0].Outcome != "finished" || l[0].Issue != "CSR-2" {
 		t.Errorf("manager lasts = %+v", l)
@@ -173,8 +173,8 @@ func TestAManagerJobStartsWhileATeamRunIsGoing(t *testing.T) {
 }
 
 // While a manager run goes, no second manager job starts, though the poll
-// keeps offering one; a team job still does, and no tidying or upkeep pass
-// starts on the clones while the manager's run is in flight.
+// keeps offering one; a team job still does, and tidying next to the
+// manager's run leaves its clone alone (decision 2026-11-24-housekeeping-next-to-runs).
 func TestNoSecondManagerJobWhileOneRuns(t *testing.T) {
 	f := newFixture(t)
 	f.ws.Prepares = []workspace.PrepareReply{{Dir: "/runs/CSR-2"}, {Dir: "/runs/CSR-1"}}
@@ -220,8 +220,8 @@ func TestNoSecondManagerJobWhileOneRuns(t *testing.T) {
 			t.Errorf("poll while the manager ran said manager_idle: %+v", req)
 		}
 	}
-	if afterTeam == nil || afterTeam.Held != nil || afterTeam.Review != nil {
-		t.Errorf("poll after the team run, during the manager's: %+v; want no held, no review", afterTeam)
+	if afterTeam == nil || slices.Contains(afterTeam.Held, "CSR-2") {
+		t.Errorf("poll after the team run, during the manager's: %+v; want the manager's issue not held", afterTeam)
 	}
 	app.mu.Lock()
 	for _, n := range app.nexts {
@@ -275,7 +275,7 @@ func TestAManagerRunsStopDoesNotPush(t *testing.T) {
 	f.ws.Clones = []string{"/runs/CSR-2"} // left by an earlier run: replaced, never pushed
 	f.cl.Runs = []client.RunReply{ok("s-2", "Planned.")}
 	app := &fakeApp{onNext: stepsOf(managerRun, `{"kind":"stop"}`, `{"kind":"done","session":"paused"}`)}
-	started, err := f.p.run(context.Background(), app.client(t), proj, managerJob(), true)
+	started, err := f.p.run(context.Background(), app.client(t), proj, managerJob(), managerSlot)
 	if !started || err != nil {
 		t.Fatalf("run = %v, %v", started, err)
 	}
@@ -313,7 +313,7 @@ func TestAManagerRunRefusesCheckPublishAndResolve(t *testing.T) {
 		f.ws.Prepares = []workspace.PrepareReply{{Dir: "/runs/CSR-2"}}
 		f.ws.Removes = []error{nil}
 		app := &fakeApp{onNext: stepsOf(step, `{"kind":"done","session":"paused"}`)}
-		if _, err := f.p.run(context.Background(), app.client(t), proj, managerJob(), true); err != nil {
+		if _, err := f.p.run(context.Background(), app.client(t), proj, managerJob(), managerSlot); err != nil {
 			t.Fatal(err)
 		}
 		l := app.lasts()
@@ -339,7 +339,7 @@ func TestAManagerRunResumesItsSessionInAFreshClone(t *testing.T) {
 	f.cl.Runs = []client.RunReply{ok("", "Answered.")}
 	resume := strings.Replace(managerRun, `"session":"new"`, `"session":"resume"`, 1)
 	app := &fakeApp{onNext: stepsOf(resume)}
-	if _, err := f.p.run(context.Background(), app.client(t), proj, managerJob(), true); err != nil {
+	if _, err := f.p.run(context.Background(), app.client(t), proj, managerJob(), managerSlot); err != nil {
 		t.Fatal(err)
 	}
 	reqs := app.requests()
@@ -395,9 +395,9 @@ func TestAStopEndsOnlyItsOwnRunsTurn(t *testing.T) {
 	app := &fakeApp{onNext: perRef(map[string][]string{"CSR-1": {runNew, `{"kind":"done","session":"paused"}`}, "CSR-2": {managerRun, `{"kind":"done","session":"paused"}`}})}
 	c := app.client(t)
 	var wg sync.WaitGroup
-	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), false) })
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), 0) })
 	<-g.started["/runs/CSR-1"]
-	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, managerJob(), true) })
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, managerJob(), managerSlot) })
 	<-g.started["/runs/CSR-2"]
 	f.p.stopTurn("CSR-2")
 	// The manager's run reports its stopped turn while the team's turn goes on.

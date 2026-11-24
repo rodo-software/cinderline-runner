@@ -56,13 +56,13 @@ func serveFakeRunner(t *testing.T, c *CLI, issue string, long bool) *fakeRunner 
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			if !f.reloaded || issue == "" {
-				return []localapi.ProjectStatus{{Project: "CLR", Connected: true, Issue: issue}}
+				return []localapi.ProjectStatus{{Project: "CLR", Connected: true, Issues: []string{issue}}}
 			}
 			if f.polls++; !long && f.polls > 3 {
 				f.finished = true // the run finished and the loop ended
 				return nil
 			}
-			return []localapi.ProjectStatus{{Project: "CLR", Connected: true, Issue: issue, Draining: true}}
+			return []localapi.ProjectStatus{{Project: "CLR", Connected: true, Issues: []string{issue}, Draining: true}}
 		},
 	})
 	go srv.Serve(ln)

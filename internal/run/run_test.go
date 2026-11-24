@@ -22,7 +22,7 @@ const runNew = `{"kind":"run","issue":{"ref":"CSR-1","title":"Fix it"},"agent":"
 
 func (f *fixture) run(t *testing.T, app *fakeApp) (bool, error) {
 	t.Helper()
-	return f.p.run(context.Background(), app.client(t), proj, soloJob(), false)
+	return f.p.run(context.Background(), app.client(t), proj, soloJob(), 0)
 }
 
 // A solo run: the first request carries the run's facts and nothing else;
@@ -283,7 +283,7 @@ func TestAnUnreachableNextPausesAndQueues(t *testing.T) {
 	}
 	c := app.client(t)
 	c.Outbox = filepath.Join(t.TempDir(), "outbox.json")
-	if started, err := f.p.run(context.Background(), c, proj, soloJob(), false); !started || err != nil {
+	if started, err := f.p.run(context.Background(), c, proj, soloJob(), 0); !started || err != nil {
 		t.Fatalf("run = %v, %v", started, err)
 	}
 	reqs := app.requests()
@@ -352,7 +352,7 @@ func TestAStopEndsTheTurnAsStopped(t *testing.T) {
 	app := &fakeApp{onNext: stepsOf(runNew)}
 	c := app.client(t)
 	var wg sync.WaitGroup
-	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), false) })
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), 0) })
 	<-b.started
 	f.p.stopTurn("CSR-2") // another run's: nothing
 	f.p.stopTurn("CSR-1")
@@ -561,7 +561,7 @@ func TestAFirstNextTheAppDoesNotAnswerIsNotQueued(t *testing.T) {
 	app := &fakeApp{onNext: func(int, string, cinderline.NextRequest) reply { return reply{503, `{"message":"deploying"}`} }}
 	c := app.client(t)
 	c.Outbox = filepath.Join(t.TempDir(), "outbox.json")
-	started, err := f.p.run(context.Background(), c, proj, soloJob(), false)
+	started, err := f.p.run(context.Background(), c, proj, soloJob(), 0)
 	if started || err == nil {
 		t.Errorf("run = %v, %v; want not started with the error", started, err)
 	}
@@ -599,7 +599,7 @@ func TestAStopEndsTheCheckAsStopped(t *testing.T) {
 	app := &fakeApp{onNext: stepsOf(`{"kind":"check","issue":{"ref":"CSR-1","title":"Fix it"}}`)}
 	c := app.client(t)
 	var wg sync.WaitGroup
-	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), false) })
+	wg.Go(func() { _, _ = f.p.run(context.Background(), c, proj, soloJob(), 0) })
 	<-env.started
 	f.p.stopTurn("CSR-1")
 	wg.Wait()

@@ -296,6 +296,17 @@ components:
             it: it runs the project's one Project Manager issue there, in
             parallel with the run in its own slot. Without it, a Project
             Manager issue comes as `job`, before the team issues.
+        max_parallel:
+          type: integer
+          minimum: 1
+          maximum: 10
+          description: >-
+            The most team runs the runner does at once for this project, each
+            in its own slot, worktree and branch (decision 2026-11-24-lanes).
+            Only a runner with parallel slots sends it: the answer then has
+            `jobs` instead of `job`. Its Project Manager slot, with
+            `manager_idle`, is not one of them. Without it the runner does one
+            run at a time and gets `job`, as before.
         held:
           type: array
           maxItems: 200
@@ -493,7 +504,8 @@ components:
           description: |
             An offer, only to a poll with `idle`, and never while the project
             is archived or its runners are paused: the first of the top 20 To
-            do issues, in board order, that waits for nothing, has an active
+            do issues of a lane (decision 2026-11-24-lanes) whose question
+            hold is over, in board order, that waits for nothing, has an active
             team, and whose team's agent clients are all `ready` in the
             report, with every OpenCode agent's model provider (its model
             before the first `/`) in `model_providers`, and every agent's model
@@ -518,6 +530,22 @@ components:
             run follows the same steps in the manager slot, next to the run
             in the job slot; it is never checked or published, and its turns
             get a `manager` token.
+        jobs:
+          type: array
+          maxItems: 10
+          items:
+            $ref: '#/components/schemas/Job'
+          description: |
+            Only when the poll had `max_parallel`; `job` is then null. Empty
+            unless the poll had `idle`. A project's To do issues are in lanes,
+            each a queue of its own (decision 2026-11-24-lanes): one issue per
+            lane that none of the `running` issues is in, each chosen as `job`
+            is, at most `max_parallel` minus the `running` issues (the Project
+            Manager's left out when the poll had `manager_idle`). The lanes
+            whose first issue comes first in board order get the free slots.
+            Run each in its own slot as a `job`. A poll without
+            `manager_idle` gets a Project Manager issue here first, in a slot
+            of its own.
         stop:
           type: array
           description: The `running` issues whose turn must end now, with the outcome `stopped`. The issue is unknown, archived, Cancelled or in Backlog, or Blocked; only a Blocked issue whose latest comment is an agent's is left alone for one poll interval, because an agent that asked a person a question is ending its turn itself.

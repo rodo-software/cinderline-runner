@@ -155,6 +155,14 @@ func (p Project) MemoryLimit() int64 {
 	return n
 }
 
+// MaxParallel is the most a project's max_parallel_runs may be, the
+// contract's limit on max_parallel.
+const MaxParallel = 10
+
+// Parallel is the most team runs of the project at once: MaxParallelRuns,
+// or 1. Validate has checked the value.
+func (p Project) Parallel() int { return max(p.MaxParallelRuns, 1) }
+
 // Project is one Cinderline project, identified by URL, Workspace and Key (CSR-97).
 type Project struct {
 	// LocalID is the local name ID returns. A key renamed in the app changes
@@ -180,6 +188,11 @@ type Project struct {
 	// mem_limit on the agent service of its compose file wins (decision
 	// 2026-11-24-agent-memory-limit).
 	Memory string `json:"memory,omitempty"`
+	// MaxParallelRuns is the most team runs of the project at once, each
+	// in its own slot, clone and branch, 1 to MaxParallel; 0 is 1. The
+	// Project Manager's run is not one of them (decision 2026-11-24-lanes in
+	// the app repository).
+	MaxParallelRuns int `json:"max_parallel_runs,omitempty"`
 	// ExtraRepositories are other repositories the project's runs may read,
 	// mounted read-only (CSR-160). Configured only here, not in Cinderline
 	// (app decision 2026-11-11-extra-repositories-in-runner).
@@ -471,6 +484,8 @@ func (c *Config) Validate() error {
 			problem = errMsg
 		} else if _, err := ParseMemory(cmp.Or(p.Memory, DefaultMemory)); err != nil {
 			problem = err.Error()
+		} else if p.MaxParallelRuns < 0 || p.MaxParallelRuns > MaxParallel {
+			problem = fmt.Sprintf("max_parallel_runs must be 1 to %d", MaxParallel)
 		} else {
 			problem = checkExtraRepositories(p.ExtraRepositories)
 		}

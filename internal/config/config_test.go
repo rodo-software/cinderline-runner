@@ -153,6 +153,9 @@ func TestValidate(t *testing.T) {
 		{"memory in GB", []Project{with(func(p *Project) { p.Memory = "4GB" })}, "project 1 (WEB): memory"},
 		{"memory zero", []Project{with(func(p *Project) { p.Memory = "0g" })}, "project 1 (WEB): memory"},
 		{"memory negative", []Project{with(func(p *Project) { p.Memory = "-4g" })}, "project 1 (WEB): memory"},
+		{"max_parallel_runs", []Project{with(func(p *Project) { p.MaxParallelRuns = 10 })}, ""},
+		{"max_parallel_runs over 10", []Project{with(func(p *Project) { p.MaxParallelRuns = 11 })}, "project 1 (WEB): max_parallel_runs"},
+		{"max_parallel_runs negative", []Project{with(func(p *Project) { p.MaxParallelRuns = -1 })}, "project 1 (WEB): max_parallel_runs"},
 		{"memory fraction", []Project{with(func(p *Project) { p.Memory = "1.5g" })}, "project 1 (WEB): memory"},
 		{"memory overflow", []Project{with(func(p *Project) { p.Memory = "99999999999999g" })}, "project 1 (WEB): memory"},
 	}

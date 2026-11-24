@@ -71,8 +71,8 @@ func (c *CLI) status(args []string) int {
 		} else {
 			parts = append(parts, "last poll "+p.LastPoll.Local().Format(time.DateTime))
 		}
-		if p.Issue != "" {
-			parts = append(parts, "working on "+p.Issue)
+		if len(p.Issues) > 0 {
+			parts = append(parts, "working on "+strings.Join(p.Issues, ", "))
 		}
 		if p.Manager != "" {
 			parts = append(parts, "Project Manager on "+p.Manager)
@@ -281,14 +281,12 @@ func draining(st localapi.Status, project string) []localapi.ProjectStatus {
 	return out
 }
 
-// inFlight is the issues the projects run now, each project's run first,
+// inFlight is the issues the projects run now, each project's runs first,
 // then its Project Manager run.
 func inFlight(projects []localapi.ProjectStatus) []string {
 	var issues []string
 	for _, p := range projects {
-		if p.Issue != "" {
-			issues = append(issues, p.Issue)
-		}
+		issues = append(issues, p.Issues...)
 		if p.Manager != "" {
 			issues = append(issues, p.Manager)
 		}

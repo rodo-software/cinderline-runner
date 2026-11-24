@@ -12,6 +12,10 @@ type PollRequest struct {
 	// runner with the slot sends it, false too, as sending the field claims
 	// it (decision 2026-11-17-project-manager).
 	ManagerIdle bool `json:"manager_idle"`
+	// MaxParallel is the most team runs at once; only a runner with more
+	// than one team slot sends it, and then gets Jobs (decision
+	// 2026-11-24-lanes in the app repository).
+	MaxParallel int `json:"max_parallel,omitempty"`
 	// Held, when set, asks what to do with these issues' sessions and clones.
 	Held []string `json:"held,omitzero"`
 	// Review, when not nil, asks for the Review list; an empty list asks too.
@@ -106,8 +110,11 @@ type PollAnswer struct {
 	// ManagerJob is the job for the runner's Project Manager slot, nil:
 	// none. Only when the poll said ManagerIdle, null unless it was true
 	// (decision 2026-11-17-project-manager).
-	ManagerJob *Job     `json:"manager_job"`
-	Stop       []string `json:"stop"`
+	ManagerJob *Job `json:"manager_job"`
+	// Jobs are the jobs for free team slots, one per lane, when the poll
+	// had MaxParallel; nil: the app sent none, as one before lanes does.
+	Jobs []Job    `json:"jobs"`
+	Stop []string `json:"stop"`
 	// Held and Review are nil when the poll did not ask for them.
 	Held   []HeldItem   `json:"held"`
 	Review []ReviewItem `json:"review"`

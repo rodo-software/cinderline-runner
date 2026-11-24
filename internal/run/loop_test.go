@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
@@ -80,8 +81,8 @@ func TestThePollRequest(t *testing.T) {
 		r.ModelProviders == nil || len(r.ModelProviders) != 0 {
 		t.Errorf("report = %+v", r)
 	}
-	// Not idle while it asks for the review list: the pass comes first.
-	if first.Running == nil || len(first.Running) != 0 || first.Idle || !polls[1].Idle {
+	// Idle while it asks for the review list too: the pass runs next to runs.
+	if first.Running == nil || len(first.Running) != 0 || !first.Idle || !polls[1].Idle {
 		t.Errorf("running %v, idle %v then %v", first.Running, first.Idle, polls[1].Idle)
 	}
 	if !slices.Equal(first.Held, []string{"CSR-8", "CSR-9"}) || first.Review == nil || len(first.Review) != 0 {
@@ -122,7 +123,7 @@ func TestAJobRunsAndAStopEndsItsTurn(t *testing.T) {
 	if len(lasts) != 2 || lasts[0].Outcome != "stopped" || lasts[1].Step != "stop" {
 		t.Errorf("lasts = %+v", lasts)
 	}
-	if st := f.p.Status(); !st.Connected || st.Issue != "" || st.LastPoll.IsZero() {
+	if st := f.p.Status(); !st.Connected || len(st.Issues) != 0 || st.LastPoll.IsZero() {
 		t.Errorf("status = %+v", st)
 	}
 }
@@ -350,43 +351,85 @@ func (b blockingForge) MergeState(ctx context.Context, branch string) (forge.Pul
 	return forge.PullState{}, nil
 }
 
-// While an upkeep pass runs the runner is not idle, so no job starts on the
-// clones it works on, and no tidying or second pass starts either.
-func TestAnUpkeepPassExcludesJobsAndTidying(t *testing.T) {
+// Decision 2026-11-24-housekeeping-next-to-runs: while an upkeep pass runs
+// a job starts next to it, but not one for an issue of the pass, and no
+// tidying or second pass starts.
+func TestAnUpkeepPassRunsNextToJobs(t *testing.T) {
 	f := newFixture(t)
 	f.ws.Behinds = []workspace.BehindReply{{}}
+	f.cl.Runs = []client.RunReply{ok("s", "Done.")}
+	f.p.saveNote("CSR-9", Note{Dir: "/runs/CSR-9", Session: "s", Client: "claude", Origin: "kept"})
 	fg := blockingForge{&forge.Fake{}, make(chan struct{}), make(chan struct{})}
 	f.p.Forge = func(string) (forge.Forge, error) { return fg, nil }
-	polls := runLoop(t, f, &fakeApp{}, nil, nil, func(n int, _ cinderline.PollRequest, stop func()) reply {
-		switch n {
-		case 0:
+	app := &fakeApp{onNext: perRef(map[string][]string{"CSR-1": {runNew}})}
+	var during []cinderline.PollRequest
+	phase := 0
+	runLoop(t, f, app, nil, nil, func(n int, req cinderline.PollRequest, stop func()) reply {
+		switch {
+		case n == 0:
 			return answer(t, proj, `"review":[{"ref":"CSR-7","title":"T","merge":false}]`)
-		case 1:
+		case phase == 0:
 			<-fg.started
-		case 3:
+			phase, during = 1, append(during, req)
+			return answer(t, proj, strings.Replace(jobJSON, "CSR-1", "CSR-7", 1)+`,"review":[]`)
+		case phase == 1:
+			phase, during = 2, append(during, req)
+			return answer(t, proj, jobJSON+`,"review":[]`)
+		case phase == 2 && len(req.Running) == 0 && len(f.cl.Calls()) > 0:
+			// The run ended, which makes tidying due, but the pass still runs.
+			phase, during = 3, append(during, req)
 			close(fg.release)
 			stop()
 		}
-		return answer(t, proj, jobJSON+`,"review":[]`)
+		return answer(t, proj, "")
 	})
-	for _, p := range polls[1:3] {
-		if p.Idle || p.Held != nil || p.Review != nil {
-			t.Errorf("poll during the pass: idle %v, held %v, review %v", p.Idle, p.Held, p.Review)
+	if phase != 3 {
+		t.Fatalf("stopped in phase %d", phase)
+	}
+	for _, p := range during {
+		if !p.Idle || p.Held != nil || p.Review != nil {
+			t.Errorf("poll during the pass: idle %v, held %v, review %v; want idle, no held or review", p.Idle, p.Held, p.Review)
 		}
 	}
-	if len(f.cl.Calls()) != 0 {
-		t.Error("a job ran during the pass")
+	if got := nextRefs(app); !slices.Equal(got, []string{"CSR-1"}) {
+		t.Errorf("runs during the pass = %v, want CSR-1 only, not the pass's CSR-7", got)
 	}
 }
 
-// While a run is in flight no upkeep pass and no tidying start.
-func TestARunExcludesUpkeepAndTidying(t *testing.T) {
+// Decision 2026-11-24-housekeeping-next-to-runs: an upkeep pass and
+// tidying next to runs leave the issues in flight alone: the pass skips
+// their Review items, held leaves them out, and no clone of theirs, by
+// folder or by branch, is pushed.
+func TestHousekeepingSkipsTheIssuesInFlight(t *testing.T) {
 	f := newFixture(t)
-	app := &fakeApp{onPoll: func(int, cinderline.PollRequest) reply { return answer(t, proj, "") }}
-	l := &loop{p: f.p, c: app.client(t), ctx: context.Background(), runDone: make(chan ended, 1), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: time.Minute, running: "CSR-1"}
+	for _, ref := range []string{"CSR-1", "CSR-2", "CSR-9"} {
+		f.p.saveNote(ref, Note{Dir: "/runs/" + ref, Session: "s", Client: "claude", Origin: "kept"})
+	}
+	clones := []workspace.Clone{{Dir: "/runs/CSR-1", Branch: "cinderline/CSR-1"}, {Dir: "/runs/CSR-5", Branch: "cinderline/CSR-2"}, {Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"}}
+	f.ws.Strandeds = []workspace.StrandedReply{{Clones: clones}, {}}
+	f.ws.Behinds = []workspace.BehindReply{{}}
+	app := &fakeApp{onPoll: func(int, cinderline.PollRequest) reply {
+		return answer(t, proj, `"held":[{"ref":"CSR-8","session":"keep"},{"ref":"CSR-9","session":"keep"}],"review":[{"ref":"CSR-1","title":"T","merge":false},{"ref":"CSR-7","title":"T","merge":false}]`)
+	}}
+	l := &loop{p: f.p, c: app.client(t), ctx: context.Background(), running: []string{"CSR-1", ""}, manager: "CSR-2", runDone: make(chan ended, 3), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: time.Minute}
 	l.poll()
-	if p := app.pollsSoFar()[0]; p.Idle || p.Held != nil || p.Review != nil || l.upkeep {
-		t.Errorf("poll during a run: idle %v, held %v, review %v", p.Idle, p.Held, p.Review)
+	refs := l.upkeepRefs
+	<-l.upkeepDone
+	p := app.pollsSoFar()[0]
+	if !p.Idle || p.Review == nil || !slices.Equal(p.Held, []string{"CSR-9"}) {
+		t.Errorf("poll next to runs: idle %v, held %v, review %v; want idle, CSR-9 held, review asked", p.Idle, p.Held, p.Review)
+	}
+	if !slices.Equal(refs, []string{"CSR-7"}) {
+		t.Errorf("pass on %v, want CSR-7 only", refs)
+	}
+	var pushed []string
+	for _, c := range f.ws.Calls() {
+		if c.Method == "Push" {
+			pushed = append(pushed, c.Args[0].(string))
+		}
+	}
+	if !slices.Equal(pushed, []string{"/runs/CSR-8"}) {
+		t.Errorf("pushed %v, want only the clone no run holds", pushed)
 	}
 }
 

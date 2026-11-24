@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -83,14 +84,14 @@ type Project struct {
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
 	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
 	listModels    func(ctx context.Context, clients []string) map[string][]string // each client's models; none for one that failed
-	image         string                                                          // the agent image the tools mount was filled for; only runs touch it, one at a time
+	image         string                                                          // the agent image the tools mount was filled for; only runs' prepares touch it, one at a time (prepMu)
 	// reviewChecks are, by Review issue ref, the failed checks of its pull
 	// request's head, read once per head; only upkeep passes touch it, one at a time.
 	reviewChecks map[string]headChecks
 
 	detectMu sync.Mutex    // one detection at a time
 	detected chan struct{} // closed by the first detection, so the loop polls at once; nil in tests
-	prepMu   sync.Mutex    // one run prepares at a time: the team's and the manager's share the environment, the bare repository and the extra volumes
+	prepMu   sync.Mutex    // one run prepares at a time: every slot's run shares the environment, the bare repository and the extra volumes
 
 	mu       sync.Mutex
 	clients  []cinderline.ReportClient // the last detection; nil before the first
@@ -391,12 +392,19 @@ func (p *Project) Status() localapi.ProjectStatus {
 	return st
 }
 
-// slot names the project's team slot, or its Project Manager slot, in the budget.
-func (p *Project) slot(manager bool) string {
-	if manager {
+// managerSlot is the Project Manager's slot; the team's are 0 up to the
+// project's Parallel (decision 2026-11-24-lanes in the app repository).
+const managerSlot = -1
+
+// slot names one of the project's slots in the budget.
+func (p *Project) slot(n int) string {
+	switch n {
+	case managerSlot:
 		return p.Config.ID() + " manager"
+	case 0:
+		return p.Config.ID()
 	}
-	return p.Config.ID()
+	return p.Config.ID() + " " + strconv.Itoa(n+1)
 }
 
 // runMemory is a run's share of the budget: as the last run measured it,
@@ -415,7 +423,7 @@ var errNoMemory = errors.New("not enough memory")
 // compose file, its slot's reservation and the project's run size. It
 // fails with errNoMemory when that no longer fits: the base's compose file
 // has grown since the last run measured it.
-func (p *Project) fit(ctx context.Context, manager bool, memory int64) error {
+func (p *Project) fit(ctx context.Context, slot int, memory int64) error {
 	p.mu.Lock()
 	p.memory = memory
 	p.status.RunMemory = memory
@@ -423,7 +431,7 @@ func (p *Project) fit(ctx context.Context, manager bool, memory int64) error {
 	if p.Budget == nil {
 		return nil
 	}
-	if ok, _ := p.Budget.reserve(ctx, p.slot(manager), memory); !ok {
+	if ok, _ := p.Budget.reserve(ctx, p.slot(slot), memory); !ok {
 		return fmt.Errorf("the run needs %s, more than the memory budget has left: %w", config.GiB(memory), errNoMemory)
 	}
 	return nil

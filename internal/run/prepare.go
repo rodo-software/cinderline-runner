@@ -154,8 +154,8 @@ func runWorkspace(branch, base string, extras []config.ExtraRepository, links []
 // error means the run did not start. A manager run (CLR-194) reads a fresh
 // clone of the base: it does not keep an earlier clone's work, resume its
 // clone or merge the base into it, though it may resume its session.
-func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb cinderline.Job, manager bool) (*job, *conflict, *held, error) {
-	ref, team := jb.Issue.Ref, jb.Team
+func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb cinderline.Job, slot int) (*job, *conflict, *held, error) {
+	ref, team, manager := jb.Issue.Ref, jb.Team, slot == managerSlot
 	// The ref becomes a branch, a folder and a file name.
 	if !workspace.IssueRef.MatchString(ref) {
 		return nil, nil, nil, fmt.Errorf("%q is not an issue reference", ref)
@@ -182,7 +182,7 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("the run's environment could not be prepared: %w", err)
 		}
-		if err := p.fit(ctx, manager, memory); err != nil {
+		if err := p.fit(ctx, slot, memory); err != nil {
 			return nil, nil, nil, err
 		}
 	}
