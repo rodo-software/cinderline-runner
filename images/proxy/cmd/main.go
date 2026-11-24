@@ -18,7 +18,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -84,11 +86,26 @@ func checkPublicAddress(_, address string, _ syscall.RawConn) error {
 	}
 	// A resolved IPv6 link-local address may include an interface zone.
 	host, _, _ = strings.Cut(host, "%")
-	ip := net.ParseIP(host)
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return errPrivateAddress
+	}
+	// Unmap so ::ffff:100.64.0.1 meets the IPv4 prefixes below.
+	ip = ip.Unmap()
+	if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+		slices.ContainsFunc(specialPrefixes, func(p netip.Prefix) bool { return p.Contains(ip) }) {
 		return errPrivateAddress
 	}
 	return nil
+}
+
+// specialPrefixes are non-public ranges the netip methods above miss (CLR-225).
+var specialPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),     // "this network"
+	netip.MustParsePrefix("100.64.0.0/10"), // carrier-grade NAT, which Tailscale uses
+	netip.MustParsePrefix("192.0.0.0/24"),  // IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"), // benchmarking
+	netip.MustParsePrefix("64:ff9b::/96"),  // NAT64, which embeds any IPv4 address
 }
 
 var dialPublic = func(ctx context.Context, network, target string, control func(string, string, syscall.RawConn) error) (net.Conn, error) {

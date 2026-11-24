@@ -43,12 +43,13 @@ func TestAppEntriesArePublicOnlyAndLocalPermissionWins(t *testing.T) {
 }
 
 func TestPublicAddressCheck(t *testing.T) {
-	for _, addr := range []string{"172.17.0.1:80", "192.168.1.1:80", "10.0.0.5:443", "169.254.169.254:80", "0.0.0.0:80", "127.0.0.1:80", "[::1]:80", "[fc00::1]:80", "[fe80::1%eth0]:80", "[::]:80", "bad:80"} {
+	for _, addr := range []string{"172.17.0.1:80", "192.168.1.1:80", "10.0.0.5:443", "169.254.169.254:80", "0.0.0.0:80", "127.0.0.1:80", "[::1]:80", "[fc00::1]:80", "[fe80::1%eth0]:80", "[::]:80", "bad:80",
+		"100.64.0.1:443", "100.127.255.254:443", "198.18.0.1:443", "198.19.255.1:443", "0.1.2.3:443", "192.0.0.8:443", "[64:ff9b::a00:1]:443", "[::ffff:100.64.0.1]:443"} {
 		if err := checkPublicAddress("tcp", addr, nil); !errors.Is(err, errPrivateAddress) {
 			t.Errorf("%s: got %v, want private address refusal", addr, err)
 		}
 	}
-	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443"} {
+	for _, addr := range []string{"93.184.216.34:443", "[2606:4700:4700::1111]:443", "100.128.0.1:443", "198.20.0.1:443", "192.0.1.1:443", "[64:ff9b:0:0:1::1]:443"} {
 		if err := checkPublicAddress("tcp", addr, nil); err != nil {
 			t.Errorf("%s: %v", addr, err)
 		}
