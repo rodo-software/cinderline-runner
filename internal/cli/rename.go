@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // rename sets a project's key to the one its instance gives it now, asked
@@ -122,6 +124,23 @@ func (c *CLI) busy(p config.Project) error {
 	}
 	if len(paused) > 0 {
 		return fmt.Errorf("%s has paused runs, whose work may not be pushed: %s; rename it when they have ended", p.Key, strings.Join(paused, ", "))
+	}
+	// A clone without a kept note, such as one a plain stop cut, may hold
+	// work only the runner's tidy pushes (CLR-231).
+	dirs, err := (&workspace.Docker{Project: p.ID(), Exec: c.exec}).List(context.Background())
+	if err != nil {
+		return fmt.Errorf("%s's clones could not be listed to check for unpushed work: %w", p.Key, err)
+	}
+	var unpushed []string
+	for _, d := range dirs {
+		ref := path.Base(d)
+		var n run.Note
+		if b, err := os.ReadFile(filepath.Join(dir, ref+".json")); err != nil || json.Unmarshal(b, &n) != nil || n.Origin != "kept" {
+			unpushed = append(unpushed, ref)
+		}
+	}
+	if len(unpushed) > 0 {
+		return fmt.Errorf("%s has clones whose work may not be pushed: %s; start the runner (`%s run` or its service) so its tidy pushes them, then rename it", p.Key, strings.Join(unpushed, ", "), name.Name)
 	}
 	return nil
 }

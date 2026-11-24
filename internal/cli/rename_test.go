@@ -1,15 +1,19 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // After CSR became CLR in the app, rename takes the new key from the
@@ -21,7 +25,14 @@ func TestRename(t *testing.T) {
 	u := instanceIn(t, "CLR", repoURL, "acme")
 	c, out, errb := newCLI(t, goodToken+"\n")
 	d := &fakeDocker{lists: map[string]string{"docker volume ls --quiet --filter label=cinderline.project=CSR": "cinderline-CSR-repo\n"}}
-	c.exec = d.exec
+	clones := "" // what listing the runs volume says
+	c.exec = func(ctx context.Context, env []string, argv ...string) (string, error) {
+		out, err := d.exec(ctx, env, argv...)
+		if slices.Contains(argv, workspace.Volume("CSR", "runs")+":"+workspace.RunsPath) {
+			return clones, err
+		}
+		return out, err
+	}
 	old := `{"version": 1, "projects": [{"url": "` + u + `", "key": "CSR", "workspace": "acme", "names_by_key": true, "repository": "` + repoURL + `"}]}`
 	if err := os.WriteFile(c.Paths.File, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
@@ -48,9 +59,11 @@ func TestRename(t *testing.T) {
 		if code := c.Run([]string{"rename", "--project", "CSR"}); code != 1 || !strings.Contains(errb.String(), why) {
 			t.Errorf("code %d, stderr %q; want a refusal with %q", code, errb.String(), why)
 		}
-		if got := projects(t, c); got[0].Key != "CSR" || secret(t, c, stored, secrets.GitToken) != "git" || len(d.calls) != 0 {
+		removed := slices.ContainsFunc(d.calls, func(argv []string) bool { return slices.Contains(argv, "rm") })
+		if got := projects(t, c); got[0].Key != "CSR" || secret(t, c, stored, secrets.GitToken) != "git" || removed {
 			t.Errorf("a refused rename changed something: %+v, docker %q", got, d.calls)
 		}
+		d.calls = nil
 	}
 
 	// Work that may not be on the forge is in the volumes rename removes.
@@ -66,8 +79,15 @@ func TestRename(t *testing.T) {
 	}
 	refused("not received")
 	os.Remove(outbox)
+	// A plain stop cut a run: its clone has no note, and maybe unpushed work.
+	clones = "/runs/CSR-5\n"
+	refused("CSR-5; start the runner")
+	d.fail = errors.New("no docker")
+	refused("could not be listed")
+	d.fail = nil
 
 	note("CSR-4", "kept")
+	clones = "/runs/CSR-4\n" // pushed when its run kept it
 	errb.Reset()
 	if code := c.Run([]string{"rename", "--project", "CSR"}); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
@@ -83,9 +103,10 @@ func TestRename(t *testing.T) {
 		secret(t, c, stored, secrets.RunnerToken) != "" || secret(t, c, stored, secrets.GitToken) != "" {
 		t.Error("want both secrets under the new ID and none under the old")
 	}
-	if want := []string{"docker", "volume", "rm", "--force", "cinderline-CSR-repo"}; len(d.calls) != 4 || !reflect.DeepEqual(d.calls[3], want) {
-		t.Errorf("docker calls %q, want three lists and %q", d.calls, want)
+	if want := []string{"docker", "volume", "rm", "--force", "cinderline-CSR-repo"}; len(d.calls) != 6 || !reflect.DeepEqual(d.calls[5], want) {
+		t.Errorf("docker calls %q, want the clones listed, three lists and %q", d.calls, want)
 	}
+	clones = ""
 	if _, err := os.Stat(notes); !os.IsNotExist(err) {
 		t.Errorf("session notes of the old ID are still there: %v", err)
 	}
