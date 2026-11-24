@@ -292,7 +292,8 @@ func TestRun(t *testing.T) {
 		t.Errorf("output = %q", out)
 	}
 	image := imageTag()
-	agent := append(append([]string{"docker", "run", "--rm", "--interactive"}, issueLabels...),
+	// No --rm: the teardown removes it, after a failure only once its memory state is read.
+	agent := append(append([]string{"docker", "run", "--interactive"}, issueLabels...),
 		"--name", "cinderline-CSR-CSR-31-agent", "--network", "cinderline-CSR-CSR-31",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		// No swap: going over the limit kills the turn (decision 2026-11-24-agent-memory-limit).
@@ -558,6 +559,89 @@ func TestRunStopsAtTheTimeout(t *testing.T) {
 	if !reflect.DeepEqual(stop, []string{"docker", "stop", "cinderline-CSR-CSR-31-agent"}) {
 		t.Errorf("stop = %q", stop)
 	}
+	if c := inspected(calls()); c != nil {
+		t.Errorf("read the memory state of a run the runner stopped: %q", c)
+	}
+}
+
+// inspected is the call that read the agent's memory state; nil: none.
+func inspected(calls []execCall) []string {
+	for _, c := range calls {
+		if len(c.Argv) > 1 && c.Argv[1] == "inspect" {
+			return c.Argv
+		}
+	}
+	return nil
+}
+
+// oomRunner is runner with the agent exiting with code and docker inspect
+// printing state, or failing with inspectErr.
+func oomRunner(code int, state string, inspectErr error) (*Docker, func() []execCall) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return exitErr(code) })
+	record := d.Exec
+	d.Exec = func(ctx context.Context, env []string, argv ...string) (string, error) {
+		out, err := record(ctx, env, argv...)
+		if argv[1] == "inspect" {
+			return state, inspectErr
+		}
+		return out, err
+	}
+	return d, calls
+}
+
+func TestRunOutOfMemory(t *testing.T) {
+	d, calls := oomRunner(137, "true\n", nil)
+	d.Memory = 512 << 20
+	_, err := d.Run(context.Background(), turn)
+	var oom *OutOfMemoryError
+	if !errors.As(err, &oom) || oom.Limit != 512<<20 {
+		t.Fatalf("Run = %v, want OutOfMemoryError with the limit 512 MiB", err)
+	}
+	want := []string{"docker", "inspect", "--format", "{{.State.OOMKilled}}", "cinderline-CSR-CSR-31-agent"}
+	got := calls()
+	if !reflect.DeepEqual(inspected(got), want) {
+		t.Errorf("inspect = %q, want %q", inspected(got), want)
+	}
+	// Read before the teardown removes the container.
+	if len(got) != 10 || got[7].Argv[1] != "inspect" || got[8].Argv[1] != "rm" {
+		t.Errorf("calls = %q, want the inspect before the teardown", got)
+	}
+}
+
+// A child of the command killed at the limit makes the command exit with
+// its own code; Docker's flag still tells.
+func TestRunOutOfMemoryAnyExitCode(t *testing.T) {
+	d, _ := oomRunner(2, "true", nil)
+	if _, err := d.Run(context.Background(), turn); !errors.As(err, new(*OutOfMemoryError)) {
+		t.Errorf("Run = %v, want OutOfMemoryError", err)
+	}
+}
+
+// Exit code 137 without Docker's flag, or a flag that cannot be read, is a
+// plain failure.
+func TestRunNotOutOfMemory(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		err   error
+	}{{"false\n", nil}, {"", errors.New("no such container")}} {
+		d, _ := oomRunner(137, tc.state, tc.err)
+		_, err := d.Run(context.Background(), turn)
+		var exit interface{ ExitCode() int }
+		if !errors.As(err, &exit) || exit.ExitCode() != 137 || errors.As(err, new(*OutOfMemoryError)) {
+			t.Errorf("inspect %q, %v: Run = %v, want exit code 137", tc.state, tc.err, err)
+		}
+	}
+}
+
+// A successful run's memory state is not read.
+func TestRunFinishedReadsNoMemoryState(t *testing.T) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return nil })
+	if _, err := d.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	if c := inspected(calls()); c != nil {
+		t.Errorf("inspect = %q, want none", c)
+	}
 }
 
 // exitErr is a command that ran and exited with that code, as *exec.ExitError.
@@ -573,7 +657,7 @@ func TestRunFailedCommandStillTearsDown(t *testing.T) {
 	if !errors.As(err, &exit) || exit.ExitCode() != 2 || errors.Is(err, ErrTimeout) {
 		t.Errorf("Run = %v, want exit code 2", err)
 	}
-	if got := calls(); len(got) != 9 || got[8].Argv[1] != "network" {
+	if got := calls(); len(got) != 10 || got[9].Argv[1] != "network" {
 		t.Errorf("calls = %q, want the teardown", got)
 	}
 }
@@ -721,6 +805,9 @@ func TestRunStopsWhenIdle(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("docker stop ran %d times, want 1", n)
+	}
+	if c := inspected(calls()); c != nil {
+		t.Errorf("read the memory state of a run the runner stopped: %q", c)
 	}
 }
 

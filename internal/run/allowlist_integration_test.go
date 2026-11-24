@@ -75,7 +75,7 @@ func TestIntegrationAllowlist(t *testing.T) {
 		Log:     slog.New(slog.NewTextHandler(&logs, nil)),
 		Allow:   []string{"example.com:443"},
 		Memory:  4 << 30,
-		OnRefused: func(host string) {
+		OnRefused: func(_, host string) {
 			mu.Lock()
 			defer mu.Unlock()
 			refused = append(refused, host)

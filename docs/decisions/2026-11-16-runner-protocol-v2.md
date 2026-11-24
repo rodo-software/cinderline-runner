@@ -33,7 +33,7 @@ Request:
 }
 ```
 
-- `report`: always sent by the loop, always whole. A poll without it only asks which project the token belongs to (`add` and `key set` check a token that way): the answer has `poll_after`, `review_after` and `project`, and nothing is stored, blocked or offered. Client states are `ready`, `missing_binary`, `missing_credential`, `invalid_credential`. Error kinds are `repository_mismatch` (no issue) and `not_started` (with `issue`). `model_providers` (optional; left out: none) names the model providers the runner can use for OpenCode, `openrouter` when its key is set plus each configured one; each name is lower-case letters, digits and dashes, starting with a letter or digit (decision 2026-11-17-local-model-providers).
+- `report`: always sent by the loop, always whole. A poll without it only asks which project the token belongs to (`add` and `key set` check a token that way): the answer has `poll_after`, `review_after` and `project`, and nothing is stored, blocked or offered. Client states are `ready`, `missing_binary`, `missing_credential`, `invalid_credential`. Error kinds are `repository_mismatch` (no issue) and `not_started` (with `issue`). `model_providers` (optional; left out: none) names the model providers the runner can use for OpenCode, `openrouter` when its key is set plus each configured one; each name is lower-case letters, digits and dashes, starting with a letter or digit (decision 2026-11-17-local-model-providers). `provider_models` (optional; left out: none) lists `{provider, models}`, the model ids each provider reports, without the provider (decision 2026-11-17-provider-models).
 - `running`: the top-level issues the runner works on now, and those whose last report still waits in its outbox.
 - `idle`: the runner can start a run now.
 - `held` (optional): the issues the runner keeps a session or clone of. Sent when it is about to tidy up: at start and while idle.
@@ -118,9 +118,9 @@ Request:
 
 | `step` | `outcome` | Other facts |
 | --- | --- | --- |
-| `run` | `finished`, `failed`, `turn_limit`, `time_limit`, `stopped` (the poll's `stop`), `idle` (the idle limit), `not_started` | `report`, `tail`, `error`, `usage` |
-| `resolve` | as `run`, and `not_verified` (the runner undid a merge it could not verify) | as `run` |
-| `check` | `passed`, `failed`, `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's) |
+| `run` | `finished`, `failed`, `turn_limit`, `time_limit`, `out_of_memory` (killed at the container's memory limit), `stopped` (the poll's `stop`), `idle` (the idle limit), `not_started` | `report`, `tail`, `error`, `usage`, `memory_limit` (bytes, with `out_of_memory`) |
+| `resolve` | as `run` except `out_of_memory`, and `not_verified` (the runner undid a merge it could not verify) | as `run` |
+| `check` | `passed`, `failed`, `out_of_memory` (killed at the container's memory limit), `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's), `memory_limit` |
 | `merge` | `conflict` | `conflicts`, `commits` |
 | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request` (URL), `conflicts`, `merge` (`merged`, `closed`, `failed`; `pending`: the runner asked the forge to merge and had not seen the merge when it moved on, at the wait's limit or because the issue was stopped during the wait; null: the runner did not ask the forge to merge, because the step did not say `merge` or the issue was stopped before it asked), `commit`, `error` |
 | `stop` | `pushed`, `not_pushed` | `commit`, `error` |
@@ -130,6 +130,8 @@ A `stop` the app did not ask for is the runner's own failure (an error or panic 
 A `check` that was `stopped` ends like a `run` turn that was `stopped`: the app answers `stop`, then writes the "Review this manually" note and answers `done` with session `paused`; there is no fix turn.
 
 When the poll stops an issue while the runner publishes it, before it asked the forge to merge, the runner still pushes and opens the pull request but does not ask the forge to merge it: it reports `published` with `merge: null`, also when the step said `merge: true` (decision 2026-11-17-second-audit-decisions). For a trusted team the app's finish report says the pull request is open and was not merged automatically because the issue was stopped during publishing, so a person merges it by hand; `merge_status` stays as it is, and the move to Review is refused harmlessly when the issue is no longer In progress. A stop while the runner waits for a merge it already asked for is reported as `merge: pending`, like a wait that reached its limit; the finish report then says the forge merges it when CI is green and it had not merged yet when the runner moved on (Willem, 2026-11-17).
+
+A `run` or `check` with `out_of_memory` goes on as after `failed`: a retry, a fix turn, or the failure. The app first writes a progress line naming the limit and how to raise it, and puts that line in the failure's text (decision 2026-11-24-out-of-memory-outcome). A runner that cannot tell keeps sending `failed`.
 
 `usage` is recorded on its issue, which must be the run's issue or one of its sub-issues (otherwise `422`). An agent that is no longer on the team, because it was renamed or removed during the run, is recorded under the name the runner sent; it never refuses the step.
 
@@ -142,6 +144,7 @@ When the poll stops an issue while the runner publishes it, before it asked the 
 | | `report.environments` | 10 items |
 | | `report.errors` | 50 items; `message` 2,000, `issue` 50 |
 | | `report.model_providers` | 50 items of 50 |
+| | `report.provider_models` | 50 items; `provider` 50; `models` 200 items of 150 |
 | | `running` | 20 items of 50 |
 | | `held` | 200 items of 50 |
 | | `review` | 200 items; `ref` 50; `conflicts` 1,000 items of 1,000 |
@@ -151,6 +154,7 @@ When the poll stops an issue while the runner publishes it, before it asked the 
 | | `last.error` | 16,000 |
 | | `last.report` | 65,000 |
 | | `last.tail` | 4,000 |
+| | `last.memory_limit` | at least 1 |
 | | `last.conflicts` | 1,000 items of 1,000 |
 | | `last.commits` | 65,000 |
 | | `last.pull_request` | 2,000; `last.commit` 100 |

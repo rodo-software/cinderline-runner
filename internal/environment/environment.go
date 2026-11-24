@@ -5,6 +5,7 @@ package environment
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -15,7 +16,8 @@ import (
 type Environment interface {
 	// Run runs s.Cmd and returns its whole output, standard output and error
 	// interleaved. A command that ran and failed returns an error with an
-	// ExitCode method; one stopped at s.Timeout returns ErrTimeout.
+	// ExitCode method; one stopped at s.Timeout returns ErrTimeout, one
+	// killed at its memory limit an *OutOfMemoryError.
 	Run(ctx context.Context, s Spec) (string, error)
 	// Cleanup removes what an earlier process left, at start, while no run
 	// is in progress.
@@ -28,6 +30,16 @@ var ErrTimeout = errors.New("stopped at the time limit")
 // ErrIdle is a run stopped because it printed nothing for its Idle limit:
 // stalled, as an agent that waits inside its session (CSR-159).
 var ErrIdle = errors.New("stopped as idle")
+
+// OutOfMemoryError is a run whose container went over its memory limit and
+// was killed (CLR-217).
+type OutOfMemoryError struct {
+	Limit int64 // the container's memory limit, in bytes
+}
+
+func (e *OutOfMemoryError) Error() string {
+	return fmt.Sprintf("killed at the memory limit of %d bytes", e.Limit)
+}
 
 // Spec is one agent turn.
 type Spec struct {

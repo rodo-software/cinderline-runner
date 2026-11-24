@@ -84,6 +84,12 @@ func TestStepFacts(t *testing.T) {
 		{"check failed", `{"kind":"check","issue":{"ref":"CSR-1","title":"Fix it"}}`,
 			func(f *fixture) { f.env.Runs = []environment.RunReply{{Output: "boom", Err: exitError(1)}} },
 			cinderline.LastStep{Step: "check", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "failed", Tail: ptr("boom")}},
+		// CLR-217: a check killed at its memory limit, with the limit.
+		{"check out of memory", `{"kind":"check","issue":{"ref":"CSR-1","title":"Fix it"}}`,
+			func(f *fixture) {
+				f.env.Runs = []environment.RunReply{{Output: "Killed", Err: &environment.OutOfMemoryError{Limit: 2 << 30}}}
+			},
+			cinderline.LastStep{Step: "check", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "out_of_memory", Tail: ptr("Killed"), MemoryLimit: new(int64(2 << 30))}},
 		{"stop", `{"kind":"stop"}`, func(*fixture) {},
 			cinderline.LastStep{Step: "stop", Issue: "CSR-1", Outcome: "pushed", Commit: ptr("abc123")}},
 		{"stop not pushed", `{"kind":"stop"}`, func(f *fixture) { f.ws.Pushes = []error{errors.New("denied")} },
@@ -150,6 +156,10 @@ func TestStepFacts(t *testing.T) {
 		{"turn idle", runNew, func(f *fixture) {
 			f.cl.Runs = []client.RunReply{{Err: environment.ErrIdle}}
 		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "idle", Error: ptr(environment.ErrIdle.Error())}},
+		// CLR-217: a turn killed at its memory limit, with the limit.
+		{"turn out of memory", runNew, func(f *fixture) {
+			f.cl.Runs = []client.RunReply{{Result: client.Result{Tail: "Killed"}, Err: &environment.OutOfMemoryError{Limit: 4 << 30}}}
+		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "out_of_memory", Error: ptr("killed at the memory limit of 4294967296 bytes"), Tail: ptr("Killed"), MemoryLimit: new(int64(4 << 30))}},
 		{"turn limit", runNew, func(f *fixture) {
 			f.cl.Runs = []client.RunReply{{Result: client.Result{HitTurnLimit: true}, Err: errors.New("max turns")}}
 		}, cinderline.LastStep{Step: "run", Issue: "CSR-1", Agent: ptr("Coder"), Outcome: "turn_limit", Error: ptr("max turns")}},
@@ -200,7 +210,11 @@ func show(l cinderline.LastStep) string {
 	for _, f := range l.Secrets {
 		found = append(found, fmt.Sprint(f.Kind, "@", f.Commit, ":", s(f.Path), "/", f.Known))
 	}
-	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ","), strings.Join(found, ","), fmt.Sprintf("%+v", l.Checks)}, "|")
+	limit := ""
+	if l.MemoryLimit != nil {
+		limit = fmt.Sprint(*l.MemoryLimit)
+	}
+	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ","), strings.Join(found, ","), fmt.Sprintf("%+v", l.Checks), limit}, "|")
 }
 
 // A step the runner cannot do, and a failure in its own code, end the run
@@ -399,6 +413,29 @@ func TestAPublishConflictIsResolvedAndVerified(t *testing.T) {
 		if undone := slices.Contains(methods(f.ws), "Reset"); undone == verified {
 			t.Errorf("verified %v: reset %v", verified, undone)
 		}
+	}
+}
+
+// A resolve does not take out_of_memory (app decision
+// 2026-11-24-out-of-memory-outcome): a resolve killed at the limit failed,
+// and its merge is undone.
+func TestAResolveOutOfMemoryFailed(t *testing.T) {
+	f := newFixture(t)
+	f.ws.MergeBases = append([]workspace.MergeBaseReply{{}, {Conflicts: []string{"a.go"}}}, f.ws.MergeBases...)
+	f.ws.Logs = []workspace.LogReply{{Log: "abc fix"}}
+	f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: true}}
+	f.ws.Resets = []error{nil}
+	f.cl.Runs = []client.RunReply{{Err: &environment.OutOfMemoryError{Limit: 4 << 30}}}
+	app := &fakeApp{onNext: stepsOf(`{"kind":"publish","resolve_conflicts":true}`, `{"kind":"resolve","agent":"Coder","session":"new","token":null,"prompt":"Resolve."}`)}
+	if _, err := f.run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	lasts := app.lasts()
+	if len(lasts) != 2 || lasts[1].Step != "resolve" || lasts[1].Outcome != "failed" || lasts[1].MemoryLimit != nil {
+		t.Fatalf("lasts = %+v", lasts)
+	}
+	if !slices.Contains(methods(f.ws), "Reset") {
+		t.Error("the failed resolve's merge was not undone")
 	}
 }
 

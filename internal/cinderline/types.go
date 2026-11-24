@@ -229,7 +229,8 @@ type LastStep struct {
 	Issue       string   `json:"issue"`
 	Agent       *string  `json:"agent"`
 	Outcome     string   `json:"outcome"`
-	ResetsAt    *string  `json:"resets_at,omitempty"` // usage_limit only, UTC; nil when unknown
+	ResetsAt    *string  `json:"resets_at,omitempty"`    // usage_limit only, UTC; nil when unknown
+	MemoryLimit *int64   `json:"memory_limit,omitempty"` // out_of_memory only: the killed container's limit, in bytes
 	Error       *string  `json:"error"`
 	Report      *string  `json:"report"`
 	Tail        *string  `json:"tail"`

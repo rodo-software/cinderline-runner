@@ -13,12 +13,12 @@ import (
 
 // runCheck runs check in dir, with the agent's clone mounts but without its
 // client state, tools or credentials, limited to maxMinutes; it reaches the
-// project's hosts and allow. failed is a check that ran and failed, with
+// project's hosts and allow. failed is why a check that ran failed, with
 // the tail of its output; err is a stop or a check that could not run.
-func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int, allow []string) (failed bool, tail string, err error) {
+func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int, allow []string) (failed error, tail string, err error) {
 	mounts, err := workspace.CloneMounts(p.Config.ID(), dir)
 	if err != nil {
-		return false, "", fmt.Errorf("the check could not run: %w", err)
+		return nil, "", fmt.Errorf("the check could not run: %w", err)
 	}
 	out, err := p.Env.Run(ctx, environment.Spec{
 		Issue:    path.Base(dir),
@@ -31,11 +31,11 @@ func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes in
 	var exit interface{ ExitCode() int }
 	switch {
 	case err == nil:
-		return false, "", nil
+		return nil, "", nil
 	case ctx.Err() != nil:
-		return false, "", ctx.Err()
-	case !errors.As(err, &exit) && !errors.Is(err, environment.ErrTimeout):
-		return false, "", fmt.Errorf("the check could not run: %w", err)
+		return nil, "", ctx.Err()
+	case !errors.As(err, &exit) && !errors.Is(err, environment.ErrTimeout) && !errors.As(err, new(*environment.OutOfMemoryError)):
+		return nil, "", fmt.Errorf("the check could not run: %w", err)
 	}
-	return true, environment.Tail(out), nil
+	return err, environment.Tail(out), nil
 }

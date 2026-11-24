@@ -451,6 +451,7 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 	if res.Report != "" {
 		last.Report = ptr(res.Report)
 	}
+	var oom *environment.OutOfMemoryError
 	switch {
 	case err == nil:
 		last.Outcome = "finished"
@@ -469,6 +470,8 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Outcome = "turn_limit"
 	case errors.Is(err, environment.ErrTimeout):
 		last.Outcome = "time_limit"
+	case step.Kind == "run" && errors.As(err, &oom): // resolve does not take it (app decision 2026-11-24-out-of-memory-outcome)
+		last.Outcome, last.MemoryLimit = "out_of_memory", &oom.Limit
 	default:
 		last.Outcome = "failed"
 	}
@@ -569,6 +572,7 @@ func (p *Project) checkStep(ctx context.Context, c *cinderline.Client, j *job, h
 	}
 	cctx, end := p.stoppable(ctx, j.ref)
 	failed, tail, err := p.runCheck(cctx, j.dir, j.check, j.team.MaxMinutes, p.allowHosts(issue, step.AllowHosts))
+	var oom *environment.OutOfMemoryError
 	switch {
 	case ctx.Err() != nil:
 		end()
@@ -577,7 +581,9 @@ func (p *Project) checkStep(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Outcome = "stopped"
 	case err != nil:
 		return fail(err)
-	case failed:
+	case errors.As(failed, &oom):
+		last.Outcome, last.MemoryLimit, last.Tail = "out_of_memory", &oom.Limit, ptr(tail)
+	case failed != nil:
 		last.Outcome, last.Tail = "failed", ptr(tail)
 	default:
 		last.Outcome = "passed"

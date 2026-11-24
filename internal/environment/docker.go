@@ -108,9 +108,10 @@ func streamCommand(ctx context.Context, env []string, stdin string, out io.Write
 // stop at s.Timeout. With a compose file (SetCompose), its services start
 // beside the proxy, and the agent runs as hardened in the agent service's
 // image with that service's environment too, and its mem_limit if it sets
-// one. Its output goes to the log line by line as it comes, then the hosts
-// the proxy refused. All are removed afterwards, also after a failure or a
-// stop of the runner.
+// one; a run killed at that limit returns an *OutOfMemoryError. Its output
+// goes to the log line by line as it comes, then the hosts the proxy
+// refused. All are removed afterwards, also after a failure or a stop of the
+// runner.
 func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	if !workspace.IssueRef.MatchString(s.Issue) || len(s.Cmd) == 0 {
 		return "", fmt.Errorf("run: issue %q, command %q", s.Issue, s.Cmd)
@@ -178,7 +179,9 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 
 	net := d.network(s.Issue)
 	agent := net + "-agent"
-	argv := append(append([]string{"docker", "run", "--rm", "--interactive"}, workspace.Labels(d.Project, s.Issue)...),
+	// No --rm: the container must outlive its command so oomKilled can
+	// inspect it; down removes it.
+	argv := append(append([]string{"docker", "run", "--interactive"}, workspace.Labels(d.Project, s.Issue)...),
 		"--name", agent, "--network", net)
 	// No --add-host host.docker.internal: decision 2026-11-09-network-allowlist;
 	// a local provider maps it in the proxy only (2026-11-17-local-model-providers).
@@ -229,8 +232,24 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		err = fmt.Errorf("%w: no output for %s; the last line was: %s", ErrIdle, s.Idle, lastLine(out.all.String()))
 	} else if err != nil && ctx.Err() != nil {
 		err = ctx.Err()
+	} else if err != nil && d.oomKilled(ctx, s.Issue, agent) {
+		err = &OutOfMemoryError{Limit: memory}
 	}
 	return out.all.String(), err
+}
+
+// oomKilled reports whether the kernel killed a process of the agent
+// container at its memory limit. Docker's own flag, not exit code 137: the
+// runner's docker stop ends in a kill too, and a killed child of the
+// agent's command may make it exit with any code. Unknown is false, so the
+// run stays a failure.
+func (d *Docker) oomKilled(ctx context.Context, issue, agent string) bool {
+	out, err := d.exec(ctx, "docker", "inspect", "--format", "{{.State.OOMKilled}}", agent)
+	if err != nil {
+		d.log().Warn("agent's memory state not read", "project", d.Project, "issue", issue, "err", err)
+		return false
+	}
+	return strings.TrimSpace(out) == "true"
 }
 
 // refused logs each host the run's proxy refused, by name, and hands it to
@@ -412,10 +431,9 @@ func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []strin
 	return nil
 }
 
-// down removes the issue's agent, if a killed docker command left it, and
-// the proxy, then the network. It tries both, so one failure does not leave
-// the other behind. docker rm --force ignores a
-// container that is already gone.
+// down removes the issue's agent and the proxy, then the network. It tries
+// both, so one failure does not leave the other behind. docker rm --force
+// ignores a container that is already gone.
 func (d *Docker) down(ctx context.Context, issue string) error {
 	net := d.network(issue)
 	_, err := d.exec(ctx, "docker", "rm", "--force", "--volumes", net+"-agent", net+"-proxy")
