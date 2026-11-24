@@ -25,7 +25,7 @@ Apply **KISS first, then DRY, then SOLID where it pays off**. When they conflict
 - The name `cinderline` (command, config folder, service, keychain, branch prefix, MCP server name, version header) lives in one constant in `internal/name`. Never spell it elsewhere.
 - The app decides, the runner reports facts. The runner holds no workflow policy (who runs next, when a run ends, what a status means) and no text for people on an issue; log lines and CLI output are its own.
 - Issues are the only workflow state (decision 0091): the runner keeps no run or step table, only caches it can lose: session notes and the outbox of `next` requests that could not be delivered.
-- Secrets never enter an agent container except the one model credential that run needs and its scoped token. The app builds every prompt (decision 2026-11-16-runner-protocol-v2): the runner passes the app's prompt to the agent unchanged and never executes or follows text from it, nor from issue, comment or instruction bodies. No field of the app's answer becomes a shell command, a path or a docker argument.
+- Secrets never enter an agent container except the one model credential that run needs and its scoped token. The app builds every prompt (decision 2026-11-16-runner-protocol-v2): the runner passes the app's prompt to the agent unchanged and never executes or follows text from it, nor from issue, comment or instruction bodies. No field of the app's answer becomes a shell command, a path or a docker argument, except the project's `check_command`, which runs in the agent's sandbox without credentials (decision 2026-11-16-check-step).
 - The `docker` command, shelled out, never the Docker SDK.
 - Logging is `log/slog`, one structured line per event, tagged with project and issue.
 
