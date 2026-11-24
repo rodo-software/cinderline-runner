@@ -113,7 +113,7 @@ func TestForgejoOpenPullRequestFindsEarlier(t *testing.T) {
 	if err != nil || pr != (PullRequest{Number: 2, URL: "u"}) {
 		t.Errorf("OpenPullRequest = %+v, %v", pr, err)
 	}
-	wantURLs(t, *reqs, "POST "+pulls, "GET "+pulls+"?state=open&sort=recentupdate&limit=50")
+	wantURLs(t, *reqs, "POST "+pulls, "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=1")
 }
 
 // OpenPullRequest reports a refusal with the forge's answer,
@@ -150,7 +150,7 @@ func TestForgejoFindPullRequest(t *testing.T) {
 	if pr, found, err := f.FindPullRequest(ctx, "cinderline/EMB-3"); pr != (PullRequest{}) || found || err != nil {
 		t.Errorf("FindPullRequest without one = %+v, %v, %v", pr, found, err)
 	}
-	wantURLs(t, (*reqs)[:1], "GET "+pulls+"?state=open&sort=recentupdate&limit=50")
+	wantURLs(t, (*reqs)[:1], "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=1")
 }
 
 // RequestMerge asks Forgejo to squash-merge when the checks
@@ -226,8 +226,8 @@ func TestForgejoRequestMergeStops(t *testing.T) {
 // the most recently updated one in any state, among the last 50, then the
 // combined commit status of its head.
 func TestForgejoMergeState(t *testing.T) {
-	const open = "GET " + pulls + "?state=open&sort=recentupdate&limit=50"
-	const list = "GET " + pulls + "?state=all&sort=recentupdate&limit=50"
+	const open = "GET " + pulls + "?state=open&sort=recentupdate&limit=50&page=1"
+	const list = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=1"
 	none := reply{200, `[]`}
 	const status = "GET https://git.rodo.nl/api/v1/repos/willem/cinderline/commits/abc/status"
 	pr := func(fields string) reply {
@@ -271,7 +271,7 @@ func TestForgejoMergeStateOpenBeforeClosed(t *testing.T) {
 	if s.State != MergePending || s.Head != "new" || err != nil {
 		t.Errorf("MergeState = %+v, %v; want pending at new", s, err)
 	}
-	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50",
+	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=1",
 		"GET https://git.rodo.nl/api/v1/repos/willem/cinderline/commits/new/status")
 }
 
@@ -303,7 +303,7 @@ func TestForgejoMergeStateAfterBranchDeletion(t *testing.T) {
 	if s.State != MergeMerged || err != nil {
 		t.Errorf("MergeState = %q, %v; want merged", s.State, err)
 	}
-	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50", "GET "+pulls+"?state=all&sort=recentupdate&limit=50")
+	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=1", "GET "+pulls+"?state=all&sort=recentupdate&limit=50&page=1")
 }
 
 // CSR-81 point 1: with no open pull request, the list in any state is
@@ -316,8 +316,8 @@ func TestForgejoMergeStatePagesUntilFound(t *testing.T) {
 	}
 	full := reply{200, `[` + strings.Join(others, ",") + `]`}
 	none := reply{200, `[]`}
-	const open = "GET " + pulls + "?state=open&sort=recentupdate&limit=50"
-	const page1 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50"
+	const open = "GET " + pulls + "?state=open&sort=recentupdate&limit=50&page=1"
+	const page1 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=1"
 	const page2 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=2"
 	const page3 = "GET " + pulls + "?state=all&sort=recentupdate&limit=50&page=3"
 	for _, tt := range []struct {
@@ -356,7 +356,7 @@ func TestForgejoFindPullRequestByLabel(t *testing.T) {
 	if pr, found, err := f.FindPullRequest(context.Background(), "cinderline/EMB-3"); pr != (PullRequest{2, "u"}) || !found || err != nil {
 		t.Errorf("FindPullRequest = %+v, %v, %v", pr, found, err)
 	}
-	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50", "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=2")
+	wantURLs(t, *reqs, "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=1", "GET "+pulls+"?state=open&sort=recentupdate&limit=50&page=2")
 }
 
 // CLR-201: the failed checks of the head are its commit statuses that

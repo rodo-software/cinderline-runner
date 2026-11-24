@@ -228,12 +228,7 @@ const (
 // list's head filter once Gitea has one.
 func (f *Forgejo) find(ctx context.Context, query, branch string) (forgejoPull, error) {
 	for page := 1; page <= forgejoPages; page++ {
-		var u string
-		if page == 1 {
-			u = f.repo + "/pulls" + query
-		} else {
-			u = f.repo + "/pulls" + query + "&page=" + strconv.Itoa(page)
-		}
+		u := f.repo + "/pulls" + query + "&page=" + strconv.Itoa(page)
 		var prs []forgejoPull
 		if err := f.do(ctx, http.MethodGet, u, nil, &prs); err != nil {
 			return forgejoPull{}, err
