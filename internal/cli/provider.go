@@ -2,8 +2,10 @@ package cli
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
@@ -11,8 +13,12 @@ import (
 
 // providerFlags parses a provider command, which has no --project: a
 // provider is the runner's, for every project (decision 2026-11-17-local-model-providers).
-func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int) (*config.Config, []string, int) {
+// A non-nil free gets the command's --free flag.
+func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int, free *bool) (*config.Config, []string, int) {
 	f := c.flags(cmd, usage)
+	if free != nil {
+		f.BoolVar(free, "free", false, freeHelp)
+	}
 	if !c.parsed(f, args, nargs) {
 		return nil, nil, 2
 	}
@@ -22,6 +28,9 @@ func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int) (*confi
 	}
 	return cfg, f.Args(), 0
 }
+
+// freeHelp is the help of --free (decision 2026-11-19-free-model-providers).
+const freeHelp = "the provider's models cost nothing per token, such as a model on your own machine; Cinderline then prices them at $0"
 
 // providerIndex is the index of the runner's provider n, or an error.
 func providerIndex(cfg *config.Config, n string) (int, error) {
@@ -35,11 +44,12 @@ func providerIndex(cfg *config.Config, n string) (int, error) {
 // addProvider adds a model provider for every project's OpenCode agents
 // and asks for its optional key.
 func (c *CLI) addProvider(args []string) int {
-	cfg, rest, code := c.providerFlags("add-provider", "NAME URL", args, 2)
+	var free bool
+	cfg, rest, code := c.providerFlags("add-provider", "[--free] NAME URL", args, 2, &free)
 	if code != 0 {
 		return code
 	}
-	pr := config.Provider{Name: rest[0], BaseURL: rest[1]}
+	pr := config.Provider{Name: rest[0], BaseURL: rest[1], Free: free}
 	if err := pr.Validate(); err != nil {
 		return c.fail(err)
 	}
@@ -78,7 +88,7 @@ func (c *CLI) addProvider(args []string) int {
 // listProviders prints the runner's providers, one per line, and whether
 // each has a key, never the key.
 func (c *CLI) listProviders(args []string) int {
-	cfg, _, code := c.providerFlags("list-providers", "", args, 0)
+	cfg, _, code := c.providerFlags("list-providers", "", args, 0, nil)
 	if code != 0 {
 		return code
 	}
@@ -89,14 +99,64 @@ func (c *CLI) listProviders(args []string) int {
 		} else if err != nil {
 			return c.fail(err)
 		}
+		if pr.Free {
+			key += "\tfree"
+		}
 		fmt.Fprintf(c.Stdout, "%s\t%s\t%s\n", pr.Name, pr.BaseURL, key)
 	}
 	return 0
 }
 
+// setProviderUsage is set-provider's arguments.
+const setProviderUsage = "NAME --free=true|false"
+
+// setProvider marks a provider free or not; its key stays.
+func (c *CLI) setProvider(args []string) int {
+	// NAME comes before the flag, as key's NAME does: flag parsing stops at it.
+	f := c.flags("set-provider", setProviderUsage)
+	free := f.Bool("free", false, freeHelp)
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		f.Usage()
+		return 2
+	}
+	if !c.parsed(f, args[1:], 0) {
+		return 2
+	}
+	set := false
+	f.Visit(func(*flag.Flag) { set = true })
+	if !set {
+		f.Usage()
+		return 2
+	}
+	cfg, err := c.loadConfig()
+	if err != nil {
+		return c.fail(err)
+	}
+	j, err := providerIndex(cfg, args[0])
+	if err != nil {
+		return c.fail(err)
+	}
+	state := "not free"
+	if *free {
+		state = "free"
+	}
+	if cfg.Providers[j].Free == *free {
+		// No reload: it would drain the runs in flight for nothing.
+		fmt.Fprintf(c.Stdout, "%s is already %s\n", args[0], state)
+		return 0
+	}
+	cfg.Providers[j].Free = *free
+	if err := cfg.Save(c.Paths.File); err != nil {
+		return c.fail(err)
+	}
+	fmt.Fprintf(c.Stdout, "Marked %s %s\n", args[0], state)
+	c.reload()
+	return 0
+}
+
 // removeProvider removes a provider and its key.
 func (c *CLI) removeProvider(args []string) int {
-	cfg, rest, code := c.providerFlags("remove-provider", "NAME", args, 1)
+	cfg, rest, code := c.providerFlags("remove-provider", "NAME", args, 1, nil)
 	if code != 0 {
 		return code
 	}

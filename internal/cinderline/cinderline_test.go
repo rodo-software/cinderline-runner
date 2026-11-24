@@ -348,6 +348,48 @@ func TestProviderModelsFitTheAppsLimits(t *testing.T) {
 	}
 }
 
+func TestPollLimitsFreeProvidersToReportedProviders(t *testing.T) {
+	s := &server{status: []int{200}, body: `{"poll_after":30}`}
+	c := s.client(t)
+	ctx := context.Background()
+
+	poll := func(models, free []string) {
+		t.Helper()
+		if _, err := c.Poll(ctx, PollRequest{Report: Report{ModelProviders: models, FreeProviders: free}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	providers := make([]string, 51)
+	for i := range providers {
+		providers[i] = "provider-" + strconv.Itoa(i)
+	}
+	tooLong := strings.Repeat("x", 51)
+	models := append([]string{tooLong, "openrouter"}, providers...)
+	free := append([]string{"openrouter", tooLong, "unknown", providers[50]}, providers[:50]...)
+	poll(models, free)
+	var req PollRequest
+	if err := json.Unmarshal([]byte(s.bodies[0]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(req.Report.ModelProviders, models[1:51]) || !slices.Equal(req.Report.FreeProviders, providers[:49]) {
+		t.Errorf("model_providers = %q, free_providers = %q", req.Report.ModelProviders, req.Report.FreeProviders)
+	}
+	poll(providers, providers)
+	if err := json.Unmarshal([]byte(s.bodies[1]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(req.Report.FreeProviders, providers[:50]) {
+		t.Errorf("free_providers = %q, want the first 50", req.Report.FreeProviders)
+	}
+	poll([]string{"openrouter", "paid"}, []string{"openrouter", "unknown"})
+	poll([]string{"paid"}, nil)
+	for _, body := range s.bodies[2:] {
+		if strings.Contains(body, `"free_providers"`) {
+			t.Errorf("empty free_providers should be omitted: %s", body)
+		}
+	}
+}
+
 // Texts and lists are cut to the app's limits, in characters.
 func TestRequestsFitTheAppsLimits(t *testing.T) {
 	s := &server{status: []int{200}, body: `{"state":"x","step":{"kind":"done"}}`}

@@ -109,11 +109,12 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - A provider is added once on the runner, for all its projects: a name (lower-case letters, digits and dashes; not `openrouter`), an OpenAI-compatible base URL, and an optional key kept with the other secrets. A project uses one by naming it in an agent's model; there is no switch per project. (2026-11-17-local-model-providers)
 - An OpenCode agent's model is `<provider>/<model id>`, at most 100 characters. The runner gives OpenCode the provider's URL and key for that turn only. A turn whose provider the runner lacks is not started. (2026-11-17-local-model-providers; Willem 2026-11-17, answer 22)
 - The poll reports `model_providers` by name: `openrouter` when the project's key is set, plus each provider of the runner. The app never learns URLs or keys. (2026-11-17-local-model-providers)
+- A provider is marked free or not by whoever adds it (`add-provider --free`, `set-provider NAME --free=true|false`; not free by default). The poll reports the free ones as `free_providers`, at most 50, never `openrouter`, only names also in `model_providers`, left out when none is; the app prices their models at $0. (app decision 2026-11-19-free-model-providers; CLR-214)
 
 ## CLI, service and configuration
 
 - `key list`, `key set` and `key delete` manage a project's secrets; `key set` reads from stdin, hidden on a terminal, and also takes `provider:NAME`. Each change reloads a running runner. (2026-11-10-model-keys; 2026-11-16-x-term; Willem 2026-11-17, extras)
-- `add-provider`, `list-providers` and `remove-provider` manage the runner's providers. (2026-11-17-local-model-providers)
+- `add-provider`, `set-provider`, `list-providers` and `remove-provider` manage the runner's providers. (2026-11-17-local-model-providers; CLR-214)
 - `remove` deletes a project's secrets, Docker objects and notes, unless another project shares its ID. (2026-11-11-audit-fixes)
 - The service is user level everywhere: a LaunchAgent, a systemd user unit, a Windows logon task from XML via `schtasks /create /xml`. (2026-11-05-runner-rewrite-details; 2026-11-07-kardianos-service)
 - The service restarts only on failure, so `cinderline stop` stops it until the next login; macOS does not restart a crash. (2026-11-07-service-restart)

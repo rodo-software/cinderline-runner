@@ -139,10 +139,12 @@ type Project struct {
 }
 
 // Provider is an OpenAI-compatible model endpoint an OpenCode agent names
-// as "<Name>/<model id>".
+// as "<Name>/<model id>". Free says its models cost nothing per token, as
+// whoever added it marked it (decision 2026-11-19-free-model-providers).
 type Provider struct {
 	Name    string `json:"name"`
 	BaseURL string `json:"base_url"`
+	Free    bool   `json:"free,omitempty"`
 }
 
 // providerName is what a provider's name may be; the report caps names at 50.

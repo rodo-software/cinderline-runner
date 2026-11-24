@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -135,6 +136,13 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 	r.Report.Clients = clients
 	r.Report.Environments = first(r.Report.Environments, maxEnvironments)
 	r.Report.ModelProviders = fitting(r.Report.ModelProviders, maxProviders, maxProviderName)
+	var free []string // nil when none, so the field is left out
+	for _, n := range r.Report.FreeProviders {
+		if len(free) < maxProviders && n != "openrouter" && slices.Contains(r.Report.ModelProviders, n) {
+			free = append(free, n)
+		}
+	}
+	r.Report.FreeProviders = free
 	models := []ProviderModels{}
 	for _, pm := range r.Report.ProviderModels {
 		if len(models) < maxProviders && utf8.RuneCountInString(pm.Provider) <= maxProviderName {

@@ -32,6 +32,10 @@ type Report struct {
 	// served at its last fetch; openrouter is not among them (decision
 	// 2026-11-17-provider-models).
 	ProviderModels []ProviderModels `json:"provider_models"`
+	// FreeProviders are the runner's own providers marked free, never
+	// openrouter, each also in ModelProviders; left out when none is
+	// (decision 2026-11-19-free-model-providers).
+	FreeProviders []string `json:"free_providers,omitempty"`
 	// StrictHosts says the runner ignores the allow_hosts of a step, so the
 	// app does not ask a person to open a host (decision 2026-11-17-hosts-from-cinderline).
 	StrictHosts bool `json:"strict_hosts"`

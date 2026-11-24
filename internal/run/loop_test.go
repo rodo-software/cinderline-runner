@@ -362,3 +362,19 @@ func TestTheReportNamesModelProviders(t *testing.T) {
 		t.Errorf("model_providers = %q", got)
 	}
 }
+
+func TestPollReportsConfiguredFreeProviders(t *testing.T) {
+	f := newFixture(t)
+	f.p.Providers = []config.Provider{
+		{Name: "local", BaseURL: "http://localhost:8080/v1", Free: true},
+		{Name: "paid", BaseURL: "https://provider.example/v1"},
+		{Name: "lan", BaseURL: "http://lan.example:8080/v1", Free: true},
+	}
+	f.p.openRouter = true
+	polls := runLoop(t, f, &fakeApp{}, nil, nil, stopAt(0, answer(t, proj, "")))
+	got := polls[0].Report
+	if !slices.Equal(got.ModelProviders, []string{"openrouter", "local", "paid", "lan"}) ||
+		!slices.Equal(got.FreeProviders, []string{"local", "lan"}) {
+		t.Errorf("model_providers = %q, free_providers = %q", got.ModelProviders, got.FreeProviders)
+	}
+}

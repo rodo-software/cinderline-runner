@@ -31,7 +31,7 @@ const (
 	maxKey           = 30    // a linked project's key
 	maxClients       = 50    // report.clients
 	maxEnvironments  = 10    // report.environments
-	maxProviders     = 50    // report.model_providers
+	maxProviders     = 50    // report.model_providers and report.free_providers
 	maxProviderName  = 50    // a model provider's name; a longer one is left out
 	maxModels        = 200   // report.provider_models[].models
 	maxSessions      = 2     // sessions

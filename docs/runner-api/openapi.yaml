@@ -374,6 +374,14 @@ components:
             type: string
             maxLength: 50
             pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
+        free_providers:
+          type: array
+          maxItems: 50
+          description: The runner's model providers that cost nothing per token, as whoever added the provider marked it (decision 2026-11-19-free-model-providers). Never `openrouter`. Left out, none is free. A name not in `model_providers` is ignored. The app prices an OpenCode model on a free provider at $0, in the run's prompt and its usage.
+          items:
+            type: string
+            maxLength: 50
+            pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
         provider_models:
           type: array
           maxItems: 50

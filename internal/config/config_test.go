@@ -498,6 +498,32 @@ func TestLoadProvidersAtTheTop(t *testing.T) {
 	}
 }
 
+func TestProviderFreeRoundTrip(t *testing.T) {
+	path := writeFile(t, `{"version":1,"providers":[{"name":"legacy","base_url":"http://localhost:8080/v1"},{"name":"local","base_url":"http://localhost:8000/v1","free":true},{"name":"paid","base_url":"https://provider.example/v1","free":false}],"projects":[]}`)
+	check := func() *Config {
+		t.Helper()
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.Providers; len(got) != 3 || got[0].Free || !got[1].Free || got[2].Free {
+			t.Fatalf("providers = %+v", got)
+		}
+		return cfg
+	}
+	if err := check().Save(path); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), `"free"`) != 1 {
+		t.Errorf("expected free to be stored only for the marked provider: %s", data)
+	}
+}
+
 // Decision 2026-11-17-local-model-providers point 3: allow_hosts never
 // opens the runner's own machine; a provider does, on one port.
 func TestAllowHostsRefusesTheRunnersMachine(t *testing.T) {

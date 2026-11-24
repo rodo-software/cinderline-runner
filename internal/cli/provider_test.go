@@ -105,6 +105,54 @@ func TestAddProviderWithoutProjects(t *testing.T) {
 	}
 }
 
+func TestSetProviderFreePreservesKey(t *testing.T) {
+	c, out, errb := newCLI(t, lines("sk-local"))
+	run := func(code int, args ...string) {
+		t.Helper()
+		if got := c.Run(args); got != code {
+			t.Fatalf("%v: code %d, want %d; stderr %q", args, got, code, errb.String())
+		}
+	}
+	const url = "http://localhost:8080/v1"
+	run(0, "add-provider", "--free", "lan", url)
+	c.Stdin = strings.NewReader("")
+	check := func(free bool) {
+		t.Helper()
+		want := []config.Provider{{Name: "lan", BaseURL: url, Free: free}}
+		if got := providers(t, c); !slices.Equal(got, want) {
+			t.Fatalf("providers %v, want %v", got, want)
+		}
+		out.Reset()
+		run(0, "list-providers")
+		suffix := ""
+		if free {
+			suffix = "\tfree"
+		}
+		if want := "lan\t" + url + "\tkey set" + suffix + "\n"; out.String() != want {
+			t.Errorf("list-providers = %q, want %q", out.String(), want)
+		}
+		if got := secret(t, c, secrets.Runner, secrets.ProviderKey("lan")); got != "sk-local" {
+			t.Error("provider's key changed")
+		}
+	}
+	check(true)
+	run(2, "set-provider")
+	run(2, "set-provider", "--free=true", "lan")
+	run(2, "set-provider", "lan")
+	run(2, "set-provider", "lan", "--free=maybe")
+	run(1, "set-provider", "unknown", "--free=false")
+	check(true)
+	run(0, "set-provider", "lan", "--free=false")
+	check(false)
+	run(0, "set-provider", "lan", "--free=true")
+	check(true)
+	out.Reset()
+	run(0, "set-provider", "lan", "--free=true")
+	if want := "lan is already free\n"; out.String() != want {
+		t.Errorf("unchanged set-provider = %q, want %q", out.String(), want)
+	}
+}
+
 // A stale key under a provider's name never reaches a provider added later
 // with that name and no key.
 func TestAddProviderWithoutKeyDropsAStaleOne(t *testing.T) {
