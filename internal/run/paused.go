@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/config"
 )
 
 // Note is a kept or paused session's note: only a cache of where to resume
@@ -41,15 +42,12 @@ func (p *Project) noteFile(ref string) string {
 	return filepath.Join(PausedDir(p.State, p.Config), ref+".json")
 }
 
-// saveNote writes issue ref's note, stamped with the time now.
+// saveNote writes issue ref's note atomically, stamped with the time now:
+// a crash must not leave a torn note, which would lose the session.
 func (p *Project) saveNote(ref string, n Note) {
 	n.Time = time.Now()
 	b, _ := json.Marshal(n)
-	err := os.MkdirAll(PausedDir(p.State, p.Config), 0o700)
-	if err == nil {
-		err = os.WriteFile(p.noteFile(ref), b, 0o600)
-	}
-	if err != nil {
+	if err := config.WriteFile(p.noteFile(ref), b); err != nil {
 		p.Log.Warn("session note not written", "project", p.Config.Key, "issue", ref, "err", err)
 	}
 }

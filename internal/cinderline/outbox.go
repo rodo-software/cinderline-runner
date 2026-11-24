@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"slices"
+
+	"github.com/rodo-software/cinderline-runner/internal/config"
 )
 
 // Queued is a Next request that could not be delivered: the report of the
@@ -104,8 +105,8 @@ func (c *Client) load() {
 	}
 }
 
-// save writes the outbox file whole, through a rename, so a crash leaves
-// the old file or the new one. A failure keeps the requests in memory only.
+// save writes the outbox file whole and atomically, so a crash leaves the
+// old file or the new one. A failure keeps the requests in memory only.
 // The caller holds outMu.
 func (c *Client) save() {
 	if c.Outbox == "" {
@@ -118,12 +119,7 @@ func (c *Client) save() {
 		}
 	} else {
 		b, _ := json.Marshal(c.queued)
-		tmp := c.Outbox + ".tmp"
-		if err = os.MkdirAll(filepath.Dir(c.Outbox), 0o700); err == nil {
-			if err = os.WriteFile(tmp, b, 0o600); err == nil {
-				err = os.Rename(tmp, c.Outbox)
-			}
-		}
+		err = config.WriteFile(c.Outbox, b)
 	}
 	if err != nil {
 		c.Log.Error("outbox not written", "file", c.Outbox, "err", err)

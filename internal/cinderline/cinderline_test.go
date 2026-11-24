@@ -283,6 +283,13 @@ func TestOutbox(t *testing.T) {
 	for _, id := range []string{"a", "b", "c", "d"} {
 		c.Queue("CSR-"+id, NextRequest{ID: id})
 	}
+	// Written atomically: no temporary file is left, and only this user reads it.
+	if entries, _ := os.ReadDir(filepath.Dir(c.Outbox)); len(entries) != 1 {
+		t.Errorf("outbox folder = %v; want the outbox only", entries)
+	}
+	if fi, err := os.Stat(c.Outbox); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Errorf("outbox mode = %v, %v; want 0600", fi, err)
+	}
 	// A new client, as after a restart, reads the file.
 	again := New("", "", "")
 	again.HTTP, again.Log, again.base, again.Outbox = c.HTTP, c.Log, c.base, c.Outbox
