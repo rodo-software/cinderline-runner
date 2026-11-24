@@ -4,8 +4,11 @@ import (
 	"context"
 	"reflect"
 	"slices"
+	"sync"
 	"testing"
 
+	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -62,5 +65,42 @@ func TestUnknownClient(t *testing.T) {
 	c := &CLI{Name: "nope"}
 	if _, err := c.Run(context.Background(), Turn{}); err == nil || c.Hosts() != nil {
 		t.Errorf("Run err = %v, Hosts = %q", err, c.Hosts())
+	}
+}
+
+// SetTools while another lane's turn runs on the same CLI (CLR-228): no data
+// race, and a turn uses one whole mount, the old one or the new one.
+func TestSetToolsDuringRun(t *testing.T) {
+	old := tools.Mount{Args: []string{"-v", "old:/opt/cinderline:ro"}, Env: []string{"OLD=1"}}
+	fresh := tools.Mount{Args: []string{"-v", "new:/opt/cinderline:ro"}, Env: []string{"NEW=1"}}
+	const turns = 50
+	env := &environment.Fake{Runs: make([]environment.RunReply, turns)}
+	c := &CLI{
+		Name: "claude", Project: "CSR", Env: env, Tools: old,
+		Exec: func(context.Context, []string, ...string) (string, error) { return "", nil },
+	}
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := range turns {
+			if i%2 == 0 {
+				c.SetTools(fresh)
+			} else {
+				c.SetTools(old)
+			}
+		}
+	})
+	wg.Go(func() {
+		for range turns {
+			_, _ = c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"})
+		}
+	})
+	wg.Wait()
+	for _, call := range env.Calls() {
+		s := call.Args[0].(environment.Spec)
+		oldOK := slices.Contains(s.Mounts, "old:/opt/cinderline:ro") && slices.Contains(s.Env, "OLD=1")
+		newOK := slices.Contains(s.Mounts, "new:/opt/cinderline:ro") && slices.Contains(s.Env, "NEW=1")
+		if oldOK == newOK {
+			t.Fatalf("a turn mixed the mounts: %q %q", s.Mounts, s.Env)
+		}
 	}
 }

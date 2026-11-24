@@ -113,12 +113,13 @@ func (c *CLI) list(ctx context.Context, image string, argv []string, req string)
 	if err := PrepareState(ctx, c.Exec, c.Project, c.Name); err != nil {
 		return "", err
 	}
-	env := slices.Concat(c.Tools.Env, c.Tools.OpenCodeEnv, k.env(c, Turn{}))
+	mount := c.mount()
+	env := slices.Concat(mount.Env, mount.OpenCodeEnv, k.env(c, Turn{}))
 	if req != "" {
 		env = append(env, "REQ="+req)
 	}
 	docker := []string{"docker", "run", "--rm", "--user", workspace.AgentUser, "-v", StateVolume(c.Project, c.Name) + ":" + StatePath}
-	docker = append(docker, c.Tools.Args...)
+	docker = append(docker, mount.Args...)
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
 		docker = append(docker, "-e", name)

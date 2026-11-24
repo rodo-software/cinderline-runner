@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/environment"
@@ -31,7 +32,11 @@ type CLI struct {
 	BaseURL    string                  // Codex: an OpenAI-compatible base URL; empty: OpenAI's API
 	Vertex     bool                    // Gemini: Credential is a Vertex AI express-mode key; false: the Gemini API
 	MCPURL     string                  // Cinderline's MCP endpoint, as the agent container reaches it
-	Tools      tools.Mount             // from tools.Tools.Mount for the Environment's image
+	// Tools is from tools.Tools.Mount for the Environment's image. Set it
+	// here before the CLI is shared, later only with SetTools: a run's
+	// prepare changes it while another lane's turn runs (CLR-228).
+	Tools   tools.Mount
+	toolsMu sync.Mutex // guards Tools
 	// Providers are the runner's model providers by name, for OpenCode
 	// (decision 2026-11-17-local-model-providers).
 	Providers map[string]Provider
@@ -60,6 +65,21 @@ type kind struct {
 
 var kinds = map[string]kind{"claude": claude, "codex": codex, "opencode": opencode, "gemini": gemini}
 
+// SetTools replaces the tools mount for the turns that start after it.
+func (c *CLI) SetTools(m tools.Mount) {
+	c.toolsMu.Lock()
+	defer c.toolsMu.Unlock()
+	c.Tools = m
+}
+
+// mount is the current tools mount. A turn reads it once, so it uses one
+// whole mount; nobody writes a Mount's slices after SetTools.
+func (c *CLI) mount() tools.Mount {
+	c.toolsMu.Lock()
+	defer c.toolsMu.Unlock()
+	return c.Tools
+}
+
 // Hosts returns the provider host:port pairs a run needs, for the run's
 // network allowlist.
 // Without a key the run uses the stored sign-in (CSR-58), which also needs
@@ -86,7 +106,8 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 			return Result{}, fmt.Errorf("%w: %w", ErrNotStarted, err)
 		}
 	}
-	mounts, err := agentMounts(c.Project, c.Name, t.Dir, c.Tools)
+	mount := c.mount()
+	mounts, err := agentMounts(c.Project, c.Name, t.Dir, mount)
 	if err != nil {
 		return Result{}, err
 	}
@@ -99,7 +120,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	}
 	var libs []string
 	if k.libs {
-		libs = c.Tools.OpenCodeEnv
+		libs = mount.OpenCodeEnv
 	}
 	if t.Attachments != "" {
 		mounts = append(mounts, "-v", t.Attachments+":"+workspace.AttachmentsPath+":ro")
@@ -108,7 +129,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		Issue:    path.Base(t.Dir), // the clone is RunsPath/<REF>
 		Dir:      t.Dir,
 		Mounts:   mounts,
-		Env:      slices.Concat(c.Tools.Env, libs, k.env(c, t), workspace.Identity(t.Author)),
+		Env:      slices.Concat(mount.Env, libs, k.env(c, t), workspace.Identity(t.Author)),
 		Cmd:      k.cmd(c, t, session),
 		Stdin:    t.Prompt,
 		Timeout:  time.Duration(t.MaxMinutes) * time.Minute,

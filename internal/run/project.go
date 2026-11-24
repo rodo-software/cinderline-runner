@@ -188,7 +188,7 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 		// Attachments are a bind per run, added by the client when a turn has
 		// them: the runner downloads to the host.
 		for _, c := range clis {
-			c.Tools = mount
+			c.SetTools(mount)
 		}
 		p.image = image
 		return memory, nil
