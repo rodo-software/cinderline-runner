@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -821,12 +822,67 @@ func TestAgentOutputIsLoggedAtDebug(t *testing.T) {
 		l := &lines{log: slog.New(slog.NewTextHandler(c.buf, &slog.HandlerOptions{Level: c.level}))}
 		_, _ = l.Write([]byte("one\ntwo"))
 		l.flush()
-		if l.all.String() != "one\ntwo" {
-			t.Errorf("kept %q", l.all.String())
+		if l.String() != "one\ntwo" {
+			t.Errorf("kept %q", l.String())
 		}
 	}
 	if info.Len() != 0 || strings.Count(debug.String(), "agent output") != 2 {
 		t.Errorf("info log %q, debug log %q", info.String(), debug.String())
+	}
+}
+
+// CLR-226: output past the cap keeps its first headBytes, where Codex
+// prints its thread ID, and its last tailBytes, where the clients find the
+// report; the middle is cut with a line naming its size, and logged as a
+// warning.
+func TestRunKeepsHeadAndTailOfLongOutput(t *testing.T) {
+	const start, end = `{"type":"thread.started","thread_id":"t-1"}` + "\n", `{"type":"turn.completed"}` + "\n"
+	chunk := []byte(strings.Repeat("middle line of output\n", 3000))
+	n := (headBytes+2*tailBytes)/len(chunk) + 2 // past the tail's compaction
+	d, _, logs := runner(nil, func(_ context.Context, out io.Writer) error {
+		io.WriteString(out, start)
+		for range n {
+			out.Write(chunk)
+		}
+		io.WriteString(out, end)
+		return nil
+	})
+	d.Log = slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	got, err := d.Run(context.Background(), turn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := len(start) + n*len(chunk) + len(end)
+	cut := total - headBytes - tailBytes
+	marker := fmt.Sprintf("\n[%d bytes of output cut]\n", cut)
+	if !strings.HasPrefix(got, start) || !strings.HasSuffix(got, end) || len(got) != headBytes+len(marker)+tailBytes || !strings.Contains(got, marker) {
+		t.Errorf("kept %d bytes of %d, start %q, end %q; want the head, %q and the tail", len(got), total, got[:60], got[len(got)-60:], marker)
+	}
+	if !strings.Contains(logs.String(), "output cut") || !strings.Contains(logs.String(), fmt.Sprintf("bytes=%d", cut)) {
+		t.Errorf("log %q, want a warning naming the bytes cut", logs.String())
+	}
+}
+
+// A line longer than lineBytes, such as a progress bar redrawn with \r, is
+// not held whole for the log: a placeholder is logged in its place, and the
+// next line is logged again.
+func TestLongLineIsNotLogged(t *testing.T) {
+	var logs bytes.Buffer
+	l := &lines{log: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}
+	bar := []byte(strings.Repeat("=", 64<<10) + "\r")
+	l.Write([]byte("before\n"))
+	for range 2 * lineBytes / len(bar) {
+		l.Write(bar)
+		if len(l.pending) > lineBytes {
+			t.Fatalf("held %d bytes of one line", len(l.pending))
+		}
+	}
+	l.Write([]byte("tail of the bar\nafter\nlast"))
+	l.flush()
+	log := logs.String()
+	if strings.Count(log, OutputMsg) != 4 || !strings.Contains(log, "line=before") || !strings.Contains(log, "not logged") ||
+		!strings.Contains(log, "line=after") || !strings.Contains(log, "line=last") || strings.Contains(log, "==") || strings.Contains(log, "tail of the bar") {
+		t.Errorf("log:\n%.2000s", log)
 	}
 }
 

@@ -225,17 +225,21 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	}
 	err = stream(ctx, s.Env, s.Stdin, out, argv...)
 	out.flush()
+	kept := out.String()
+	if n := out.dropped(); n > 0 {
+		d.log().Warn("output cut in the middle; tool counts and OpenCode's usage miss it", "project", d.Project, "issue", s.Issue, "bytes", n)
+	}
 	d.refused(context.WithoutCancel(ctx), s.Issue)
 	if timedOut.Load() {
 		err = fmt.Errorf("%w (%s)", ErrTimeout, s.Timeout)
 	} else if idled.Load() {
-		err = fmt.Errorf("%w: no output for %s; the last line was: %s", ErrIdle, s.Idle, lastLine(out.all.String()))
+		err = fmt.Errorf("%w: no output for %s; the last line was: %s", ErrIdle, s.Idle, lastLine(kept))
 	} else if err != nil && ctx.Err() != nil {
 		err = ctx.Err()
 	} else if err != nil && d.oomKilled(ctx, s.Issue, agent) {
 		err = &OutOfMemoryError{Limit: memory}
 	}
-	return out.all.String(), err
+	return kept, err
 }
 
 // oomKilled reports whether the kernel killed a process of the agent
@@ -286,37 +290,90 @@ func (d *Docker) log() *slog.Logger {
 // daemon's log handler finds it by this message and cleans its "line".
 const OutputMsg = "agent output"
 
-// lines keeps all output, which the clients parse whole, and logs it a line
-// at a time at Debug: a turn prints far more than the log should keep. The stream writes
-// from one goroutine at a time.
+// Output kept per turn or check: its first headBytes, as Codex prints its
+// thread ID first, and a rolling last tailBytes, where the clients find the
+// report, usage and limits. Past both, the tool counts, and OpenCode's
+// summed usage, miss the cut middle (decision 2026-11-24-output-cap).
+// lineBytes is the longest line that is logged.
+const (
+	headBytes = 1 << 20
+	tailBytes = 128 << 20
+	lineBytes = 1 << 20
+)
+
+// lines keeps the output's head and tail, which the clients parse, and logs
+// it a line at a time at Debug: a turn prints far more than the log should
+// keep. A line still unfinished past lineBytes is not logged, as a part of
+// it could hold part of a secret that redaction no longer recognises. The stream
+// writes from one goroutine at a time.
 type lines struct {
 	log     *slog.Logger
 	touch   func() // called on every write; nil: none
-	all     bytes.Buffer
+	head    []byte
+	tail    []byte // up to twice tailBytes, as forge's tail
+	cut     int64  // bytes dropped from the tail's front
 	pending []byte
+	long    bool // within a line longer than lineBytes
 }
 
 func (l *lines) Write(p []byte) (int, error) {
 	if l.touch != nil {
 		l.touch()
 	}
-	l.all.Write(p)
+	n := min(len(p), headBytes-len(l.head))
+	l.head = append(l.head, p[:n]...)
+	l.tail = append(l.tail, p[n:]...)
+	if len(l.tail) > 2*tailBytes {
+		drop := len(l.tail) - tailBytes
+		l.cut += int64(drop)
+		l.tail = append(l.tail[:0], l.tail[drop:]...)
+	}
 	l.pending = append(l.pending, p...)
 	for {
 		i := bytes.IndexByte(l.pending, '\n')
 		if i < 0 {
-			return len(p), nil
+			break
 		}
-		l.log.Debug(OutputMsg, "line", string(l.pending[:i]))
+		if !l.long {
+			l.log.Debug(OutputMsg, "line", string(l.pending[:i]))
+		}
+		l.long = false
 		l.pending = l.pending[i+1:]
 	}
+	if len(l.pending) > lineBytes {
+		if !l.long {
+			l.log.Debug(OutputMsg, "line", fmt.Sprintf("[a line of more than %d bytes, not logged]", lineBytes))
+		}
+		l.long, l.pending = true, nil
+	}
+	return len(p), nil
 }
 
 func (l *lines) flush() {
-	if len(l.pending) > 0 {
+	if len(l.pending) > 0 && !l.long {
 		l.log.Debug(OutputMsg, "line", string(l.pending))
-		l.pending = nil
 	}
+	l.pending = nil
+}
+
+// dropped is how many bytes of output were not kept.
+func (l *lines) dropped() int64 {
+	return l.cut + int64(max(0, len(l.tail)-tailBytes))
+}
+
+// String is the output kept: all of it, or its head and tail with a line
+// between them that names the bytes cut. The cut lines' ends are not JSON,
+// so the clients skip them.
+func (l *lines) String() string {
+	end := l.tail[max(0, len(l.tail)-tailBytes):]
+	var b strings.Builder // one copy: the tail can be 128 MB
+	b.Grow(len(l.head) + 64 + len(end))
+	b.Write(l.head)
+	if n := l.dropped(); n > 0 {
+		fmt.Fprintf(&b, "\n[%d bytes of output cut]\n", n)
+	}
+	b.Write(end)
+	return b.String()
 }
 
 // DockerMemory is Docker's total memory in bytes, as `docker info` reports
