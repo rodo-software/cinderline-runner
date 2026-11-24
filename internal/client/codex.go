@@ -80,7 +80,10 @@ func codexEnv(key string, t Turn) []string {
 }
 
 // parseCodex reads Codex's JSON events from mixed stdout/stderr. Events that
-// start with "{" and are valid JSON are parsed; the rest are ignored.
+// start with "{" and are valid JSON are parsed; the rest are ignored. The
+// tool calls are the completed tool-call items, which the events name only
+// by their type, except an MCP call, named as Codex names MCP tools for the
+// model: mcp__<server>__<tool> (checked in the 0.167.0 binary).
 func parseCodex(out string) Result {
 	var res Result
 	for _, line := range jsonLines(out) {
@@ -88,8 +91,7 @@ func parseCodex(out string) Result {
 			Type     string `json:"type"`
 			ThreadID string `json:"thread_id"`
 			Item     *struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
+				Type, Text, Server, Tool string
 			} `json:"item"`
 			Usage *struct {
 				InputTokens           int `json:"input_tokens"`
@@ -105,8 +107,22 @@ func parseCodex(out string) Result {
 				res.SessionID = e.ThreadID
 			}
 		case "item.completed":
-			if e.Item != nil && e.Item.Type == "agent_message" && e.Item.Text != "" {
-				res.Report = strings.TrimSpace(e.Item.Text)
+			if e.Item == nil {
+				break
+			}
+			switch it := e.Item; it.Type {
+			case "agent_message":
+				if it.Text != "" {
+					res.Report = strings.TrimSpace(it.Text)
+				}
+			case "mcp_tool_call":
+				if it.Server != "" && it.Tool != "" {
+					res.countTool("mcp__" + it.Server + "__" + it.Tool)
+					break
+				}
+				fallthrough
+			case "command_execution", "file_change", "web_search":
+				res.countTool(it.Type)
 			}
 		case "turn.completed": // the thread's total so far; the last one wins
 			if u := e.Usage; u != nil {

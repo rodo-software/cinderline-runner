@@ -135,13 +135,16 @@ func TestParseOpenCode(t *testing.T) {
 		event("step_start", `{"messageID":"msg_1","type":"step-start"}`),
 		event("text", `{"messageID":"msg_1","type":"text","text":"Looking."}`),
 		event("tool_use", `{"messageID":"msg_1","type":"tool","tool":"bash"}`),
+		event("tool_use", `{"messageID":"msg_1","type":"tool","tool":"cinderline_get_issue"}`),
+		event("tool_use", `{"messageID":"msg_1","type":"tool","tool":"bash"}`),
 		event("step_finish", `{"messageID":"msg_1","reason":"tool-calls"}`),
 		event("text", `{"messageID":"msg_2","type":"text","text":"Done: added X."}`),
 		event("text", `{"messageID":"msg_2","type":"text","text":"Tests pass.\n"}`),
 		event("step_finish", `{"messageID":"msg_2","reason":"stop"}`),
 	}, "\n")
 	// Neither step_finish carries tokens or a cost.
-	want := Result{SessionID: "ses_abc", Report: "Done: added X.\n\nTests pass.", Usage: &Usage{}}
+	// The tool calls are the tool_use events, by the part's tool.
+	want := Result{SessionID: "ses_abc", Report: "Done: added X.\n\nTests pass.", Usage: &Usage{}, Tools: map[string]int{"bash": 2, "cinderline_get_issue": 1}}
 	if got := parseOpenCode(out); !reflect.DeepEqual(got, want) {
 		t.Errorf("parseOpenCode = %+v, want %+v", got, want)
 	}

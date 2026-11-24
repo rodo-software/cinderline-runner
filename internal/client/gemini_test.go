@@ -124,6 +124,7 @@ func TestParseGemini(t *testing.T) {
 		SessionID: "02fc2568-0a78-4896-974d-8ce6cf77f85d",
 		Report:    "Done: added X.",
 		Usage:     &Usage{InputTokens: 800, OutputTokens: 100, CacheReadTokens: 1600},
+		Tools:     map[string]int{"list_directory": 1}, // its tool_use event's tool_name
 	}
 	if got := parseGemini(out); !reflect.DeepEqual(got, want) {
 		t.Errorf("parseGemini = %+v (usage %+v), want %+v", got, got.Usage, want)
@@ -147,6 +148,7 @@ func TestParseGeminiTurnLimit(t *testing.T) {
 		SessionID:    "739e1123-0386-4683-911a-96ff5f72dcf2",
 		HitTurnLimit: true,
 		Usage:        &Usage{InputTokens: 400, OutputTokens: 50, CacheReadTokens: 800},
+		Tools:        map[string]int{"list_directory": 1},
 	}
 	if got := parseGemini(geminiTurnLimitOutput); !reflect.DeepEqual(got, want) {
 		t.Errorf("parseGemini = %+v (usage %+v), want %+v", got, got.Usage, want)

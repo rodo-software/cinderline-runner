@@ -111,7 +111,7 @@ func geminiEnv(key string, vertex bool, t Turn, mcpURL string) []string {
 
 // parseGemini reads Gemini CLI's JSON events from mixed stdout/stderr.
 // Only lines that start with "{" and are valid JSON are parsed; the rest
-// are ignored.
+// are ignored. The tool calls are the tool_use events.
 func parseGemini(out string) Result {
 	var res Result
 	var report []string
@@ -119,6 +119,7 @@ func parseGemini(out string) Result {
 		var e struct {
 			Type      string `json:"type"`
 			SessionID string `json:"session_id"`
+			ToolName  string `json:"tool_name"`
 			Role      string `json:"role"`
 			Content   string `json:"content"`
 			Status    string `json:"status"`
@@ -144,6 +145,7 @@ func parseGemini(out string) Result {
 			}
 		case "tool_use":
 			report = nil
+			res.countTool(e.ToolName)
 		case "result":
 			if e.Status == "error" && e.Error != nil && e.Error.Type == "FatalTurnLimitedError" {
 				res.HitTurnLimit = true

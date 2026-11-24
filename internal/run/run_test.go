@@ -30,7 +30,9 @@ func (f *fixture) run(t *testing.T, app *fakeApp) (bool, error) {
 // run ends with the lead's session kept as the done step says.
 func TestARunFollowsNextToDone(t *testing.T) {
 	f := newFixture(t)
-	f.cl.Runs = []client.RunReply{ok("sess-1", "Done.")}
+	reply := ok("sess-1", "Done.")
+	reply.Result.Tools = map[string]int{"Edit": 1, "Bash": 2}
+	f.cl.Runs = []client.RunReply{reply}
 	f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
 	f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{Number: 4, URL: "https://git.example/o/r/pulls/4"}}}
 	app := &fakeApp{onNext: stepsOf(runNew, `{"kind":"publish"}`)}
@@ -52,6 +54,10 @@ func TestARunFollowsNextToDone(t *testing.T) {
 	run := reqs[1].Last
 	if run.Step != "run" || run.Outcome != "finished" || deref(run.Report) != "Done." || run.Usage == nil || run.Usage.InputTokens != 3 || run.Usage.Issue != "CSR-1" {
 		t.Errorf("run facts = %+v", run)
+	}
+	// The turn's tool calls go with its usage, by name (decision 2026-11-24-tool-use-counts).
+	if run.Usage != nil && !slices.Equal(run.Usage.Tools, []cinderline.ToolCalls{{Name: "Bash", Calls: 2}, {Name: "Edit", Calls: 1}}) {
+		t.Errorf("usage tools = %+v", run.Usage.Tools)
 	}
 	if s := reqs[2].Sessions; len(s) != 1 || s[0] != (cinderline.Session{Issue: "CSR-1", Agent: "Coder", Origin: "turn"}) {
 		t.Errorf("sessions after the turn = %+v", s)

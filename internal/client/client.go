@@ -57,6 +57,20 @@ type Result struct {
 	HitTurnLimit  bool
 	Tail          string // the end of the output, for comments
 	Usage         *Usage // nil when the CLI printed none
+	// Tools is the turn's tool calls per tool name, as the CLI names the
+	// tool; nil when it made none (decision 2026-11-24-tool-use-counts).
+	Tools map[string]int
+}
+
+// countTool counts one call of the tool name; a call without a name is not counted.
+func (r *Result) countTool(name string) {
+	if name == "" {
+		return
+	}
+	if r.Tools == nil {
+		r.Tools = map[string]int{}
+	}
+	r.Tools[name]++
 }
 
 // Usage is the tokens and cost of one turn (EMBER-112).

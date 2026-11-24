@@ -42,6 +42,8 @@ const (
 	maxRefusedHosts  = 20    // last.refused_hosts
 	maxHostPort      = 260   // one refused host:port; a longer one is left out
 	maxCheckName     = 255   // a failed check's name
+	maxTools         = 200   // last.usage.tools
+	maxToolCalls     = 1e6   // one tool's calls in last.usage.tools
 )
 
 // MaxChecks is the most failed checks of a review fact or a step.

@@ -72,7 +72,8 @@ func TestCodexEnv(t *testing.T) {
 
 // JSONL events in the shape of codex-rs/exec/src/exec_events.rs at 0.167.0:
 // the session is thread.started's thread_id, the report the last
-// agent_message, the usage turn.completed's. Input tokens exclude the cached
+// agent_message, the usage turn.completed's, the tool calls the completed
+// tool-call items. Input tokens exclude the cached
 // ones, as Codex's own non_cached_input does; Codex prints no cost.
 func TestParseCodex(t *testing.T) {
 	out := strings.Join([]string{
@@ -83,6 +84,13 @@ func TestParseCodex(t *testing.T) {
 		`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Looking."}}`,
 		`{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"go test ./...","aggregated_output":"","exit_code":null,"status":"in_progress"}}`,
 		`{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"go test ./...","aggregated_output":"ok","exit_code":0,"status":"completed"}}`,
+		`{"type":"item.completed","item":{"id":"item_4","type":"file_change","changes":[{"path":"a.go","kind":"update"}],"status":"completed"}}`,
+		`{"type":"item.started","item":{"id":"item_5","type":"mcp_tool_call","server":"cinderline","tool":"get_issue","arguments":{},"result":null,"error":null,"status":"in_progress"}}`,
+		`{"type":"item.completed","item":{"id":"item_5","type":"mcp_tool_call","server":"cinderline","tool":"get_issue","arguments":{},"result":null,"error":null,"status":"completed"}}`,
+		`{"type":"item.completed","item":{"id":"item_6","type":"web_search","query":"go vet"}}`,
+		`{"type":"item.completed","item":{"id":"item_7","type":"command_execution","command":"go vet ./...","aggregated_output":"","exit_code":0,"status":"completed"}}`,
+		`{"type":"item.completed","item":{"id":"item_8","type":"todo_list","items":[]}}`,
+		`{"type":"item.completed","item":{"id":"item_9","type":"mcp_tool_call","status":"failed"}}`,
 		`{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Done: added X.\n"}}`,
 		`{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":1000,"cache_write_input_tokens":0,"output_tokens":300,"reasoning_output_tokens":120}}`,
 	}, "\n")
@@ -90,6 +98,10 @@ func TestParseCodex(t *testing.T) {
 		SessionID: "019a5c3e-0000-7000-8000-000000000001",
 		Report:    "Done: added X.",
 		Usage:     &Usage{InputTokens: 200, OutputTokens: 300, CacheReadTokens: 1000},
+		// Codex's events name a tool call by its item type, and an MCP
+		// call by server and tool, as Codex names MCP tools for the model.
+		// One without either is counted by its type.
+		Tools: map[string]int{"command_execution": 2, "file_change": 1, "mcp__cinderline__get_issue": 1, "mcp_tool_call": 1, "web_search": 1},
 	}
 	if got := parseCodex(out); !reflect.DeepEqual(got, want) {
 		t.Errorf("parseCodex = %+v (usage %+v), want %+v", got, got.Usage, want)

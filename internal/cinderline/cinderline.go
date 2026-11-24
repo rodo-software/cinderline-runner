@@ -233,6 +233,13 @@ func redacted(r NextRequest) NextRequest {
 		if u := l.Usage; u != nil {
 			v := *u
 			v.Issue, v.Agent, v.Model = clip(v.Issue, maxIssue), clip(v.Agent, maxName), text(v.Model, maxName)
+			v.Tools = nil
+			for _, t := range u.Tools {
+				// Left out rather than redacted or clipped: either would count another tool.
+				if len(v.Tools) < maxTools && t.Name != "" && utf8.RuneCountInString(t.Name) <= maxName && redact.String(t.Name) == t.Name && t.Calls > 0 {
+					v.Tools = append(v.Tools, ToolCalls{t.Name, min(t.Calls, maxToolCalls)})
+				}
+			}
 			l.Usage = &v
 		}
 		r.Last = &l

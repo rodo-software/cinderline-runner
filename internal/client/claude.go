@@ -99,7 +99,8 @@ func claudeEnv(credential string, t Turn) []string {
 // is the result event, or the last message of a stopped turn, which carries
 // only the session (decision 2026-11-14-run-failsafes). The latest rate-limit
 // event supplies the usage-limit status and reset; session IDs survive events
-// that omit them.
+// that omit them. The tool calls are the tool_use blocks of the assistant
+// messages, a subagent's included.
 func parseClaude(out string) Result {
 	var r struct {
 		Subtype   string   `json:"subtype"`
@@ -123,8 +124,11 @@ func parseClaude(out string) Result {
 	var resetsAt int64
 	for _, line := range lines {
 		var e struct {
-			Type          string `json:"type"`
-			SessionID     string `json:"session_id"`
+			Type      string `json:"type"`
+			SessionID string `json:"session_id"`
+			Message   struct {
+				Content []struct{ Type, Name string } `json:"content"` // a user message's text fails and stays empty
+			} `json:"message"`
 			RateLimitInfo struct {
 				Status   string `json:"status"`
 				ResetsAt int64  `json:"resetsAt"`
@@ -134,8 +138,15 @@ func parseClaude(out string) Result {
 		if e.SessionID != "" {
 			res.SessionID = e.SessionID
 		}
-		if e.Type == "rate_limit_event" {
+		switch e.Type {
+		case "rate_limit_event":
 			status, resetsAt = e.RateLimitInfo.Status, e.RateLimitInfo.ResetsAt
+		case "assistant":
+			for _, b := range e.Message.Content {
+				if b.Type == "tool_use" {
+					res.countTool(b.Name)
+				}
+			}
 		}
 	}
 	res.HitUsageLimit = res.HitUsageLimit || status == "rejected"

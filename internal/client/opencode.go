@@ -151,8 +151,9 @@ func opencodeEnv(key string, t Turn, mcpURL string, p *namedProvider) []string {
 }
 
 // parseOpenCode reads OpenCode's JSON events: the session, the text of the
-// last message with text, and the usage summed over the steps (nil without
-// steps). stdout and stderr are mixed, so only lines that parse as JSON count.
+// last message with text, the usage summed over the steps (nil without
+// steps) and the tool calls, its tool_use events. stdout and stderr are
+// mixed, so only lines that parse as JSON count.
 func parseOpenCode(out string) Result {
 	var res Result
 	var report []string
@@ -164,6 +165,7 @@ func parseOpenCode(out string) Result {
 			Part      *struct {
 				MessageID string   `json:"messageID"`
 				Text      string   `json:"text"`
+				Tool      string   `json:"tool"`
 				Cost      *float64 `json:"cost"`
 				Tokens    struct {
 					Input, Output, Reasoning int
@@ -183,6 +185,8 @@ func parseOpenCode(out string) Result {
 				last, report = p.MessageID, nil
 			}
 			report = append(report, strings.TrimSpace(p.Text))
+		case e.Type == "tool_use":
+			res.countTool(p.Tool)
 		case e.Type == "step_finish":
 			if res.Usage == nil {
 				res.Usage = &Usage{}

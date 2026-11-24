@@ -168,6 +168,36 @@ func TestNextRefusedHostsFit(t *testing.T) {
 	}
 }
 
+// CLR-221: the tool calls are cut to the app's limits: the first 200 whose
+// name has 1 to 100 characters, each at most 1,000,000 calls. A name that
+// holds a secret is left out, not redacted, as is one too long: either would
+// count another tool. None leaves the key out.
+func TestNextToolCallsFit(t *testing.T) {
+	redact.Add("test secret", "secret-value-1234567890")
+	s := &server{status: []int{200, 200}, body: `{"state":"x","step":{"kind":"done"}}`}
+	c := s.client(t)
+	tools := []ToolCalls{{Name: strings.Repeat("a", 101), Calls: 1}, {Name: "mcp__secret-value-1234567890__x", Calls: 1}, {Name: "", Calls: 1}, {Name: "Bash", Calls: 2_000_000}}
+	for i := range 205 {
+		tools = append(tools, ToolCalls{Name: fmt.Sprintf("t%d", i), Calls: 1})
+	}
+	for _, u := range []*Usage{{Issue: "CSR-1", Tools: tools}, {Issue: "CSR-1"}} {
+		if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Last: &LastStep{Step: "run", Usage: u}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var next NextRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &next)
+	if got := next.Last.Usage.Tools; len(got) != maxTools || got[0] != (ToolCalls{Name: "Bash", Calls: maxToolCalls}) || got[1].Name != "t0" || got[199].Name != "t198" {
+		t.Errorf("sent %v", got)
+	}
+	if strings.Contains(s.bodies[0], "secret-value") || strings.Contains(s.bodies[1], `"tools"`) {
+		t.Errorf("sent %s and %s", s.bodies[0], s.bodies[1])
+	}
+	if tools[3].Calls != 2_000_000 {
+		t.Error("the caller's list was changed")
+	}
+}
+
 func TestErrorsAreTyped(t *testing.T) {
 	for _, tc := range []struct {
 		status      int

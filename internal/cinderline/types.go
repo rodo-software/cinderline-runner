@@ -279,6 +279,15 @@ type Usage struct {
 	CacheReadTokens  int      `json:"cache_read_tokens"`
 	CacheWriteTokens int      `json:"cache_write_tokens"`
 	CostUSD          *float64 `json:"cost_usd"` // nil: the app estimates it
+	// Tools is the turn's tool calls per tool name, counts only (decision
+	// 2026-11-24-tool-use-counts); none: the turn counted no tools.
+	Tools []ToolCalls `json:"tools,omitempty"`
+}
+
+// ToolCalls is how often a turn called one tool, as the agent CLI names it.
+type ToolCalls struct {
+	Name  string `json:"name"`
+	Calls int    `json:"calls"`
 }
 
 // NextAnswer is the next step, and the state to send back with the next call.

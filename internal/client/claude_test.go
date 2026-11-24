@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,7 +123,7 @@ func TestParseClaudeTurnLimit(t *testing.T) {
 // parseRun reads the result of Claude Code JSON output.
 func TestParseClaudeResult(t *testing.T) {
 	out := "noise\n" + `{"type":"result","subtype":"success","result":" Report. ","session_id":"u-1"}`
-	if got, want := parseClaude(out), (Result{SessionID: "u-1", Report: "Report."}); got != want {
+	if got, want := parseClaude(out), (Result{SessionID: "u-1", Report: "Report."}); !reflect.DeepEqual(got, want) {
 		t.Errorf("parseClaude = %+v, want %+v", got, want)
 	}
 	if !parseClaude(`{"subtype":"error_max_turns"}`).HitTurnLimit {
@@ -289,7 +290,29 @@ func TestClaudeRunRefusesDirOutsideRuns(t *testing.T) {
 // line: the session is kept for a resume, and there is no report or usage.
 func TestParseClaudeStoppedStream(t *testing.T) {
 	out := `{"type":"system","subtype":"init","session_id":"s1"}` + "\n" + `{"type":"assistant","message":{"usage":{"output_tokens":3}},"session_id":"s1"}`
-	if got, want := parseClaude(out), (Result{SessionID: "s1"}); got != want {
+	if got, want := parseClaude(out), (Result{SessionID: "s1"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("parseClaude = %+v, want %+v", got, want)
+	}
+}
+
+// The tool calls are the tool_use blocks of the assistant messages, counted
+// per name, a subagent's too; a user message's tool_result is not one, and
+// neither is a stopped turn's last block without a name (decision
+// 2026-11-24-tool-use-counts).
+func TestParseClaudeCountsToolCalls(t *testing.T) {
+	out := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"s1","tools":["Bash","Edit"]}`,
+		`{"type":"user","message":{"role":"user","content":"Do it."},"session_id":"s1"}`,
+		`{"type":"assistant","message":{"id":"m1","content":[{"type":"text","text":"Looking."},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]},"session_id":"s1"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"a.go"}]},"session_id":"s1"}`,
+		`{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"t2","name":"mcp__cinderline__get_issue","input":{}}]},"session_id":"s1"}`,
+		`{"type":"assistant","message":{"id":"m2","content":[{"type":"tool_use","id":"t3","name":"Bash","input":{"command":"go test"}}]},"session_id":"s1"}`,
+		`{"type":"assistant","message":{"id":"m3","content":[{"type":"tool_use","id":"t4","name":"Read","input":{}}]},"parent_tool_use_id":"t9","session_id":"s1"}`,
+		`{"type":"assistant","message":{"id":"m4","content":[{"type":"tool_use","id":"t5"}]},"session_id":"s1"}`,
+		`{"type":"result","subtype":"success","result":"Done.","session_id":"s1","usage":{"input_tokens":1}}`,
+	}, "\n")
+	want := map[string]int{"Bash": 2, "mcp__cinderline__get_issue": 1, "Read": 1}
+	if got := parseClaude(out).Tools; !reflect.DeepEqual(got, want) {
+		t.Errorf("tools = %v, want %v", got, want)
 	}
 }

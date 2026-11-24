@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
@@ -447,7 +448,7 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 	}
 	res.SessionID = cmp.Or(res.SessionID, turn.SessionID)
 	h.turned(issue, agent.Name, res.SessionID, res.Report)
-	last.Usage = usage(issue, agent.Name, turn.Model, res.Usage)
+	last.Usage = usage(issue, agent.Name, turn.Model, res.Usage, res.Tools)
 	if res.Report != "" {
 		last.Report = ptr(res.Report)
 	}
@@ -524,8 +525,10 @@ func (p *Project) stopTurn(ref string) {
 	}
 }
 
-// usage is one turn's usage on issue; nil without usage.
-func usage(issue, agent, model string, u *client.Usage) *cinderline.Usage {
+// usage is one turn's usage on issue with its tool calls by name; nil
+// without usage, which drops the tool calls too: the app counts them with
+// the usage entry (decision 2026-11-24-tool-use-counts).
+func usage(issue, agent, model string, u *client.Usage, tools map[string]int) *cinderline.Usage {
 	if u == nil {
 		return nil
 	}
@@ -537,6 +540,9 @@ func usage(issue, agent, model string, u *client.Usage) *cinderline.Usage {
 	}
 	if model != "" {
 		e.Model = &model
+	}
+	for _, name := range slices.Sorted(maps.Keys(tools)) {
+		e.Tools = append(e.Tools, cinderline.ToolCalls{Name: name, Calls: tools[name]})
 	}
 	return &e
 }
