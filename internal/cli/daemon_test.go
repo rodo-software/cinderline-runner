@@ -100,7 +100,7 @@ func TestStatusPrintsEachProject(t *testing.T) {
 	at := time.Date(2026, 11, 6, 14, 30, 0, 0, time.Local)
 	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []localapi.ProjectStatus {
 		return []localapi.ProjectStatus{
-			{Project: "WEB", Connected: true, LastPoll: at, Issue: "WEB-7", Manager: "WEB-9"},
+			{Project: "WEB", Connected: true, LastPoll: at, Issue: "WEB-7", Manager: "WEB-9", Draining: true},
 			{Project: "API", LastError: "token not found", LastErrorAt: at},
 		}
 	}})
@@ -114,7 +114,7 @@ func TestStatusPrintsEachProject(t *testing.T) {
 	if !strings.Contains(got[0], "4.5.6") {
 		t.Errorf("line %q lacks the daemon version", got[0])
 	}
-	for _, s := range []string{"WEB", "connected", "last poll 2026-11-06 14:30:00", "working on WEB-7", "Project Manager on WEB-9"} {
+	for _, s := range []string{"WEB", "connected", "last poll 2026-11-06 14:30:00", "working on WEB-7", "Project Manager on WEB-9", "takes the new config when its runs have finished"} {
 		if !strings.Contains(got[1], s) {
 			t.Errorf("line %q lacks %q", got[1], s)
 		}
@@ -124,7 +124,7 @@ func TestStatusPrintsEachProject(t *testing.T) {
 			t.Errorf("line %q lacks %q", got[2], s)
 		}
 	}
-	if strings.Contains(got[2], "working on") || strings.Contains(got[2], "Project Manager") {
+	if strings.Contains(got[2], "working on") || strings.Contains(got[2], "Project Manager") || strings.Contains(got[2], "new config") {
 		t.Errorf("line %q names an issue", got[2])
 	}
 }
@@ -440,7 +440,7 @@ func TestRunVerbose(t *testing.T) {
 // CLR-194: a Project Manager run is in flight like the team's run.
 func TestInFlightNamesManagerRuns(t *testing.T) {
 	st := localapi.Status{Projects: []localapi.ProjectStatus{{Issue: "WEB-7", Manager: "WEB-9"}, {Manager: "API-2"}, {}}}
-	if got := inFlight(st); !slices.Equal(got, []string{"WEB-7", "WEB-9", "API-2"}) {
+	if got := inFlight(st.Projects); !slices.Equal(got, []string{"WEB-7", "WEB-9", "API-2"}) {
 		t.Errorf("inFlight = %q", got)
 	}
 }

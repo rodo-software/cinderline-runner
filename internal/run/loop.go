@@ -55,6 +55,7 @@ type loop struct {
 	p        *Project
 	c        *cinderline.Client
 	ctx      context.Context
+	drain    <-chan struct{} // closed: drain
 	draining bool
 
 	running string     // the team's run in flight; "": none
@@ -88,7 +89,7 @@ type startHold struct {
 // flight any more. A plain stop (ctx) cancels a run at once; drain takes no
 // new job and lets the run in flight finish.
 func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan struct{}) {
-	l := &loop{p: p, c: c, ctx: ctx, runDone: make(chan ended, 2), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: defaultReviewAfter}
+	l := &loop{p: p, c: c, ctx: ctx, drain: drain, runDone: make(chan ended, 2), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: defaultReviewAfter}
 	// What an earlier process left: no run is in flight yet. Only hygiene, so a failure only logs.
 	if err := p.Env.Cleanup(ctx); err != nil && ctx.Err() == nil {
 		p.Log.Warn("stale containers and networks not removed", "project", p.Config.Key, "err", err)
@@ -173,6 +174,14 @@ func (l *loop) poll() (wait time.Duration) {
 	p.setStatus(func(s *localapi.ProjectStatus) {
 		s.Connected, s.LastPoll, s.LastError, s.LastErrorAt = true, time.Now(), "", time.Time{}
 	})
+	// A drain while the poll was out: the answer's job and pass are offers,
+	// left so a run that starts after a reload has the new config (decision
+	// 2026-11-24-rolling-reload). The loop logs the drain itself.
+	select {
+	case <-l.drain:
+		l.draining = true
+	default:
+	}
 	if ans.ReviewAfter > 0 {
 		l.review = time.Duration(min(ans.ReviewAfter, int(maxPollAfter/time.Second))) * time.Second
 	}
@@ -194,16 +203,16 @@ func (l *loop) poll() (wait time.Duration) {
 	}
 	if review {
 		l.facts = nil // delivered
-		if ans.Review != nil {
+		if ans.Review != nil && !l.draining {
 			l.startUpkeep(proj, ans.Review)
 		} else {
 			l.lastUpkeep = time.Now()
 		}
 	}
-	if ans.Job != nil && req.Idle && l.mismatch == "" {
+	if ans.Job != nil && req.Idle && !l.draining && l.mismatch == "" {
 		l.start(proj, *ans.Job, false)
 	}
-	if ans.ManagerJob != nil && req.ManagerIdle && l.mismatch == "" && ans.ManagerJob.Issue.Ref != l.running {
+	if ans.ManagerJob != nil && req.ManagerIdle && !l.draining && l.mismatch == "" && ans.ManagerJob.Issue.Ref != l.running {
 		l.start(proj, *ans.ManagerJob, true)
 	}
 

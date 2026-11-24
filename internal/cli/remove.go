@@ -2,14 +2,18 @@ package cli
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -48,13 +52,17 @@ func (c *CLI) remove(args []string) int {
 	return 0
 }
 
-// dropLocal makes a running runner reload, then removes what is named by
-// p's ID and is not in the config or the keychain: its Docker containers,
-// networks and volumes, its session notes and its outbox. cfg is the saved
+// dropLocal makes a running runner reload, waits until p's loop has
+// finished its runs and ended, then removes what is named by p's ID and is
+// not in the config or the keychain: its Docker containers, networks and
+// volumes, its session notes and its outbox. cfg is the saved
 // config, without p or with p under another ID. It only warns.
 func (c *CLI) dropLocal(cfg *config.Config, p config.Project) {
-	// Before Docker: the reload ends the project's runs, which hold its volumes.
 	c.reload()
+	// The reload drains the project's loop; its runs hold its volumes.
+	if !c.waitProject(p) {
+		return
+	}
 	// Docker names carry only the ID, so a namesake on another instance still uses them.
 	shared := slices.ContainsFunc(cfg.Projects, func(q config.Project) bool { return q.ID() == p.ID() })
 	if !shared {
@@ -69,6 +77,27 @@ func (c *CLI) dropLocal(cfg *config.Config, p config.Project) {
 	if err := os.Remove(run.OutboxFile(c.Paths.State, p)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintln(c.Stderr, "warning:", err)
 	}
+}
+
+// waitProject waits until a running daemon's loop of p has ended, with s
+// then y to stop the daemon at once, which starts the service again after.
+// It says false, with a warning, when it stopped waiting before.
+func (c *CLI) waitProject(p config.Project) bool {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := c.waitRuns(ctx, true, p.Label())
+	switch {
+	case errors.Is(err, localapi.ErrNotRunning): // no daemon, no loop
+		return true
+	case err != nil:
+		fmt.Fprintf(c.Stdout, "Warning: stopped waiting (%v): %s still finishes its runs, and its Docker volumes, session notes and outbox are kept; remove its volumes once they have ended, listed with `docker volume ls --filter label=%s`.\n",
+			err, p.Key, workspace.ProjectLabel(p.ID()))
+		return false
+	}
+	if _, err := (localapi.Client{Socket: c.Paths.Socket}).Status(ctx); errors.Is(err, localapi.ErrNotRunning) {
+		c.startAgain() // s and y stopped it
+	}
+	return true
 }
 
 // projectFlags adds -url and -workspace, which choose between projects that share a key.

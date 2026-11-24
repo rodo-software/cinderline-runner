@@ -76,6 +76,9 @@ func (c *CLI) status(args []string) int {
 		if p.Manager != "" {
 			parts = append(parts, "Project Manager on "+p.Manager)
 		}
+		if p.Draining {
+			parts = append(parts, "takes the new config when its runs have finished") // decision 2026-11-24-rolling-reload
+		}
 		if p.LastError != "" {
 			parts = append(parts, "last error "+p.LastErrorAt.Local().Format(time.DateTime)+": "+p.LastError)
 		}
@@ -129,12 +132,20 @@ func (c *CLI) stopDaemon(args []string) int {
 }
 
 // drainAndWait calls Drain on the local API and then polls Status until the
-// daemon's socket is gone and the process has exited. It prints the issues
-// still in flight to Stdout when they change. It waits for the process
-// separately because the socket closes before the process does. With
-// keyed, s on Stdin, confirmed with y, stops the daemon at once meanwhile,
-// cutting its runs (decision 2026-11-18-drain-before-reload).
+// daemon's socket is gone and the process has exited.
 func (c *CLI) drainAndWait(ctx context.Context, keyed bool) error {
+	return c.waitRuns(ctx, keyed, "")
+}
+
+// waitRuns waits for runs to finish. With project "", it drains the whole
+// daemon and polls Status until its socket is gone and the process has
+// exited; with a project's label, it polls until that project has no
+// draining loop left or the daemon has ended. It prints the issues still in flight
+// to Stdout when they change. It waits for the process separately because
+// the socket closes before the process does. With keyed, s on Stdin,
+// confirmed with y, stops the daemon at once meanwhile, cutting its runs
+// (decision 2026-11-18-drain-before-reload).
+func (c *CLI) waitRuns(ctx context.Context, keyed bool, project string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // ends the key reader
 	cl := localapi.Client{Socket: c.Paths.Socket}
@@ -143,8 +154,13 @@ func (c *CLI) drainAndWait(ctx context.Context, keyed bool) error {
 		return err
 	}
 	pid := st.PID
-	if err := cl.Drain(ctx); err != nil {
-		return err
+	if project != "" && len(draining(st, project)) == 0 {
+		return nil
+	}
+	if project == "" {
+		if err := cl.Drain(ctx); err != nil {
+			return err
+		}
 	}
 	out := c.Stdout
 	var keys <-chan byte
@@ -214,9 +230,14 @@ func (c *CLI) drainAndWait(ctx context.Context, keyed bool) error {
 			failed = true // the daemon may exit while it answers (EOF); the next poll tells
 		case asking: // a line now would break the question's
 			failed = false
+		case project != "" && len(draining(st, project)) == 0:
+			return nil
 		default:
 			failed = false
-			issues := inFlight(st)
+			issues := inFlight(st.Projects)
+			if project != "" {
+				issues = inFlight(draining(st, project))
+			}
 			if len(issues) > 0 && strings.Join(issues, ",") != strings.Join(last, ",") {
 				line := "Waiting for " + strings.Join(issues, ", ") + " to finish"
 				if keys != nil {
@@ -234,11 +255,23 @@ func (c *CLI) drainAndWait(ctx context.Context, keyed bool) error {
 
 var errInterrupted = errors.New("interrupted")
 
-// inFlight is the issues the daemon runs now, each project's run first,
-// then its Project Manager run.
-func inFlight(st localapi.Status) []string {
-	var issues []string
+// draining is the projects whose loop runs on an older config, all of them
+// with project "", else those with that label.
+func draining(st localapi.Status, project string) []localapi.ProjectStatus {
+	var out []localapi.ProjectStatus
 	for _, p := range st.Projects {
+		if p.Draining && (project == "" || p.Project == project) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// inFlight is the issues the projects run now, each project's run first,
+// then its Project Manager run.
+func inFlight(projects []localapi.ProjectStatus) []string {
+	var issues []string
+	for _, p := range projects {
 		if p.Issue != "" {
 			issues = append(issues, p.Issue)
 		}

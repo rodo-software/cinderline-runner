@@ -52,6 +52,10 @@ type ProjectStatus struct {
 	Manager     string    `json:"manager,omitempty"`
 	LastError   string    `json:"last_error,omitempty"` // the last failure; cleared by the next successful poll
 	LastErrorAt time.Time `json:"last_error_at,omitzero"`
+	// Draining: the loop runs on an older config and takes no new work; it
+	// starts again with the new config, or ends when the config no longer
+	// has it, once nothing is in flight (decision 2026-11-24-rolling-reload).
+	Draining bool `json:"draining,omitempty"`
 }
 
 // Status is the answer of GET /status.

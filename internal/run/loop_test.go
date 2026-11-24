@@ -155,6 +155,25 @@ func TestDrainLetsTheRunFinish(t *testing.T) {
 	}
 }
 
+// A drain that comes while a poll is out leaves the job it answers: a job
+// is an offer, and a run that starts after a reload must have the new
+// config (decision 2026-11-24-rolling-reload).
+func TestDrainDuringAPollLeavesItsJob(t *testing.T) {
+	f := newFixture(t)
+	f.p.Clients["claude"] = &blocking{started: make(chan struct{})}
+	app := &fakeApp{onNext: stepsOf(runNew)}
+	drain := make(chan struct{})
+	runLoop(t, f, app, nil, drain, func(_ int, req cinderline.PollRequest, _ func()) reply {
+		if req.Idle {
+			close(drain)
+		}
+		return answer(t, proj, jobJSON)
+	})
+	if reqs := app.requests(); len(reqs) != 0 {
+		t.Errorf("a draining loop started a run: %+v", reqs)
+	}
+}
+
 // A 426 shows in the status and waits an hour.
 func TestUpgradeRequired(t *testing.T) {
 	f := newFixture(t)

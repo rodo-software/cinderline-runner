@@ -20,10 +20,11 @@ Record every decision Willem makes, with its reason, as a new file next to curre
 - [2026-11-17-push-scan](2026-11-17-push-scan.md): the push scan, and the contract change the app makes first.
 - [2026-11-17-provider-models](2026-11-17-provider-models.md): the models of the runner's own providers in the poll, and the contract change for the app.
 - [2026-11-17-hosts-from-cinderline](2026-11-17-hosts-from-cinderline.md): a person's answer in Cinderline opens a refused host for one issue's runs; refused hosts per step; strict host blocking. Supersedes point 2 of 2026-11-09-network-allowlist.
-- [2026-11-18-drain-before-reload](2026-11-18-drain-before-reload.md): commands that reload the runner drain it first while runs are in flight, with `s` to stop at once.
+- [2026-11-18-drain-before-reload](2026-11-18-drain-before-reload.md): commands that reload the runner drain it first while runs are in flight, with `s` to stop at once. Points 1 and 2 are replaced for config changes by the 2026-11-24 record below.
 - [2026-11-18-verbose-agent-output](2026-11-18-verbose-agent-output.md): container output in `run -v` as plain lines with colours only, cleaned in the log file.
 - [2026-11-19-login-replaces-key](2026-11-19-login-replaces-key.md): a successful `login` deletes the client's stored model key; a later `key set` wins again.
 - [2026-11-19-docker-26](2026-11-19-docker-26.md): Docker Engine 26.0 or later, so an agent's and a check's container mount only their issue's own clone.
 
 - [2026-11-19-https-instance](2026-11-19-https-instance.md): the Cinderline URL must be https; plain http only on localhost or a loopback address; an existing config with another http URL fails to load.
 - [2026-11-19-compose-local-files](2026-11-19-compose-local-files.md): validate repository-local composition before Compose reads files; freeze the resolved composition for checks and operations.
+- [2026-11-24-rolling-reload](2026-11-24-rolling-reload.md): a config change reloads each project once its own runs have finished; the runner keeps running; only `remove` and `rename` wait, for their own project.

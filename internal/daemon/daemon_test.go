@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -21,7 +20,6 @@ import (
 	"github.com/zalando/go-keyring"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
-	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
@@ -385,10 +383,13 @@ func TestReload(t *testing.T) {
 		t.Fatal("status does not list B after reload")
 	}
 	// A's new loop polls again at once, B's for the first time.
-	waitFor(t, "both loops to poll", func() bool { return a.countOf("A") > before && a.countOf("B") >= 1 })
+	waitFor(t, "both loops to poll", func() bool {
+		return a.countOf("A") > before && a.countOf("B") >= 1 && !status(t, c)["A"].Draining
+	})
 	raw, _ := os.ReadFile(p.Log)
-	if n, m := strings.Count(string(raw), `"msg":"projects started"`), strings.Count(string(raw), `"msg":"projects stopped"`); n != 2 || m != 1 {
-		t.Errorf("projects started %d and stopped %d times, want 2 and 1:\n%s", n, m, raw)
+	// Decision 2026-11-24-rolling-reload: A, idle, drains and starts again; B starts.
+	if a, b, m := strings.Count(string(raw), `"msg":"project started","project":"A"`), strings.Count(string(raw), `"msg":"project started","project":"B"`), strings.Count(string(raw), `"msg":"project stopped"`); a != 2 || b != 1 || m != 1 {
+		t.Errorf("A started %d, B %d times, a project stopped %d times; want 2, 1 and 1:\n%s", a, b, m, raw)
 	}
 
 	if err := os.WriteFile(p.File, []byte("{"), 0o600); err != nil {
@@ -500,29 +501,17 @@ func TestRenamedProjectShowsItsKey(t *testing.T) {
 // alongside that project's own allow_hosts.
 func TestRunnerAllowHostsReachEveryProject(t *testing.T) {
 	keyring.MockInit()
-	a, b := newApp(t), newApp(t)
+	f := useFakeLoops(t)
 	p := paths(t)
-	pa := project(a.url, "A")
+	pa := project("https://a.example.com", "A")
 	pa.AllowHosts = []string{"only-a.example.com:443"}
-	pb := project(b.url, "B")
+	pb := project("https://b.example.com", "B")
 	setToken(t, p, pa)
 	setToken(t, p, pb)
-
-	cfg := &config.Config{
-		AllowHosts: []string{"global.example.com:443"},
-		Projects:   []config.Project{pa, pb},
-	}
-	d := &daemon{}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var wg sync.WaitGroup
-	n := d.start(ctx, &wg, slog.New(slog.DiscardHandler), Options{Paths: p, Version: "1.2.3"}, cfg, make(chan struct{}))
-	wg.Wait()
-	if n != 2 {
-		t.Fatalf("started %d projects, want 2", n)
-	}
-	allowA := d.live[0].Env.(*environment.Docker).Allow
-	allowB := d.live[1].Env.(*environment.Docker).Allow
+	saveConfig(t, p, []string{"global.example.com:443"}, pa, pb)
+	start(t, p)
+	waitFor(t, "A and B to start", func() bool { return len(f.of("A")) == 1 && len(f.of("B")) == 1 })
+	allowA, allowB := f.of("A")[0], f.of("B")[0]
 	for _, want := range []string{"global.example.com:443", "only-a.example.com:443"} {
 		if !slices.Contains(allowA, want) {
 			t.Errorf("project A allow = %q, missing %q", allowA, want)

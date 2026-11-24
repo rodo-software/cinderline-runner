@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"slices"
 	"strings"
-	"syscall"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
@@ -173,34 +171,27 @@ func cmpRef(ref string) string {
 	return ref
 }
 
-// reload makes a running daemon read the config again; it only warns. A
-// reload cuts the runs in flight, so while there are any it drains the
-// daemon instead, as stop --drain, and starts the service again (decision 2026-11-18-drain-before-reload).
+// reload makes a running daemon read the config again; it only warns. Each
+// project takes the change once its runs have finished, so the command
+// says which still run on the old config (decision 2026-11-24-rolling-reload).
 func (c *CLI) reload() {
 	cl := localapi.Client{Socket: c.Paths.Socket}
-	st, err := cl.Status(context.Background())
-	if err == nil {
-		if issues := inFlight(st); len(issues) > 0 {
-			c.drainAndStart(issues)
-			return
+	if err := cl.Reload(context.Background()); err != nil {
+		if !errors.Is(err, localapi.ErrNotRunning) {
+			fmt.Fprintf(c.Stdout, "Warning: daemon reload failed: %v.\n", err)
 		}
-		err = cl.Reload(context.Background())
+		return
 	}
-	if err != nil && !errors.Is(err, localapi.ErrNotRunning) {
-		fmt.Fprintf(c.Stdout, "Warning: daemon reload failed: %v.\n", err)
+	if st, err := cl.Status(context.Background()); err == nil {
+		if issues := inFlight(draining(st, "")); len(issues) > 0 {
+			fmt.Fprintf(c.Stdout, "%s still run on the old config; each project takes the change once its runs have finished.\n", strings.Join(issues, ", "))
+		}
 	}
 }
 
-// drainAndStart lets the daemon finish issues, or stops it at once when the
-// person asks, and then starts the service again, which reads the new config.
-func (c *CLI) drainAndStart(issues []string) {
-	fmt.Fprintf(c.Stdout, "%s runs %s; it takes the change once they have finished, by stopping and starting again.\n", name.Name, strings.Join(issues, ", "))
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	if err := c.drainAndWait(ctx, true); err != nil && !errors.Is(err, localapi.ErrNotRunning) {
-		fmt.Fprintf(c.Stdout, "Warning: stopped waiting (%v): %s still stops once its runs have finished and is not started again; start it then with `%s run` or its service.\n", err, name.Name, name.Name)
-		return
-	}
+// startAgain starts the service, after a stop the person chose ended the
+// running daemon, and says so.
+func (c *CLI) startAgain() {
 	exe, start := c.exe, c.startService
 	if start == nil {
 		start = startService
