@@ -503,6 +503,39 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+// CLR-233: remove saves the config before it deletes the secrets, so a
+// failed save leaves the project as it was, tokens included.
+func TestRemoveKeepsSecretsWhenSaveFails(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
+	p := config.Project{LocalID: "API", Workspace: "default", URL: "https://a.example.com", Key: "API", Repository: "https://git.example.com/o/api"}
+	c, _, errb := newCLI(t, "")
+	saveConfig(t, c, p)
+	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken} {
+		if _, err := c.Secrets.Set(p, k, "v"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.exec = (&fakeDocker{}).exec
+	// The secrets file is in the state folder, which stays writable.
+	if err := os.Chmod(c.Paths.Dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(c.Paths.Dir, 0o700) })
+	if code := c.Run([]string{"remove", "API"}); code != 1 || !strings.Contains(errb.String(), "permission denied") {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if got := projects(t, c); !reflect.DeepEqual(got, []config.Project{p}) {
+		t.Errorf("projects %+v", got)
+	}
+	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken} {
+		if secret(t, c, p, k) == "" {
+			t.Errorf("%s deleted though the config was not saved", k)
+		}
+	}
+}
+
 // CSR-97: commands that take a project key choose between namesakes in two
 // workspaces with -workspace, and remove deletes only that workspace's Docker
 // resources, by its own label.

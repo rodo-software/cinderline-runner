@@ -19,7 +19,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-// remove deletes a project's secrets and its config entry, makes a running
+// remove deletes a project's config entry and its secrets, makes a running
 // runner drop it, and removes its Docker containers, networks and volumes
 // (the clones and the clients' sign-ins) and its paused notes (decision
 // 2026-11-11-audit-fixes). What comes after the config is saved only warns:
@@ -38,14 +38,15 @@ func (c *CLI) remove(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	for _, k := range secrets.Kinds(p) {
-		if err := c.Secrets.Delete(p, k); err != nil {
-			return c.fail(err)
-		}
-	}
+	// The config first, so a failed save keeps the project's tokens (CLR-233).
 	cfg.Projects = without(cfg.Projects, p)
 	if err := cfg.Save(c.Paths.File); err != nil {
 		return c.fail(err)
+	}
+	for _, k := range secrets.Kinds(p) {
+		if err := c.Secrets.Delete(p, k); err != nil {
+			fmt.Fprintln(c.Stderr, "warning:", err)
+		}
 	}
 	c.dropLocal(cfg, p)
 	fmt.Fprintf(c.Stdout, "Removed %s at %s\n", p.Key, p.URL)
