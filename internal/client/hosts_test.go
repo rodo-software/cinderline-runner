@@ -11,7 +11,7 @@ import (
 func TestHostsAreTheProviderHostAndPort(t *testing.T) {
 	tests := []struct {
 		name   string
-		client interface{ Hosts() []string }
+		client *CLI
 		want   []string
 	}{
 		// With a key: the provider's API host only.
@@ -34,8 +34,8 @@ func TestHostsAreTheProviderHostAndPort(t *testing.T) {
 		{"gemini sign-in", &CLI{Name: "gemini"}, []string{"generativelanguage.googleapis.com:443", "cloudcode-pa.googleapis.com:443", "oauth2.googleapis.com:443"}},
 	}
 	for _, tt := range tests {
-		if got := tt.client.Hosts(); !reflect.DeepEqual(got, tt.want) {
-			t.Errorf("%s: Hosts() = %q, want %q", tt.name, got, tt.want)
+		if got := kinds[tt.client.Name].hosts(tt.client, Turn{}); !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("%s: hosts = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }

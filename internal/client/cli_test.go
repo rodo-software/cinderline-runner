@@ -63,8 +63,8 @@ func TestDeleteSession(t *testing.T) {
 // A client the runner does not know runs nothing.
 func TestUnknownClient(t *testing.T) {
 	c := &CLI{Name: "nope"}
-	if _, err := c.Run(context.Background(), Turn{}); err == nil || c.Hosts() != nil {
-		t.Errorf("Run err = %v, Hosts = %q", err, c.Hosts())
+	if _, err := c.Run(context.Background(), Turn{}); err == nil {
+		t.Error("Run succeeded")
 	}
 }
 

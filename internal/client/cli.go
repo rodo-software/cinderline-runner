@@ -54,9 +54,14 @@ var ErrNotStarted = errors.New("turn not started")
 
 // kind is what differs between the agent CLIs.
 type kind struct {
-	env        func(c *CLI, t Turn) []string                 // the CLI's own environment
-	cmd        func(c *CLI, t Turn, session string) []string // the argv in the container
-	parse      func(out string) Result
+	env   func(c *CLI, t Turn) []string                 // the CLI's own environment
+	cmd   func(c *CLI, t Turn, session string) []string // the argv in the container
+	parse func(out string) Result
+	// hosts are the provider host:port pairs a turn needs, for its network
+	// allowlist. Without a key the turn uses the stored sign-in (CSR-58),
+	// which also needs the provider's sign-in hosts: decision
+	// 2026-11-09-network-allowlist point 5, unchecked against the CLIs; a
+	// missing one shows up as a refused host.
 	hosts      func(c *CLI, t Turn) []string
 	check      func(c *CLI, t Turn) error // nil: every turn can start
 	ownSession bool                       // the runner picks a fresh turn's session ID
@@ -78,18 +83,6 @@ func (c *CLI) mount() tools.Mount {
 	c.toolsMu.Lock()
 	defer c.toolsMu.Unlock()
 	return c.Tools
-}
-
-// Hosts returns the provider host:port pairs a run needs, for the run's
-// network allowlist.
-// Without a key the run uses the stored sign-in (CSR-58), which also needs
-// the provider's sign-in hosts: decision 2026-11-09-network-allowlist point 5,
-// unchecked against the CLIs; a missing one shows up as a refused host.
-func (c *CLI) Hosts() []string {
-	if k, ok := kinds[c.Name]; ok {
-		return k.hosts(c, Turn{})
-	}
-	return nil
 }
 
 // Run runs one turn. The turn limit is an error with HitTurnLimit set. A
