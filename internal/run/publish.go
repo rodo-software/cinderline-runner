@@ -98,10 +98,19 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 	}
 	if len(conflicts) > 0 {
 		last.Merge = ptr("failed") // a conflicted pull request cannot merge
+		// The files, and the merge agent's "Blocked" line when it had one (CLR-245).
+		r := "Merging the base branch " + j.base + " into the branch conflicts in: " + strings.Join(conflicts, ", ")
+		if j.blocked != "" {
+			r += "\nThe merge agent: " + j.blocked
+		}
+		last.Reason = ptr(r)
 		return last, nil
 	}
 	if err := j.fg.RequestMerge(ctx, pr); err != nil {
 		last.Merge, last.Error = ptr("failed"), ptr("asking the forge to merge "+pr.URL+" failed: "+err.Error())
+		if r := forge.Refusal(err); r != "" { // the forge's own words, when it refused (CLR-245)
+			last.Reason = ptr("The forge refused to merge the pull request: " + r)
+		}
 		return last, nil
 	}
 	log.Info("waiting for the merge", "pull_request", pr.URL)
@@ -115,9 +124,14 @@ func (p *Project) publishStep(ctx context.Context, j *job, step cinderline.Step,
 		return nil, err
 	}
 	last.Merge = ptr(string(state.State))
-	if state.State == forge.MergeFailed {
+	switch {
+	case state.State == forge.MergeFailed:
 		log.Info("CI failed", "pull_request", pr.URL, "checks", len(state.Failed))
 		last.Checks = failedChecks(sctx, j.fg, log, state.Failed)
+	case state.Unscheduled != "":
+		// At the limit, the forge gave up on the merge it was meant to do
+		// (CLR-245).
+		last.Reason = ptr("The forge dropped the scheduled merge without merging: " + state.Unscheduled)
 	}
 	return last, nil
 }
@@ -164,7 +178,9 @@ func (p *Project) awaitMerge(ctx context.Context, fg forge.Forge, branch, head s
 			if failed {
 				return state, nil
 			}
-			return forge.PullState{State: forge.MergePending}, nil
+			// The forge's words on the merge it has dropped, when it has
+			// any (CLR-245).
+			return forge.PullState{State: forge.MergePending, Unscheduled: state.Unscheduled}, nil
 		}
 		if err := sleep(ctx, mergeEvery); err != nil {
 			return forge.PullState{}, err

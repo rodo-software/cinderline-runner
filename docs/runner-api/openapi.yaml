@@ -103,8 +103,8 @@ paths:
         step and after every step, and does the step it gets, until it gets
         `done`. The first request (`state` null) claims the issue: To do to
         In progress. The app keeps the answer to the run's latest request for
-        ten minutes and gives it again for the same `id` without doing
-        anything twice; a request with another `id` replaces it. A request's
+        a day and gives it again for the same `id` without doing anything
+        twice; a request with another `id` replaces it. A request's
         writes happen all together or not at all. A `state` that is not of
         this issue's run is refused with `422` on `state`, before anything is
         written.
@@ -394,6 +394,7 @@ components:
         refused_connections:
           type: integer
           minimum: 0
+          maximum: 4294967295
           description: The connections the runner's egress proxy refused.
         strict_hosts:
           type: boolean
@@ -460,9 +461,13 @@ components:
         checks:
           type: [array, 'null']
           maxItems: 20
-          description: With `failed`, the CI checks that failed. The app writes them on the issue and sends it back to To do, a few times per issue (decision 2026-11-17-failed-ci-goes-back-to-todo). Left out or empty, `failed` only sets a trusted team's merge status.
+          description: With `failed`, the CI checks that failed. The app writes them on the issue and sends it back to To do, a few times per issue (decision 2026-11-17-failed-ci-goes-back-to-todo). Left out or empty, `failed` sends it back only with a `reason`, and otherwise only sets a trusted team's merge status.
           items:
             $ref: '#/components/schemas/FailedCheck'
+        reason:
+          type: [string, 'null']
+          maxLength: 2000
+          description: Why the pull request could not be merged, in the forge's own words (required approvals missing, branch protection, not mergeable, the merge API's error), or the files of a conflict the runner could not resolve. Never for a pull request a person closed. The runner clips it and removes every URL; the app removes URLs again. With a reason, the app sends the issue back to To do with it, counted with the CI fixes (decision 2026-11-25-merge-failures-go-back-to-the-agent). Left out or null, as before.
 
     FailedCheck:
       type: object
@@ -772,7 +777,7 @@ components:
         | `resolve` | as `run` except `usage_limit` and `out_of_memory`, and `not_verified` (the runner undid a merge it could not verify) | `report`, `tail`, `error`, `usage` |
         | `check` | `passed`, `failed`, `out_of_memory` (killed at the container's memory limit), `not_started`, `stopped` (the poll's `stop` cancelled the check) | `tail`, `error`, `report` (the checked turn's), `memory_limit` |
         | `merge` | `conflict` | `conflicts`, `commits` |
-        | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request`, `conflicts`, `merge`, `commit`, `error`, `checks` |
+        | `publish` | `published`, `unchanged` (nothing to push), `failed` | `pull_request`, `conflicts`, `merge`, `commit`, `error`, `checks`, `reason` |
         | `stop` | `pushed`, `not_pushed` | `commit`, `error` |
 
         A `stop` the app did not ask for is the runner's own failure (an error
@@ -808,6 +813,12 @@ components:
         `checks`. The app then moves the issue to To do with their output
         instead of to Review, a few times per issue (decision
         2026-11-17-failed-ci-goes-back-to-todo).
+
+        A `publish` whose pull request was not merged for a reason the runner
+        read (the forge refused the merge, or a conflict it could not resolve)
+        reports it in `reason`. The app then moves the issue to To do with it
+        too, counted with the CI fixes (decision
+        2026-11-25-merge-failures-go-back-to-the-agent).
       properties:
         step:
           type: string
@@ -874,6 +885,10 @@ components:
           description: With `merge` `failed`, the CI checks that failed; left out or empty when the forge refused the merge itself.
           items:
             $ref: '#/components/schemas/FailedCheck'
+        reason:
+          type: [string, 'null']
+          maxLength: 2000
+          description: With `published`, why the pull request could not be merged, as a Review fact's `reason`. The app sends the issue back to To do with it instead of moving it to Review (decision 2026-11-25-merge-failures-go-back-to-the-agent).
         refused_hosts:
           type: [array, 'null']
           maxItems: 20
@@ -906,18 +921,23 @@ components:
         input_tokens:
           type: integer
           minimum: 0
+          maximum: 1000000000000
         output_tokens:
           type: integer
           minimum: 0
+          maximum: 1000000000000
         cache_read_tokens:
           type: integer
           minimum: 0
+          maximum: 1000000000000
         cache_write_tokens:
           type: integer
           minimum: 0
+          maximum: 1000000000000
         cost_usd:
           type: [number, 'null']
           minimum: 0
+          maximum: 1000000
         kind:
           type: [string, 'null']
           maxLength: 50

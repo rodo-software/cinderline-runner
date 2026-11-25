@@ -61,7 +61,9 @@ type githubPull struct {
 	NodeID   string `json:"node_id"`
 	State    string `json:"state"`
 	MergedAt string `json:"merged_at"`
-	Head     struct {
+	// nil when auto-merge is not enabled, or the field is null or absent.
+	AutoMerge *json.RawMessage `json:"auto_merge"`
+	Head      struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
 	} `json:"head"`
@@ -221,6 +223,9 @@ func (g *GitHub) MergeState(ctx context.Context, branch string) (PullState, erro
 			s.State = MergeFailed
 			s.Failed = append(s.Failed, Check{Name: c.Context, Description: c.Description, URL: c.TargetURL})
 		}
+	}
+	if s.State == MergePending && !s.Running && pr.AutoMerge == nil {
+		s.Unscheduled = "GitHub has no auto-merge enabled on it"
 	}
 	return s, nil
 }

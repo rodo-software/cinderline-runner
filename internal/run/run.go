@@ -45,6 +45,9 @@ type job struct {
 	// of the base, never commits or pushes, and refuses a check, publish or
 	// resolve step (CLR-194).
 	manager bool
+	// blocked is the merge agent's "Blocked" line when it could not resolve
+	// the base merge in this run, for the publish's reason (CLR-245).
+	blocked string
 }
 
 func (j *job) isTeam() bool { return len(j.team.Agents) > 1 }
@@ -390,12 +393,17 @@ func (p *Project) runStep(ctx context.Context, c *cinderline.Client, j *job, h *
 // half-resolved merge is never pushed.
 func (p *Project) resolveStep(ctx context.Context, c *cinderline.Client, j *job, h *held, step cinderline.Step, cf *conflict) (*cinderline.LastStep, error) {
 	log := p.Log.With("project", p.Config.Key, "issue", j.ref)
+	j.blocked = ""
 	last, res, err := p.agentTurn(ctx, c, j, h, step, j.ref)
 	if err != nil || last.Outcome == "not_started" {
 		return last, err
 	}
 	if last.Outcome == "finished" {
 		ok, verr := !reportsBlocked(res.Report), error(nil)
+		if !ok {
+			j.blocked, _, _ = strings.Cut(strings.TrimSpace(res.Report), "\n")
+			j.blocked = strings.TrimSpace(j.blocked)
+		}
 		if ok {
 			ok, verr = verifyMerge(ctx, p.Workspace, j.dir, j.base, cf.head, cf.files)
 		}

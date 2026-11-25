@@ -144,6 +144,9 @@ func (p *Project) keepCurrent(ctx context.Context, fg forge.Forge, base string, 
 			} else if found {
 				if err := fg.RequestMerge(ctx, pr); err != nil {
 					log.Warn("merge not asked for", "pull_request", pr.URL, "err", err)
+					if r := forge.Refusal(err); r != "" { // the forge's own words, when it refused (CLR-245)
+						fact.Reason = ptr("The forge refused to merge the pull request: " + r)
+					}
 				}
 			}
 		}

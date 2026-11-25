@@ -74,6 +74,10 @@ type PullState struct {
 	// and Failed are the head's failed checks, without their logs.
 	Running bool
 	Failed  []Check
+	// With MergePending and no check running: the forge's words when it has
+	// no merge of the open pull request scheduled; "" when one is scheduled
+	// or the forge cannot tell (Forgejo, Bitbucket).
+	Unscheduled string
 }
 
 // Check is a CI check that failed on a pull request's head. Its texts are
@@ -116,6 +120,17 @@ func shortError(err error) string {
 		return fmt.Sprintf("%s answered %d: %s", e.forge, e.status, e.message)
 	}
 	return err.Error()
+}
+
+// Refusal is the forge's own words when it refused a request, for the reason
+// the runner sends the app (CLR-245); "" when the error is not a refusal the
+// agent could act on.
+func Refusal(err error) string {
+	var e *apiError
+	if errors.As(err, &e) && e.status < 500 {
+		return shortError(err)
+	}
+	return ""
 }
 
 // logBytes is how much of the end of a check's log CheckLog reads: enough

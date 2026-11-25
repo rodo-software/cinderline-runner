@@ -10,6 +10,12 @@ import (
 // ErrNotScripted is returned when a method's queue is empty.
 var ErrNotScripted = errors.New("fake forge: no scripted reply")
 
+// RefusedError is a refusal of the forge named forge with status and
+// message, for tests of other packages.
+func RefusedError(forge string, status int, message string) error {
+	return &apiError{forge: forge, status: status, message: message}
+}
+
 var _ Forge = (*Fake)(nil)
 
 // Call is one recorded method call.
@@ -39,11 +45,12 @@ type FindReply struct {
 
 // MergeStateReply is one scripted reply to MergeState.
 type MergeStateReply struct {
-	State   MergeState
-	Head    string
-	Running bool
-	Failed  []Check
-	Err     error
+	State       MergeState
+	Head        string
+	Running     bool
+	Failed      []Check
+	Unscheduled string
+	Err         error
 }
 
 // CheckLogReply is one scripted reply to CheckLog.
@@ -135,7 +142,7 @@ func (f *Fake) MergeState(_ context.Context, branch string) (PullState, error) {
 	}
 	r := f.MergeStates[0]
 	f.MergeStates = f.MergeStates[1:]
-	return PullState{State: r.State, Head: r.Head, Running: r.Running, Failed: r.Failed}, r.Err
+	return PullState{State: r.State, Head: r.Head, Running: r.Running, Failed: r.Failed, Unscheduled: r.Unscheduled}, r.Err
 }
 
 func (f *Fake) CheckLog(_ context.Context, c Check) (string, error) {

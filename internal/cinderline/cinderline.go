@@ -162,6 +162,7 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 			if len(review) < maxListed && utf8.RuneCountInString(f.Ref) <= maxRef {
 				f.Conflicts = clipAll(f.Conflicts, maxConflicts, maxText)
 				f.Checks = checks(f.Checks)
+				f.Reason = reason(f.Reason)
 				review = append(review, f)
 			}
 		}
@@ -217,6 +218,7 @@ func redacted(r NextRequest) NextRequest {
 		}
 		l.Conflicts = clipAll(l.Conflicts, maxConflicts, maxText)
 		l.Checks = checks(l.Checks)
+		l.Reason = reason(l.Reason)
 		if l.Secrets != nil {
 			found := make([]StepSecret, 0, min(len(l.Secrets), maxSecrets))
 			for _, f := range first(l.Secrets, maxSecrets) {

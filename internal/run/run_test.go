@@ -128,7 +128,8 @@ func TestStepFacts(t *testing.T) {
 			f.ws.MergeBases = append([]workspace.MergeBaseReply{{}, {Conflicts: []string{"a.go"}}}, f.ws.MergeBases...)
 			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
 			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
-		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"), Conflicts: []string{"a.go"}}},
+		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"), Conflicts: []string{"a.go"},
+			Reason: ptr("Merging the base branch main into the branch conflicts in: a.go")}},
 		// CLR-201: a failure on an earlier push's head does not end the wait;
 		// one on the pushed head ends it once no check runs, with every
 		// failed check; a log that cannot be read twice is the forge's text
@@ -222,7 +223,7 @@ func show(l cinderline.LastStep) string {
 	if l.MemoryLimit != nil {
 		limit = fmt.Sprint(*l.MemoryLimit)
 	}
-	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ","), strings.Join(found, ","), fmt.Sprintf("%+v", l.Checks), limit}, "|")
+	return strings.Join([]string{l.Step, l.Issue, s(l.Agent), l.Outcome, s(l.Error), s(l.Tail), s(l.PullRequest), s(l.Merge), s(l.Commit), strings.Join(l.Conflicts, ","), strings.Join(found, ","), fmt.Sprintf("%+v", l.Checks), limit, s(l.Reason)}, "|")
 }
 
 // A step the runner cannot do, and a failure in its own code, end the run

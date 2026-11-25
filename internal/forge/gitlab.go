@@ -144,6 +144,8 @@ func (g *GitLab) MergeState(ctx context.Context, branch string) (PullState, erro
 			WebURL     string `json:"web_url"`
 			YAMLErrors string `json:"yaml_errors"`
 		} `json:"head_pipeline"`
+		MergeWhenPipelineSucceeds bool   `json:"merge_when_pipeline_succeeds"`
+		DetailedMergeStatus       string `json:"detailed_merge_status"`
 	}
 	if err := g.do(ctx, http.MethodGet, g.project+"/merge_requests/"+strconv.Itoa(mr.IID), nil, &one); err != nil {
 		return PullState{}, err
@@ -208,6 +210,12 @@ func (g *GitLab) MergeState(ctx context.Context, branch string) (PullState, erro
 			text += "\n\nYAML errors: " + p.YAMLErrors
 		}
 		s.Failed = append(s.Failed, Check{Name: "pipeline", Description: "pipeline " + p.Status, URL: p.WebURL, text: text})
+	}
+	if s.State == MergePending && !s.Running && !one.MergeWhenPipelineSucceeds {
+		s.Unscheduled = "GitLab has no merge of it scheduled"
+		if one.DetailedMergeStatus != "" {
+			s.Unscheduled += "; its merge status is " + one.DetailedMergeStatus
+		}
 	}
 	return s, nil
 }

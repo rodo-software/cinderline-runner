@@ -89,6 +89,10 @@ type ReviewFact struct {
 	Conflicts   []string `json:"conflicts"`
 	// Checks are, with failed, the CI checks that failed on the head.
 	Checks []FailedCheck `json:"checks,omitempty"`
+	// Reason is why the pull request could not be merged, in the forge's own
+	// words, or the files of a conflict the runner could not resolve; nil
+	// when there is none (CLR-245).
+	Reason *string `json:"reason,omitempty"`
 }
 
 // FailedCheck is a CI check that failed on a pull request's head. Its
@@ -257,6 +261,10 @@ type LastStep struct {
 	Commit      *string  `json:"commit"`
 	// Checks are, with merge failed because of CI, the checks that failed.
 	Checks []FailedCheck `json:"checks,omitempty"`
+	// Reason is why the pull request could not be merged, in the forge's own
+	// words, or the files of a conflict the runner could not resolve; nil
+	// when there is none (CLR-245).
+	Reason *string `json:"reason,omitempty"`
 
 	// What the push scan found, at publish and stop: a known one comes with
 	// the outcome secret, nothing pushed; the others are warnings.

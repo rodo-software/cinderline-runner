@@ -44,6 +44,7 @@ const (
 	maxCheckName     = 255   // a failed check's name
 	maxTools         = 200   // last.usage.tools
 	maxToolCalls     = 1e6   // one tool's calls in last.usage.tools
+	maxReason        = 2000  // last.reason and a review fact's reason
 )
 
 // MaxChecks is the most failed checks of a review fact or a step.
@@ -147,4 +148,18 @@ func checks(cs []FailedCheck) []FailedCheck {
 		out = append(out, c)
 	}
 	return out
+}
+
+// reason is the reason of a step or a review fact to send: the forge's own
+// words, redacted, without URLs, cut to its limit; nil or nothing but
+// spaces is nil, as no reason (CLR-245).
+func reason(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	v := clip(redact.String(noURLs(*s)), maxReason)
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	return &v
 }
