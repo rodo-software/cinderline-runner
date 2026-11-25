@@ -49,8 +49,11 @@ type Config struct {
 	StrictHosts bool `json:"strict_hosts,omitempty"`
 	// AllowHosts are extra host:port pairs runs of every current and future
 	// project on this runner may reach (CLR-212).
-	AllowHosts []string  `json:"allow_hosts,omitempty"`
-	Projects   []Project `json:"projects"`
+	AllowHosts []string `json:"allow_hosts,omitempty"`
+	// MaxParallelRuns is every project's max_parallel_runs unless it sets
+	// its own, 1 to MaxParallel; 0 is 1 (decision 2026-11-25-parallel-runs-default).
+	MaxParallelRuns int       `json:"max_parallel_runs,omitempty"`
+	Projects        []Project `json:"projects"`
 	// Dropped names the fields an older runner wrote that Load dropped, for
 	// a warning; the next Save leaves them out (CLR-191).
 	Dropped []string `json:"-"`
@@ -155,13 +158,14 @@ func (p Project) MemoryLimit() int64 {
 	return n
 }
 
-// MaxParallel is the most a project's max_parallel_runs may be, the
-// contract's limit on max_parallel.
+// MaxParallel is the most a max_parallel_runs may be, the contract's limit
+// on max_parallel.
 const MaxParallel = 10
 
-// Parallel is the most team runs of the project at once: MaxParallelRuns,
-// or 1. Validate has checked the value.
-func (p Project) Parallel() int { return max(p.MaxParallelRuns, 1) }
+// Parallel is the most team runs of the project at once: its own
+// MaxParallelRuns, else runnerWide, the config's, else 1 (decision
+// 2026-11-25-parallel-runs-default). Validate has checked both.
+func (p Project) Parallel(runnerWide int) int { return cmp.Or(p.MaxParallelRuns, runnerWide, 1) }
 
 // Project is one Cinderline project, identified by URL, Workspace and Key (CSR-97).
 type Project struct {
@@ -189,9 +193,9 @@ type Project struct {
 	// 2026-11-24-agent-memory-limit).
 	Memory string `json:"memory,omitempty"`
 	// MaxParallelRuns is the most team runs of the project at once, each
-	// in its own slot, clone and branch, 1 to MaxParallel; 0 is 1. The
-	// Project Manager's run is not one of them (decision 2026-11-24-lanes in
-	// the app repository).
+	// in its own slot, clone and branch, 1 to MaxParallel; 0 is the
+	// config's MaxParallelRuns (see Parallel). The Project Manager's run is
+	// not one of them (decision 2026-11-24-lanes in the app repository).
 	MaxParallelRuns int `json:"max_parallel_runs,omitempty"`
 	// ExtraRepositories are other repositories the project's runs may read,
 	// mounted read-only (CSR-160). Configured only here, not in Cinderline
@@ -474,6 +478,9 @@ func (c *Config) Validate() error {
 	if problem := checkAllowHosts(c.AllowHosts); problem != "" {
 		return errors.New(problem)
 	}
+	if problem := checkParallel(c.MaxParallelRuns); problem != "" {
+		return errors.New(problem)
+	}
 	type id struct{ url, workspace, key string }
 	seen := map[id]bool{}
 	for i, p := range c.Projects {
@@ -494,8 +501,8 @@ func (c *Config) Validate() error {
 			problem = errMsg
 		} else if _, err := ParseMemory(cmp.Or(p.Memory, DefaultMemory)); err != nil {
 			problem = err.Error()
-		} else if p.MaxParallelRuns < 0 || p.MaxParallelRuns > MaxParallel {
-			problem = fmt.Sprintf("max_parallel_runs must be 1 to %d", MaxParallel)
+		} else if errMsg := checkParallel(p.MaxParallelRuns); errMsg != "" {
+			problem = errMsg
 		} else {
 			problem = checkExtraRepositories(p.ExtraRepositories)
 		}
@@ -514,6 +521,15 @@ func checkAllowHosts(allowHosts []string) string {
 	}
 	if i := slices.IndexFunc(allowHosts, func(hp string) bool { return !ValidHostPort(hp) }); i >= 0 {
 		return fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", allowHosts[i])
+	}
+	return ""
+}
+
+// checkParallel reports a max_parallel_runs out of range; 0, unset, is
+// valid. "" means none.
+func checkParallel(n int) string {
+	if n < 0 || n > MaxParallel {
+		return fmt.Sprintf("max_parallel_runs must be 1 to %d", MaxParallel)
 	}
 	return ""
 }

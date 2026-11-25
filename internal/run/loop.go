@@ -100,7 +100,7 @@ type startHold struct {
 // flight any more. A plain stop (ctx) cancels a run at once; drain takes no
 // new job and lets the run in flight finish.
 func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan struct{}) {
-	n := p.Config.Parallel()
+	n := p.Config.Parallel(p.MaxParallelRuns)
 	l := &loop{p: p, c: c, ctx: ctx, drain: drain, running: make([]string, n), runDone: make(chan ended, n+1), upkeepDone: make(chan []cinderline.ReviewFact, 1), review: defaultReviewAfter}
 	// What an earlier process left: no run is in flight yet. Only hygiene, so a failure only logs.
 	if err := p.Env.Cleanup(ctx); err != nil && ctx.Err() == nil {

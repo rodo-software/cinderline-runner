@@ -695,3 +695,48 @@ func TestParseMemory(t *testing.T) {
 		}
 	}
 }
+
+// CLR-249, decision 2026-11-25-parallel-runs-default: a project's own
+// max_parallel_runs wins, else the runner-wide one, else 1.
+func TestParallel(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		runner, project int
+		want            int
+	}{
+		{"unset", 0, 0, 1},
+		{"runner-wide only", 3, 0, 3},
+		{"project overrides", 3, 5, 5},
+		{"project under the runner-wide", 4, 1, 1},
+		{"project only", 0, 2, 2},
+	} {
+		c := Config{MaxParallelRuns: tt.runner, Projects: []Project{{MaxParallelRuns: tt.project}}}
+		if got := c.Projects[0].Parallel(c.MaxParallelRuns); got != tt.want {
+			t.Errorf("%s: Parallel %d, want %d", tt.name, got, tt.want)
+		}
+	}
+	// A cleared override falls back to the runner-wide value.
+	c := Config{MaxParallelRuns: 4, Projects: []Project{{MaxParallelRuns: 2}}}
+	c.Projects[0].MaxParallelRuns = 0
+	if got := c.Projects[0].Parallel(c.MaxParallelRuns); got != 4 {
+		t.Errorf("cleared: Parallel %d, want 4", got)
+	}
+}
+
+// CLR-249: the runner-wide max_parallel_runs is 1 to 10, as a project's is,
+// and round-trips at the top of the file.
+func TestValidateRunnerParallel(t *testing.T) {
+	for n, ok := range map[int]bool{-1: false, 0: true, 1: true, 10: true, 11: false} {
+		err := (&Config{Version: 1, MaxParallelRuns: n}).Validate()
+		if ok != (err == nil) || err != nil && !strings.HasPrefix(err.Error(), "max_parallel_runs must be 1 to 10") {
+			t.Errorf("max_parallel_runs %d: err %v", n, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := (&Config{MaxParallelRuns: 3}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Load(path); err != nil || got.MaxParallelRuns != 3 {
+		t.Fatalf("Load: %+v, %v", got, err)
+	}
+}

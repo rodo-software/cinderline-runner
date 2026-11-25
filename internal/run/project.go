@@ -71,6 +71,10 @@ type Project struct {
 	KeepFor time.Duration
 	MinFree int64
 
+	// MaxParallelRuns is config's runner-wide max_parallel_runs, which
+	// Config's own wins over (decision 2026-11-25-parallel-runs-default).
+	MaxParallelRuns int
+
 	// StrictHosts is config's strict_hosts: a step's allow_hosts are ignored.
 	StrictHosts bool
 

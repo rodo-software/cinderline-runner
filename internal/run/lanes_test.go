@@ -73,6 +73,21 @@ func TestOneSlotSendsNoMaxParallel(t *testing.T) {
 	}
 }
 
+// CLR-249, decision 2026-11-25-parallel-runs-default: a project without its
+// own max_parallel_runs gets the runner-wide one; its own wins.
+func TestRunnerWideMaxParallel(t *testing.T) {
+	for _, tt := range []struct{ runner, own, want int }{{3, 0, 3}, {3, 2, 2}} {
+		f := newFixture(t)
+		f.p.MaxParallelRuns, f.p.Config.MaxParallelRuns = tt.runner, tt.own
+		polls := runLoop(t, f, &fakeApp{}, nil, nil, stopAt(2, answer(t, proj, jobsJSON())))
+		for i, p := range polls {
+			if p.MaxParallel != tt.want {
+				t.Errorf("runner-wide %d, own %d: poll %d: max_parallel %d, want %d", tt.runner, tt.own, i, p.MaxParallel, tt.want)
+			}
+		}
+	}
+}
+
 // The answer's jobs start side by side, each in its own slot and clone on
 // its own branch; the poll says how many slots there are, and is idle while
 // one is free. No tidying or upkeep pass starts while they run.
