@@ -18,7 +18,9 @@ import (
 // prompt on stdin through "-", options before the resume subcommand.
 func TestCodexArgs(t *testing.T) {
 	orch := codexArgs(Turn{Model: "gpt-5.5", Token: "tok"}, "https://cs.example/mcp", "")
-	want := []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5.5",
+	want := []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox",
+		"-c", "features.plugins=false", "-c", "features.api_key_model_discovery=false",
+		"--model", "gpt-5.5",
 		"-c", `mcp_servers.cinderline.url="https://cs.example/mcp"`,
 		"-c", `mcp_servers.cinderline.bearer_token_env_var="CINDERLINE_TOKEN"`,
 		"-"}
@@ -29,7 +31,9 @@ func TestCodexArgs(t *testing.T) {
 	// A worker gets no MCP server and skips the project's AGENTS.md (app
 	// repository decision 2026-11-05-workers-skip-project-files).
 	worker := codexArgs(Turn{}, "https://cs.example/mcp", "")
-	want = []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "-c", "project_doc_max_bytes=0", "-"}
+	want = []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox",
+		"-c", "features.plugins=false", "-c", "features.api_key_model_discovery=false",
+		"-c", "project_doc_max_bytes=0", "-"}
 	if !reflect.DeepEqual(worker, want) {
 		t.Errorf("worker args =\n%q\nwant\n%q", worker, want)
 	}
@@ -37,6 +41,21 @@ func TestCodexArgs(t *testing.T) {
 	resumed := codexArgs(Turn{SessionID: "019a5c3e-0000-7000-8000-000000000001"}, "u", "")
 	if got := resumed[len(resumed)-3:]; !reflect.DeepEqual(got, []string{"resume", "019a5c3e-0000-7000-8000-000000000001", "-"}) {
 		t.Errorf("resumed args end %q, want resume <id> -", got)
+	}
+
+	// No startup fetch from hosts the turn does not need (CLR-242): the
+	// curated plugin sync (github.com) and an API key run's model list
+	// (chatgpt.com), on every turn, a resumed one included.
+	for _, a := range [][]string{orch, worker, resumed, codexArgs(Turn{}, "u", "http://host.docker.internal:11434/v1")} {
+		opts := a
+		if r := slices.Index(a, "resume"); r >= 0 {
+			opts = a[:r]
+		}
+		for _, kv := range []string{"features.plugins=false", "features.api_key_model_discovery=false"} {
+			if i := slices.Index(opts, kv); i < 1 || opts[i-1] != "-c" {
+				t.Errorf("args %q do not set %s before any resume", a, kv)
+			}
+		}
 	}
 
 	// The slot's effort as model_reasoning_effort (app AgentClient::efforts, EMBER-132).

@@ -42,8 +42,17 @@ const (
 
 // codexArgs is Codex's headless argv for one turn; the prompt goes in on
 // stdin through "-". Options before the resume subcommand.
+//
+// Two startup fetches are off, as the turn needs neither and the proxy
+// refuses their hosts (CLR-242, checked in 0.167.0 behind a logging proxy):
+// features.plugins syncs OpenAI's curated plugins from github.com, and
+// features.api_key_model_discovery fetches an API key run's model list from
+// chatgpt.com instead of using the list bundled in the binary. A sign-in run
+// reaches chatgpt.com anyway, one of its hosts. `codex exec` has no update
+// check (only the TUI has).
 func codexArgs(t Turn, mcpURL, baseURL string) []string {
-	a := []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox"}
+	a := []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox",
+		"-c", "features.plugins=false", "-c", "features.api_key_model_discovery=false"}
 	if t.Model != "" {
 		a = append(a, "--model", t.Model)
 	}
