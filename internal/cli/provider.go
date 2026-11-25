@@ -13,11 +13,14 @@ import (
 
 // providerFlags parses a provider command, which has no --project: a
 // provider is the runner's, for every project (decision 2026-11-17-local-model-providers).
-// A non-nil free gets the command's --free flag.
-func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int, free *bool) (*config.Config, []string, int) {
+// A non-nil free and maxAgents get the command's --free and --max-agents flags.
+func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int, free *bool, maxAgents *int) (*config.Config, []string, int) {
 	f := c.flags(cmd, usage)
 	if free != nil {
 		f.BoolVar(free, "free", false, freeHelp)
+	}
+	if maxAgents != nil {
+		f.IntVar(maxAgents, "max-agents", 0, maxAgentsHelp)
 	}
 	if !c.parsed(f, args, nargs) {
 		return nil, nil, 2
@@ -32,6 +35,20 @@ func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int, free *b
 // freeHelp is the help of --free (decision 2026-11-19-free-model-providers).
 const freeHelp = "the provider's models cost nothing per token, such as a model on your own machine; Cinderline then prices them at $0"
 
+// maxAgentsHelp is the help of --max-agents (CLR-243).
+const maxAgentsHelp = "the most agent turns on the provider at once, over every project of this runner; a turn past it waits for one to end; 0 is no limit"
+
+// agentLimit says what a provider's max_agents allows, after "has".
+func agentLimit(n int) string {
+	switch n {
+	case 0:
+		return "no agent limit"
+	case 1:
+		return "at most 1 agent at once"
+	}
+	return fmt.Sprintf("at most %d agents at once", n)
+}
+
 // providerIndex is the index of the runner's provider n, or an error.
 func providerIndex(cfg *config.Config, n string) (int, error) {
 	j := slices.IndexFunc(cfg.Providers, func(q config.Provider) bool { return q.Name == n })
@@ -45,11 +62,12 @@ func providerIndex(cfg *config.Config, n string) (int, error) {
 // and asks for its optional key.
 func (c *CLI) addProvider(args []string) int {
 	var free bool
-	cfg, rest, code := c.providerFlags("add-provider", "[--free] NAME URL", args, 2, &free)
+	var maxAgents int
+	cfg, rest, code := c.providerFlags("add-provider", "[--free] [--max-agents N] NAME URL", args, 2, &free, &maxAgents)
 	if code != 0 {
 		return code
 	}
-	pr := config.Provider{Name: rest[0], BaseURL: rest[1], Free: free}
+	pr := config.Provider{Name: rest[0], BaseURL: rest[1], Free: free, MaxAgents: maxAgents}
 	if err := pr.Validate(); err != nil {
 		return c.fail(err)
 	}
@@ -88,7 +106,7 @@ func (c *CLI) addProvider(args []string) int {
 // listProviders prints the runner's providers, one per line, and whether
 // each has a key, never the key.
 func (c *CLI) listProviders(args []string) int {
-	cfg, _, code := c.providerFlags("list-providers", "", args, 0, nil)
+	cfg, _, code := c.providerFlags("list-providers", "", args, 0, nil, nil)
 	if code != 0 {
 		return code
 	}
@@ -102,19 +120,27 @@ func (c *CLI) listProviders(args []string) int {
 		if pr.Free {
 			key += "\tfree"
 		}
+		switch pr.MaxAgents {
+		case 0:
+		case 1:
+			key += "\tmax 1 agent"
+		default:
+			key += fmt.Sprintf("\tmax %d agents", pr.MaxAgents)
+		}
 		fmt.Fprintf(c.Stdout, "%s\t%s\t%s\n", pr.Name, pr.BaseURL, key)
 	}
 	return 0
 }
 
 // setProviderUsage is set-provider's arguments.
-const setProviderUsage = "NAME --free=true|false"
+const setProviderUsage = "NAME [--free=true|false] [--max-agents N]"
 
-// setProvider marks a provider free or not; its key stays.
+// setProvider marks a provider free or not and sets its agent limit; its key stays.
 func (c *CLI) setProvider(args []string) int {
-	// NAME comes before the flag, as key's NAME does: flag parsing stops at it.
+	// NAME comes before the flags, as key's NAME does: flag parsing stops at it.
 	f := c.flags("set-provider", setProviderUsage)
 	free := f.Bool("free", false, freeHelp)
+	maxAgents := f.Int("max-agents", 0, maxAgentsHelp)
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		f.Usage()
 		return 2
@@ -122,9 +148,9 @@ func (c *CLI) setProvider(args []string) int {
 	if !c.parsed(f, args[1:], 0) {
 		return 2
 	}
-	set := false
-	f.Visit(func(*flag.Flag) { set = true })
-	if !set {
+	set := map[string]bool{}
+	f.Visit(func(fl *flag.Flag) { set[fl.Name] = true })
+	if len(set) == 0 {
 		f.Usage()
 		return 2
 	}
@@ -136,27 +162,46 @@ func (c *CLI) setProvider(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
+	old, pr := cfg.Providers[j], &cfg.Providers[j]
+	if set["free"] {
+		pr.Free = *free
+	}
+	if set["max-agents"] {
+		pr.MaxAgents = *maxAgents
+	}
+	if err := pr.Validate(); err != nil {
+		return c.fail(err)
+	}
 	state := "not free"
-	if *free {
+	if pr.Free {
 		state = "free"
 	}
-	if cfg.Providers[j].Free == *free {
+	if *pr == old {
 		// No reload: it would drain the runs in flight for nothing.
-		fmt.Fprintf(c.Stdout, "%s is already %s\n", args[0], state)
+		if set["free"] {
+			fmt.Fprintf(c.Stdout, "%s is already %s\n", pr.Name, state)
+		}
+		if set["max-agents"] {
+			fmt.Fprintf(c.Stdout, "%s already has %s\n", pr.Name, agentLimit(pr.MaxAgents))
+		}
 		return 0
 	}
-	cfg.Providers[j].Free = *free
 	if err := cfg.Save(c.Paths.File); err != nil {
 		return c.fail(err)
 	}
-	fmt.Fprintf(c.Stdout, "Marked %s %s\n", args[0], state)
+	if set["free"] {
+		fmt.Fprintf(c.Stdout, "Marked %s %s\n", pr.Name, state)
+	}
+	if set["max-agents"] {
+		fmt.Fprintf(c.Stdout, "%s now has %s\n", pr.Name, agentLimit(pr.MaxAgents))
+	}
 	c.reload()
 	return 0
 }
 
 // removeProvider removes a provider and its key.
 func (c *CLI) removeProvider(args []string) int {
-	cfg, rest, code := c.providerFlags("remove-provider", "NAME", args, 1, nil)
+	cfg, rest, code := c.providerFlags("remove-provider", "NAME", args, 1, nil, nil)
 	if code != 0 {
 		return code
 	}

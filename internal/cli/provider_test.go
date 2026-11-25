@@ -224,3 +224,49 @@ func TestUninstallRemovesProviderKeys(t *testing.T) {
 		t.Errorf("provider key left: %q", v)
 	}
 }
+
+// CLR-243: --max-agents limits the agent turns on a provider at once, over
+// every project; add-provider and set-provider set it, set-provider 0
+// removes it, list-providers shows it, and --free stays as it was.
+func TestProviderMaxAgents(t *testing.T) {
+	c, out, errb := newCLI(t, lines(""))
+	run := func(code int, args ...string) {
+		t.Helper()
+		if got := c.Run(args); got != code {
+			t.Fatalf("%v: code %d, want %d; stderr %q", args, got, code, errb.String())
+		}
+	}
+	const url = "http://localhost:8080/v1"
+	check := func(free bool, maxAgents int, list string) {
+		t.Helper()
+		want := []config.Provider{{Name: "lan", BaseURL: url, Free: free, MaxAgents: maxAgents}}
+		if got := providers(t, c); !slices.Equal(got, want) {
+			t.Fatalf("providers %v, want %v", got, want)
+		}
+		out.Reset()
+		run(0, "list-providers")
+		if want := "lan\t" + url + "\tno key" + list + "\n"; out.String() != want {
+			t.Errorf("list-providers = %q, want %q", out.String(), want)
+		}
+	}
+	run(1, "add-provider", "--max-agents", "-1", "lan", url)
+	run(1, "add-provider", "--max-agents", "101", "lan", url)
+	run(2, "add-provider", "--max-agents", "two", "lan", url)
+	run(0, "add-provider", "--free", "--max-agents", "2", "lan", url)
+	check(true, 2, "\tfree\tmax 2 agents")
+
+	run(1, "set-provider", "lan", "--max-agents", "-1")
+	run(0, "set-provider", "lan", "--max-agents", "1")
+	check(true, 1, "\tfree\tmax 1 agent")
+	out.Reset()
+	run(0, "set-provider", "lan", "--max-agents", "1")
+	if want := "lan already has at most 1 agent at once\n"; out.String() != want {
+		t.Errorf("unchanged set-provider = %q, want %q", out.String(), want)
+	}
+	out.Reset()
+	run(0, "set-provider", "lan", "--free=false", "--max-agents", "0")
+	if want := "Marked lan not free\nlan now has no agent limit\n"; out.String() != want {
+		t.Errorf("set-provider = %q, want %q", out.String(), want)
+	}
+	check(false, 0, "")
+}

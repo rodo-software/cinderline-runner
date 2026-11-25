@@ -78,6 +78,7 @@ type daemon struct {
 	stopModels context.CancelFunc // ends the fetch for the config before
 	ended      chan *slot         // a slot's loop has ended
 	budget     *run.Budget        // the memory every project's runs share, one for the process
+	turns      *run.ProviderTurns // the turns in flight on each provider, over every project and config, one for the process
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -100,7 +101,7 @@ func Run(ctx context.Context, o Options) error {
 	defer lf.Close()
 	f, isFile := o.Verbose.(*os.File)
 	log := logger(lf, o.Verbose, isFile && term.IsTerminal(int(f.Fd())))
-	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}, budget: run.NewBudget(dockerMemory)}
+	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}, budget: run.NewBudget(dockerMemory), turns: &run.ProviderTurns{}}
 	defer func() { d.stopModels() }()
 
 	reloads := make(chan chan error)
@@ -279,7 +280,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 		log.Error("project not started", "project", p.Key, "err", err)
 		return nil, err
 	}
-	proj.KeepFor, proj.MinFree, proj.Others, proj.Models, proj.StrictHosts, proj.Budget = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, d.models, cfg.StrictHosts, d.budget
+	proj.KeepFor, proj.MinFree, proj.Others, proj.Models, proj.StrictHosts, proj.Budget, proj.Turns = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, d.models, cfg.StrictHosts, d.budget, d.turns
 	s := &slot{id: p.ID(), proj: proj, drain: make(chan struct{})}
 	d.mu.Lock()
 	d.slots[s.id] = s

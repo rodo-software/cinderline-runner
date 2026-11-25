@@ -457,6 +457,7 @@ func TestValidateProviders(t *testing.T) {
 		{{Name: "local-1", BaseURL: "http://localhost:11434/v1"}, {Name: "lan", BaseURL: "https://192.168.1.5/v1"}},
 		{{Name: "v6", BaseURL: "http://[::1]:8080"}},
 		{{Name: "plain", BaseURL: "https://llm.example.com"}},
+		{{Name: "limited", BaseURL: "http://h:1/v1", MaxAgents: 1}, {Name: "most", BaseURL: "http://g:1/v1", MaxAgents: MaxProviderAgents}},
 	} {
 		if err := (&Config{Projects: []Project{ok}, Providers: good}).Validate(); err != nil {
 			t.Errorf("%+v: %v", good, err)
@@ -480,6 +481,8 @@ func TestValidateProviders(t *testing.T) {
 		"port too high": {{Name: "a", BaseURL: "http://h:70000/v1"}},
 		"space":         {{Name: "a", BaseURL: "http://h:1/v 1"}},
 		"bad host":      {{Name: "a", BaseURL: "http://h*st:1/v1"}},
+		"negative max":  {{Name: "a", BaseURL: "http://h:1/v1", MaxAgents: -1}},
+		"max too high":  {{Name: "a", BaseURL: "http://h:1/v1", MaxAgents: MaxProviderAgents + 1}},
 	} {
 		if err := (&Config{Projects: []Project{ok}, Providers: bad}).Validate(); err == nil || !strings.Contains(err.Error(), "provider") {
 			t.Errorf("%s: err = %v, want a provider error", name, err)

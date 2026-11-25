@@ -77,6 +77,9 @@ type Project struct {
 	// Budget is the runner's memory budget, which every project's runs
 	// share (decision 2026-11-24-agent-memory-limit); nil: none.
 	Budget *Budget
+	// Turns are the agent turns in flight on each of the runner's providers,
+	// which every project's runs share, for their max_agents (CLR-243); nil: no limit.
+	Turns *ProviderTurns
 
 	// Set only by NewProject; nil in tests.
 	deleteSession func(ctx context.Context, ref, session string) error                                      // a session's files on the state volume

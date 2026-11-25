@@ -202,19 +202,29 @@ type Project struct {
 // Provider is an OpenAI-compatible model endpoint an OpenCode agent names
 // as "<Name>/<model id>". Free says its models cost nothing per token, as
 // whoever added it marked it (decision 2026-11-19-free-model-providers).
+// MaxAgents is the most agent turns on it at once, over every project of
+// the runner, 0 to MaxProviderAgents; 0 is no limit (CLR-243).
 type Provider struct {
-	Name    string `json:"name"`
-	BaseURL string `json:"base_url"`
-	Free    bool   `json:"free,omitempty"`
+	Name      string `json:"name"`
+	BaseURL   string `json:"base_url"`
+	Free      bool   `json:"free,omitempty"`
+	MaxAgents int    `json:"max_agents,omitempty"`
 }
+
+// MaxProviderAgents is the most a provider's max_agents may be.
+const MaxProviderAgents = 100
 
 // providerName is what a provider's name may be; the report caps names at 50.
 var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
 
 // Validate reports a name that is not lower-case letters, digits and dashes
-// or is openrouter, which OpenCode already has, or a base URL that is not
-// http(s)://host[:port][/path], without user info, query or fragment.
+// or is openrouter, which OpenCode already has, a base URL that is not
+// http(s)://host[:port][/path], without user info, query or fragment, or a
+// max_agents out of range.
 func (p Provider) Validate() error {
+	if p.MaxAgents < 0 || p.MaxAgents > MaxProviderAgents {
+		return fmt.Errorf("provider %s: max_agents must be 0 (no limit) to %d", p.Name, MaxProviderAgents)
+	}
 	if !providerName.MatchString(p.Name) || p.Name == "openrouter" {
 		return fmt.Errorf("provider name %q must be up to 50 lower-case letters, digits and dashes, and not openrouter", p.Name)
 	}

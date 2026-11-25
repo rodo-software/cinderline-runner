@@ -88,7 +88,7 @@ func (c *CLI) key(args []string) int {
 // providerKey sets or deletes the runner-wide key of the runner's provider
 // pr (decision 2026-11-17-local-model-providers); it takes no --project.
 func (c *CLI) providerKey(verb, pr string, args []string) int {
-	cfg, _, code := c.providerFlags("key", keyUsage, args, 0, nil)
+	cfg, _, code := c.providerFlags("key", keyUsage, args, 0, nil, nil)
 	if code != 0 {
 		return code
 	}

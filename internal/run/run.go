@@ -16,6 +16,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
@@ -468,9 +469,21 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		}
 	}
 
-	p.Log.Info("turn started", "project", p.Config.Key, "issue", issue, "agent", agent.Name, "session", turn.SessionID)
+	// The wait for the provider is part of the step, so the poll's stop ends it too.
 	tctx, end := p.stoppable(ctx, j.ref)
-	res, err := p.Clients[agent.Client].Run(tctx, turn)
+	res, err := func() (client.Result, error) {
+		if pr, ok := p.turnProvider(agent); ok && p.Turns != nil {
+			waiting := func() {
+				p.Log.Info("turn waits for its model provider", "project", p.Config.Key, "issue", issue, "agent", agent.Name, "provider", pr.Name, "max_agents", pr.MaxAgents)
+			}
+			if err := p.Turns.take(tctx, pr.Name, pr.MaxAgents, waiting); err != nil {
+				return client.Result{}, err
+			}
+			defer p.Turns.done(pr.Name)
+		}
+		p.Log.Info("turn started", "project", p.Config.Key, "issue", issue, "agent", agent.Name, "session", turn.SessionID)
+		return p.Clients[agent.Client].Run(tctx, turn)
+	}()
 	stopped := end()
 	if ctx.Err() != nil {
 		return last, res, ctx.Err()
@@ -524,6 +537,21 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Tail = ptr(res.Tail)
 	}
 	return last, res, nil
+}
+
+// turnProvider is the runner's provider agent's turns go to: an OpenCode
+// agent's model "<provider>/<model id>", read as OpenCode reads it.
+// OpenRouter and the other clients' providers are not the runner's.
+func (p *Project) turnProvider(agent cinderline.TeamAgent) (config.Provider, bool) {
+	n, _, ok := strings.Cut(deref(agent.Model), "/")
+	if agent.Client != "opencode" || !ok {
+		return config.Provider{}, false
+	}
+	i := slices.IndexFunc(p.Providers, func(pr config.Provider) bool { return pr.Name == n })
+	if i < 0 {
+		return config.Provider{}, false
+	}
+	return p.Providers[i], true
 }
 
 // stoppable is ctx for a step of run ref that the poll's stop may end: a
