@@ -430,3 +430,25 @@ func TestForgejoCheckLog(t *testing.T) {
 		t.Errorf("CheckLog of a status without a URL = %q, %v after %d requests", log, err, len(*reqs))
 	}
 }
+
+// CLR-244: a combined failure without a failed status is one check that
+// says so; an external CI's status, such as Woodpecker's, has no log the
+// forge serves, so its log is its description with the reason.
+func TestForgejoFailedWithoutStatusesAndExternalCI(t *testing.T) {
+	const prs = `[{"head":{"label":"cinderline/EMBER-1","ref":"cinderline/EMBER-1","sha":"abc"},"state":"open"}]`
+	f, _, _ := recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{200, prs}, reply{200, `{"state":"error","statuses":[]}`})
+	s, err := f.MergeState(context.Background(), "cinderline/EMBER-1")
+	want := PullState{State: MergeFailed, Head: "abc", Failed: []Check{
+		{Name: "combined status", Description: "The head's combined commit status is error without a failed status.", head: "abc"},
+	}}
+	if err != nil || !reflect.DeepEqual(s, want) {
+		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
+	}
+
+	woodpecker := Check{Name: "ci/woodpecker/pr/test", Description: "Pipeline failed at step test", URL: "https://ci.example.com/repos/1/pipeline/5", head: "abc"}
+	f, _, _ = recordedForgejo(t, "https://git.rodo.nl/willem/cinderline.git", reply{200, `{"workflow_runs":[]}`})
+	log, err := Log(context.Background(), f, woodpecker)
+	if err != nil || !strings.Contains(log, "with the CI that reported it") || !strings.HasSuffix(log, "Pipeline failed at step test") {
+		t.Errorf("Log = %q, %v", log, err)
+	}
+}

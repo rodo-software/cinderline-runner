@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -154,28 +155,39 @@ func (g *GitHub) MergeState(ctx context.Context, branch string) (PullState, erro
 	case pr.State == "closed":
 		return PullState{State: MergeClosed, Head: pr.Head.SHA}, nil
 	}
-	// shortcut: the first 30 check runs only, GitHub's default page; page if a repository runs more on one commit.
-	var checks struct {
-		CheckRuns []struct {
-			ID         int64  `json:"id"`
-			Name       string `json:"name"`
-			Status     string `json:"status"` // queued, in_progress, completed, ...
-			Conclusion string `json:"conclusion"`
-			HTMLURL    string `json:"html_url"`
-			Output     struct {
-				Title   string `json:"title"`
-				Summary string `json:"summary"`
-			} `json:"output"`
-			App struct {
-				Slug string `json:"slug"`
-			} `json:"app"`
-		} `json:"check_runs"`
+	// shortcut: 100 check runs to a page, at most 10 pages.
+	type checkRun struct {
+		ID         int64  `json:"id"`
+		Name       string `json:"name"`
+		Status     string `json:"status"` // queued, in_progress, completed, ...
+		Conclusion string `json:"conclusion"`
+		HTMLURL    string `json:"html_url"`
+		Output     struct {
+			Title   string `json:"title"`
+			Summary string `json:"summary"`
+			Text    string `json:"text"`
+		} `json:"output"`
+		App struct {
+			Slug string `json:"slug"`
+		} `json:"app"`
 	}
-	if err := g.do(ctx, http.MethodGet, g.repo+"/commits/"+url.PathEscape(pr.Head.SHA)+"/check-runs", nil, &checks); err != nil {
-		return PullState{}, err
+	var runs []checkRun
+	commit := g.repo + "/commits/" + url.PathEscape(pr.Head.SHA)
+	for page := 1; page <= 10; page++ {
+		var checks struct {
+			CheckRuns []checkRun `json:"check_runs"`
+		}
+		u := commit + "/check-runs?per_page=100&page=" + strconv.Itoa(page)
+		if err := g.do(ctx, http.MethodGet, u, nil, &checks); err != nil {
+			return PullState{}, err
+		}
+		runs = append(runs, checks.CheckRuns...)
+		if len(checks.CheckRuns) < 100 {
+			break
+		}
 	}
 	s := PullState{State: MergePending, Head: pr.Head.SHA}
-	for _, c := range checks.CheckRuns {
+	for _, c := range runs {
 		if c.Status != "completed" {
 			s.Running = true
 		}
@@ -185,7 +197,29 @@ func (g *GitHub) MergeState(ctx context.Context, branch string) (PullState, erro
 			if c.App.Slug == "github-actions" { // an Actions check run's ID is its job's
 				check.job = strconv.FormatInt(c.ID, 10)
 			}
+			output := []string{strings.TrimSpace(c.Output.Title), strings.TrimSpace(c.Output.Summary), strings.TrimSpace(c.Output.Text)}
+			check.text = strings.Join(slices.DeleteFunc(output, func(s string) bool { return s == "" }), "\n\n")
 			s.Failed = append(s.Failed, check)
+		}
+	}
+	var st struct {
+		Statuses []struct {
+			State       string `json:"state"`
+			Context     string `json:"context"`
+			Description string `json:"description"` // may be null
+			TargetURL   string `json:"target_url"`  // may be null
+		} `json:"statuses"`
+	}
+	if err := g.do(ctx, http.MethodGet, commit+"/status?per_page=100", nil, &st); err != nil {
+		return PullState{}, err
+	}
+	for _, c := range st.Statuses { // the top-level state is ignored: pending when the commit has no statuses
+		switch c.State {
+		case "pending":
+			s.Running = true
+		case "failure", "error":
+			s.State = MergeFailed
+			s.Failed = append(s.Failed, Check{Name: c.Context, Description: c.Description, URL: c.TargetURL})
 		}
 	}
 	return s, nil

@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -76,5 +77,34 @@ func TestLogTail(t *testing.T) {
 	g, _ = recorded(t, "https://github.com/willem/cinderline.git", reply{404, "Not Found"})
 	if _, err := logTail(context.Background(), g.HTTP, "GitHub", "https://api.github.com/x", nil); status(err) != 404 || !strings.Contains(err.Error(), "404: Not Found") {
 		t.Errorf("logTail on a 404 = %v", err)
+	}
+}
+
+// CLR-244: Log is the check's log, read a second time when the first read
+// fails; without one, a line saying why and the forge's text, else the
+// check's description, else a line that says so. Never "".
+func TestLog(t *testing.T) {
+	ctx := context.Background()
+	const external = "No log of this check can be read through the forge's API; its full log, if any, is with the CI that reported it.\n\n"
+	for _, tc := range []struct {
+		name    string
+		check   Check
+		replies []CheckLogReply
+		want    string
+		err     bool
+	}{
+		{"log", Check{Name: "test"}, []CheckLogReply{{Log: "FAIL"}}, "FAIL", false},
+		{"second read", Check{Name: "test"}, []CheckLogReply{{Err: errors.New("timeout")}, {Log: "FAIL"}}, "FAIL", false},
+		{"text", Check{Name: "codecov", Description: "d", text: "Coverage fell 3%"}, []CheckLogReply{{}}, external + "Coverage fell 3%", false},
+		{"description", Check{Name: "jenkins", Description: "Build #4 failed"}, []CheckLogReply{{Log: " \n"}}, external + "Build #4 failed", false},
+		{"nothing", Check{Name: "x"}, []CheckLogReply{{}}, external + "The forge says only that this check failed.", false},
+		{"read fails twice", Check{Name: "test", Description: "exit 1"}, []CheckLogReply{{Err: errors.New("one")}, {Err: &apiError{"GitLab", "GET", "https://gitlab.com/api/v4/x", 403, "403 Forbidden"}}},
+			"Reading this check's log failed: GitLab answered 403: 403 Forbidden\n\nexit 1", true},
+	} {
+		f := &Fake{CheckLogs: tc.replies}
+		got, err := Log(ctx, f, tc.check)
+		if got != tc.want || (err != nil) != tc.err || len(f.CheckLogs) != 0 {
+			t.Errorf("%s: Log = %q, %v with %d replies left; want %q", tc.name, got, err, len(f.CheckLogs), tc.want)
+		}
 	}
 }

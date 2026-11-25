@@ -131,7 +131,8 @@ func TestStepFacts(t *testing.T) {
 		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"), Conflicts: []string{"a.go"}}},
 		// CLR-201: a failure on an earlier push's head does not end the wait;
 		// one on the pushed head ends it once no check runs, with every
-		// failed check, a log that cannot be read left out.
+		// failed check; a log that cannot be read twice is the forge's text
+		// and the error (CLR-244).
 		{"publish CI failed", `{"kind":"publish","merge":true}`, func(f *fixture) {
 			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}
 			f.fg.PullRequests = []forge.PullRequestReply{{PullRequest: forge.PullRequest{URL: "u"}}}
@@ -142,9 +143,10 @@ func TestStepFacts(t *testing.T) {
 				{State: forge.MergeFailed, Head: "abc123", Running: true, Failed: []forge.Check{test}},
 				{State: forge.MergeFailed, Head: "abc123", Failed: []forge.Check{test, lint}},
 			}
-			f.fg.CheckLogs = []forge.CheckLogReply{{Log: "--- FAIL: TestX"}, {Err: errors.New("403")}}
+			f.fg.CheckLogs = []forge.CheckLogReply{{Log: "--- FAIL: TestX"}, {Err: errors.New("403")}, {Err: errors.New("403")}}
 		}, cinderline.LastStep{Step: "publish", Issue: "CSR-1", Outcome: "published", PullRequest: ptr("u"), Merge: ptr("failed"), Commit: ptr("abc123"),
-			Checks: []cinderline.FailedCheck{{Name: "test", Description: "exit 1", URL: "t", Log: "--- FAIL: TestX"}, {Name: "lint"}}}},
+			Checks: []cinderline.FailedCheck{{Name: "test", Description: "exit 1", URL: "t", Log: "--- FAIL: TestX"},
+				{Name: "lint", Log: "Reading this check's log failed: 403\n\nThe forge says only that this check failed."}}}},
 		// CLR-201: a merge the forge refused has no checks.
 		{"publish merge refused", `{"kind":"publish","merge":true}`, func(f *fixture) {
 			f.ws.Ancestors = []workspace.IsAncestorReply{{Yes: false}}

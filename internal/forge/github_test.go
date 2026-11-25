@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -305,31 +306,42 @@ func TestGitHubRequestMergeRefused(t *testing.T) {
 // pull requests" (the merge wait reads MergeState by branch, decision 0091).
 func TestGitHubMergeState(t *testing.T) {
 	const list = "GET https://api.github.com/repos/willem/cinderline/pulls?state=all&head=willem%3Acinderline%2FEMBER-1"
-	const checks = "GET https://api.github.com/repos/willem/cinderline/commits/abc/check-runs"
+	const checks = "GET https://api.github.com/repos/willem/cinderline/commits/abc/check-runs?per_page=100&page=1"
+	const combined = "GET https://api.github.com/repos/willem/cinderline/commits/abc/status?per_page=100"
 	pr := func(fields string) reply {
 		return reply{200, `[{"head":{"sha":"abc"},"merged_at":null,` + fields + `}]`}
 	}
+	none := reply{200, `{"state":"pending","statuses":[]}`} // GitHub's combined state of a commit without statuses
 	for _, tt := range []struct {
 		name    string
 		replies []reply
 		want    MergeState
+		running bool
 		urls    []string
 	}{
-		{"merged", []reply{pr(`"merged_at":"2026-11-04T10:00:00Z","state":"closed"`)}, MergeMerged, []string{list}},
-		{"closed", []reply{pr(`"state":"closed"`)}, MergeClosed, []string{list}},
+		{"merged", []reply{pr(`"merged_at":"2026-11-04T10:00:00Z","state":"closed"`)}, MergeMerged, false, []string{list}},
+		{"closed", []reply{pr(`"state":"closed"`)}, MergeClosed, false, []string{list}},
 		{"failed checks", []reply{pr(`"state":"open"`),
-			{200, `{"check_runs":[{"conclusion":"success"},{"conclusion":"timed_out"}]}`}}, MergeFailed, []string{list, checks}},
+			{200, `{"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"timed_out"}]}`}, none}, MergeFailed, false, []string{list, checks, combined}},
 		{"cancelled checks", []reply{pr(`"state":"open"`),
-			{200, `{"check_runs":[{"conclusion":"cancelled"}]}`}}, MergeFailed, []string{list, checks}},
+			{200, `{"check_runs":[{"status":"completed","conclusion":"cancelled"}]}`}, none}, MergeFailed, false, []string{list, checks, combined}},
 		{"running checks", []reply{pr(`"state":"open"`),
-			{200, `{"check_runs":[{"conclusion":null}]}`}}, MergePending, []string{list, checks}},
-		{"none", []reply{{200, `[]`}}, "", []string{list}},
+			{200, `{"check_runs":[{"status":"in_progress","conclusion":null}]}`}, none}, MergePending, true, []string{list, checks, combined}},
+		{"no checks", []reply{pr(`"state":"open"`), {200, `{"check_runs":[]}`}, none}, MergePending, false, []string{list, checks, combined}},
+		// CLR-244: commit statuses, which external CI sets, count too.
+		{"failed status", []reply{pr(`"state":"open"`), {200, `{"check_runs":[]}`},
+			{200, `{"state":"failure","statuses":[{"state":"failure","context":"ci/jenkins"}]}`}}, MergeFailed, false, []string{list, checks, combined}},
+		{"erred status", []reply{pr(`"state":"open"`), {200, `{"check_runs":[]}`},
+			{200, `{"state":"error","statuses":[{"state":"error","context":"ci/jenkins"}]}`}}, MergeFailed, false, []string{list, checks, combined}},
+		{"pending status", []reply{pr(`"state":"open"`), {200, `{"check_runs":[]}`},
+			{200, `{"state":"pending","statuses":[{"state":"pending","context":"ci/jenkins"},{"state":"success","context":"ci/other"}]}`}}, MergePending, true, []string{list, checks, combined}},
+		{"none", []reply{{200, `[]`}}, "", false, []string{list}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			g, reqs := recorded(t, "https://github.com/willem/cinderline.git", tt.replies...)
 			s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
-			if s.State != tt.want || err != nil {
-				t.Errorf("MergeState = %q, %v; want %q", s.State, err, tt.want)
+			if s.State != tt.want || s.Running != tt.running || err != nil {
+				t.Errorf("MergeState = %q running %v, %v; want %q running %v", s.State, s.Running, err, tt.want, tt.running)
 			}
 			wantURLs(t, *reqs, tt.urls...)
 			if (*reqs)[0].header.Get("Authorization") != "Bearer "+testToken {
@@ -337,6 +349,28 @@ func TestGitHubMergeState(t *testing.T) {
 			}
 		})
 	}
+}
+
+// CLR-244: check runs are read 100 to a page until a page is not full, and
+// a failure on a later page counts.
+func TestGitHubMergeStatePagesCheckRuns(t *testing.T) {
+	passed := make([]string, 100)
+	for i := range passed {
+		passed[i] = `{"id":` + strconv.Itoa(i) + `,"name":"ok","status":"completed","conclusion":"success"}`
+	}
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git",
+		reply{200, `[{"head":{"sha":"abc"},"state":"open"}]`},
+		reply{200, `{"total_count":101,"check_runs":[` + strings.Join(passed, ",") + `]}`},
+		reply{200, `{"total_count":101,"check_runs":[{"id":500,"name":"late","status":"completed","conclusion":"failure","app":{"slug":"github-actions"}}]}`},
+		reply{200, `{"state":"success","statuses":[]}`})
+	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
+	want := PullState{State: MergeFailed, Head: "abc", Failed: []Check{{Name: "late", job: "500"}}}
+	if err != nil || !reflect.DeepEqual(s, want) {
+		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
+	}
+	const commit = "GET https://api.github.com/repos/willem/cinderline/commits/abc"
+	wantURLs(t, *reqs, "GET https://api.github.com/repos/willem/cinderline/pulls?state=all&head=willem%3Acinderline%2FEMBER-1",
+		commit+"/check-runs?per_page=100&page=1", commit+"/check-runs?per_page=100&page=2", commit+"/status?per_page=100")
 }
 
 // pullRequestOutcome throws on an error answer (GitHub).
@@ -367,7 +401,10 @@ func TestGitHubMergeStateAfterBranchDeletion(t *testing.T) {
 
 // CLR-201: the failed checks are the check runs that failed, timed out or
 // were cancelled, described by their output's title, else its summary; one
-// not completed is running. Only a GitHub Actions run has a log.
+// not completed is running. Only a GitHub Actions run has a log. CLR-244:
+// then the commit statuses that failed or erred, described by their
+// description; a pending one is running. A check run keeps its output's
+// title, summary and text as the text sent without a log.
 func TestGitHubFailedChecks(t *testing.T) {
 	g, _ := recorded(t, "https://github.com/willem/cinderline.git",
 		reply{200, `[{"head":{"sha":"abc"},"state":"open"}]`},
@@ -375,19 +412,37 @@ func TestGitHubFailedChecks(t *testing.T) {
 			`{"id":11,"name":"test","status":"completed","conclusion":"failure","html_url":"https://github.com/willem/cinderline/actions/runs/1/job/11","output":{"title":"Process completed with exit code 1.","summary":"s"},"app":{"slug":"github-actions"}},` +
 			`{"id":12,"name":"lint","status":"completed","conclusion":"timed_out","html_url":"h12","output":{"title":null,"summary":"Timed out"},"app":{"slug":"github-actions"}},` +
 			`{"id":13,"name":"coverage","status":"completed","conclusion":"cancelled","html_url":"h13","output":{},"app":{"slug":"codecov"}},` +
+			`{"id":16,"name":"sonar","status":"completed","conclusion":"failure","html_url":"h16","output":{"title":"Quality gate failed","summary":"2 new bugs","text":"bug in a.go:3\nbug in b.go:9"},"app":{"slug":"sonarcloud"}},` +
 			`{"id":14,"name":"race","status":"in_progress","conclusion":null,"app":{"slug":"github-actions"}},` +
-			`{"id":15,"name":"vet","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}]}`})
+			`{"id":15,"name":"vet","status":"completed","conclusion":"success","app":{"slug":"github-actions"}}]}`},
+		reply{200, `{"state":"failure","statuses":[` +
+			`{"state":"failure","context":"continuous-integration/jenkins","description":"This commit cannot be built","target_url":"https://ci.example.com/job/7"},` +
+			`{"state":"error","context":"buildkite","description":null,"target_url":null},` +
+			`{"state":"success","context":"ci/ok"}]}`})
 	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
 	want := PullState{State: MergeFailed, Head: "abc", Running: true, Failed: []Check{
-		{Name: "test", Description: "Process completed with exit code 1.", URL: "https://github.com/willem/cinderline/actions/runs/1/job/11", job: "11"},
-		{Name: "lint", Description: "Timed out", URL: "h12", job: "12"},
+		{Name: "test", Description: "Process completed with exit code 1.", URL: "https://github.com/willem/cinderline/actions/runs/1/job/11", job: "11", text: "Process completed with exit code 1.\n\ns"},
+		{Name: "lint", Description: "Timed out", URL: "h12", job: "12", text: "Timed out"},
 		{Name: "coverage", URL: "h13"},
+		{Name: "sonar", Description: "Quality gate failed", URL: "h16", text: "Quality gate failed\n\n2 new bugs\n\nbug in a.go:3\nbug in b.go:9"},
+		{Name: "continuous-integration/jenkins", Description: "This commit cannot be built", URL: "https://ci.example.com/job/7"},
+		{Name: "buildkite"},
 	}}
 	if err != nil || !reflect.DeepEqual(s, want) {
 		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
 	}
 
-	g, reqs := recorded(t, "https://github.com/willem/cinderline.git", reply{200, "##[error]exit 1"})
+	// A third-party app's check run and an external status have no log the
+	// runner reads: their text is sent, read without a request.
+	g, reqs := recorded(t, "https://github.com/willem/cinderline.git")
+	if log, err := Log(context.Background(), g, want.Failed[3]); err != nil || !strings.Contains(log, "with the CI that reported it") || !strings.HasSuffix(log, "bug in b.go:9") || len(*reqs) != 0 {
+		t.Errorf("Log of a third-party check run = %q, %v after %d requests", log, err, len(*reqs))
+	}
+	if log, err := Log(context.Background(), g, want.Failed[4]); err != nil || !strings.HasSuffix(log, "This commit cannot be built") || len(*reqs) != 0 {
+		t.Errorf("Log of an external status = %q, %v after %d requests", log, err, len(*reqs))
+	}
+
+	g, reqs = recorded(t, "https://github.com/willem/cinderline.git", reply{200, "##[error]exit 1"})
 	if log, err := g.CheckLog(context.Background(), want.Failed[0]); log != "##[error]exit 1" || err != nil {
 		t.Errorf("CheckLog = %q, %v", log, err)
 	}

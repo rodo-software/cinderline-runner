@@ -179,14 +179,15 @@ func sameCommit(head, pushed string) bool {
 }
 
 // failedChecks is the forge's failed checks as the app takes them, the
-// first cinderline.MaxChecks, each with the end of its log. A log that
-// cannot be read is left out and logged, never failing the step (CLR-201).
+// first cinderline.MaxChecks, each with forge.Log: the end of its log, else
+// the forge's words on it. A log that cannot be read is logged, never
+// failing the step (CLR-201).
 func failedChecks(ctx context.Context, fg forge.Forge, log *slog.Logger, failed []forge.Check) []cinderline.FailedCheck {
 	out := []cinderline.FailedCheck{}
 	for _, c := range failed[:min(len(failed), cinderline.MaxChecks)] {
-		text, err := fg.CheckLog(ctx, c)
+		text, err := forge.Log(ctx, fg, c)
 		if err != nil && ctx.Err() == nil {
-			log.Warn("CI log not read, the check is sent without it", "check", c.Name, "err", err)
+			log.Warn("CI log not read, the check is sent with the forge's text", "check", c.Name, "err", err)
 		}
 		out = append(out, cinderline.FailedCheck{Name: c.Name, Description: c.Description, URL: c.URL, Log: text})
 	}

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -564,5 +565,19 @@ func TestFailedChecksFitAndAreRedacted(t *testing.T) {
 	}
 	if strings.Contains(s.bodies[2], "checks") {
 		t.Errorf("sent %s, want no checks", s.bodies[2])
+	}
+}
+
+// CLR-244: no text of a check carries a URL (CL-375); its URL field keeps its own.
+func TestFailedChecksLoseTheirURLs(t *testing.T) {
+	got := checks([]FailedCheck{{
+		Name:        "ci https://ci.example/x",
+		Description: "see https://ci.example.com/build/7?x=1 (details)",
+		URL:         "https://ci.example.com/build/7",
+		Log:         "fetch \"http://127.0.0.1:8080/a\" failed\nssh://git@host/r.git",
+	}})
+	want := []FailedCheck{{Name: "ci <URL>", Description: "see <URL> (details)", URL: "https://ci.example.com/build/7", Log: "fetch \"<URL>\" failed\n<URL>"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("checks = %+v\nwant %+v", got, want)
 	}
 }

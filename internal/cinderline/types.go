@@ -93,7 +93,7 @@ type ReviewFact struct {
 
 // FailedCheck is a CI check that failed on a pull request's head. Its
 // texts are the forge's and the CI's, untrusted; Log is the end of its log,
-// "" when the runner could not read one.
+// else the forge's own text on it with why there is none (forge.Log).
 type FailedCheck struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`

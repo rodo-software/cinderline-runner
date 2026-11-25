@@ -7,6 +7,7 @@ package forge
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +37,8 @@ type Forge interface {
 	// no pull request numbers (0091).
 	MergeState(ctx context.Context, branch string) (PullState, error)
 	// CheckLog is the end of the log of a check MergeState named, at most
-	// logBytes; "" and no error when the forge has no log of it the runner can read.
+	// logBytes; "" and no error when the forge has no log of it the runner
+	// can read. The runner reads it through Log.
 	CheckLog(ctx context.Context, c Check) (string, error)
 }
 
@@ -81,6 +83,39 @@ type Check struct {
 
 	job  string // the forge's ID of the job whose log CheckLog reads; "": none
 	head string // the head commit, for Forgejo, which finds the job by it
+	text string // the forge's own words on the failure beyond Description, which Log sends without a log; "": none
+}
+
+// Log is what the runner sends as the log of the failed check c, never ""
+// (CLR-244): the agent cannot reach the forge, so this is all it gets. It
+// is the end of the check's CI log, read a second time when the first read
+// fails; without one, the forge's own words on the failure (its text, else
+// Description), after a line saying why there is no log. err is the read's
+// failure, for the runner's own log. URLs are left in: the app client
+// strips them from every text of a check.
+func Log(ctx context.Context, f Forge, c Check) (string, error) {
+	log, err := f.CheckLog(ctx, c)
+	if err != nil && ctx.Err() == nil {
+		log, err = f.CheckLog(ctx, c)
+	}
+	if err == nil && strings.TrimSpace(log) != "" {
+		return log, nil
+	}
+	why := "No log of this check can be read through the forge's API; its full log, if any, is with the CI that reported it."
+	if err != nil {
+		why = "Reading this check's log failed: " + shortError(err)
+	}
+	text := cmp.Or(strings.TrimSpace(c.text), strings.TrimSpace(c.Description), "The forge says only that this check failed.")
+	return why + "\n\n" + text, err
+}
+
+// shortError is err without the request's URL when it is a forge's answer.
+func shortError(err error) string {
+	var e *apiError
+	if errors.As(err, &e) {
+		return fmt.Sprintf("%s answered %d: %s", e.forge, e.status, e.message)
+	}
+	return err.Error()
 }
 
 // logBytes is how much of the end of a check's log CheckLog reads: enough
@@ -219,6 +254,11 @@ func do(ctx context.Context, hc *http.Client, forge, method, u string, header ma
 // log, which is read to its end and only its end kept. header is the
 // forge's authentication, and its Accept when plain text is not right.
 func logTail(ctx context.Context, hc *http.Client, forge, u string, header map[string]string) (string, error) {
+	return logTailMessage(ctx, hc, forge, u, header, func(data []byte) string { return textStart(string(data)) })
+}
+
+// logTailMessage is logTail, reading the error answer's message with message.
+func logTailMessage(ctx context.Context, hc *http.Client, forge, u string, header map[string]string, message func([]byte) string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
@@ -236,7 +276,7 @@ func logTail(ctx context.Context, hc *http.Client, forge, u string, header map[s
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-		return "", &apiError{forge, http.MethodGet, u, resp.StatusCode, textStart(string(data))}
+		return "", &apiError{forge, http.MethodGet, u, resp.StatusCode, message(data)}
 	}
 	t := &tail{n: logBytes}
 	if _, err := io.Copy(t, resp.Body); err != nil {

@@ -184,7 +184,7 @@ func TestBitbucketRequestMerge(t *testing.T) {
 // build statuses of its head commit, as the other forges.
 func TestBitbucketMergeState(t *testing.T) {
 	const list = "GET " + bbPulls + "?q=source.branch.name%3D%22cinderline%2FEMB-3%22&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&sort=-created_on"
-	const statuses = "GET " + bbRepo + "/commit/abc123/statuses"
+	const statuses = "GET " + bbRepo + "/commit/abc123/statuses?pagelen=100"
 	pr := func(state string) reply {
 		return reply{200, `{"values":[` + strings.Replace(bbPR, `"OPEN"`, `"`+state+`"`, 1) + `]}`}
 	}
@@ -237,22 +237,78 @@ func TestBitbucketMergeStateError(t *testing.T) {
 
 // CLR-201: the failed checks are the head's FAILED and STOPPED build
 // statuses, named by their name, else their key; one in progress is
-// running. Bitbucket has no log the runner reads.
+// running. CLR-244: a Bitbucket Pipelines build, whose status links its
+// results page by build number, has a log; another CI's has its
+// description.
 func TestBitbucketFailedChecks(t *testing.T) {
 	b, _ := recordedBitbucket(t, reply{200, `{"values":[` + bbPR + `]}`},
 		reply{200, `{"values":[{"state":"FAILED","key":"k1","name":"Pipeline #12 for cinderline/EMB-3","description":"1 of 2 steps failed","url":"https://bitbucket.org/ws/repo/pipelines/results/12"},` +
 			`{"state":"STOPPED","key":"jenkins","name":"","description":"","url":"https://ci.example.com/1"},` +
+			`{"state":"FAILED","key":"k4","name":"Pipeline #13","description":"","url":"https://bitbucket.org/ws/repo/addon/pipelines/home#!/results/13"},` +
 			`{"state":"INPROGRESS","key":"k3","name":"lint"}]}`})
 	s, err := b.MergeState(context.Background(), "cinderline/EMB-3")
 	want := PullState{State: MergeFailed, Head: "abc123", Running: true, Failed: []Check{
-		{Name: "Pipeline #12 for cinderline/EMB-3", Description: "1 of 2 steps failed", URL: "https://bitbucket.org/ws/repo/pipelines/results/12"},
+		{Name: "Pipeline #12 for cinderline/EMB-3", Description: "1 of 2 steps failed", URL: "https://bitbucket.org/ws/repo/pipelines/results/12", job: "12"},
 		{Name: "jenkins", URL: "https://ci.example.com/1"},
+		{Name: "Pipeline #13", URL: "https://bitbucket.org/ws/repo/addon/pipelines/home#!/results/13", job: "13"},
 	}}
 	if err != nil || !reflect.DeepEqual(s, want) {
 		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
 	}
-	if log, err := b.CheckLog(context.Background(), want.Failed[0]); log != "" || err != nil {
+
+	// The log of a Pipelines build is the log of its first failed step.
+	const pipeline = "GET " + bbRepo + "/pipelines/%7Bp-uuid%7D"
+	b, reqs := recordedBitbucket(t,
+		reply{200, `{"uuid":"{p-uuid}","build_number":12}`},
+		reply{200, `{"values":[{"uuid":"{s1}","name":"build","state":{"name":"COMPLETED","result":{"name":"SUCCESSFUL"}}},` +
+			`{"uuid":"{s2}","name":"test","state":{"name":"COMPLETED","result":{"name":"FAILED"}}},` +
+			`{"uuid":"{s3}","name":"deploy","state":{"name":"COMPLETED","result":{"name":"ERROR"}}}]}`},
+		reply{206, "+ go test ./...\n--- FAIL: TestX"})
+	if log, err := b.CheckLog(context.Background(), want.Failed[0]); log != "+ go test ./...\n--- FAIL: TestX" || err != nil {
 		t.Errorf("CheckLog = %q, %v", log, err)
+	}
+	wantURLs(t, *reqs, "GET "+bbRepo+"/pipelines/12", pipeline+"/steps?pagelen=100", pipeline+"/steps/%7Bs2%7D/log")
+	if len(*reqs) != 3 {
+		t.FailNow()
+	}
+	if h := (*reqs)[2].header; h.Get("Authorization") != "Bearer "+testToken || h.Get("Range") == "" {
+		t.Errorf("log request header = %v", h)
+	}
+
+	// A pipeline without a failed step has no log; another CI's build reads
+	// nothing; both send their text.
+	b, reqs = recordedBitbucket(t, reply{200, `{"uuid":"{p-uuid}"}`},
+		reply{200, `{"values":[{"uuid":"{s1}","state":{"name":"COMPLETED","result":{"name":"STOPPED"}}}]}`})
+	if log, err := Log(context.Background(), b, want.Failed[2]); err != nil || !strings.HasSuffix(log, "The forge says only that this check failed.") || len(*reqs) != 2 {
+		t.Errorf("Log without a failed step = %q, %v after %d requests", log, err, len(*reqs))
+	}
+	b, reqs = recordedBitbucket(t)
+	jenkins := Check{Name: "jenkins", Description: "Build #7 failed", URL: "https://ci.example.com/1"}
+	if log, err := Log(context.Background(), b, jenkins); err != nil || !strings.Contains(log, "with the CI that reported it") || !strings.HasSuffix(log, "Build #7 failed") || len(*reqs) != 0 {
+		t.Errorf("Log of another CI's build = %q, %v after %d requests", log, err, len(*reqs))
+	}
+
+	// A step log read refused twice sends the error and the description.
+	b, _ = recordedBitbucket(t, reply{404, `{"type":"error","error":{"message":"Pipeline not found"}}`}, reply{404, `{"type":"error","error":{"message":"Pipeline not found"}}`})
+	if log, err := Log(context.Background(), b, want.Failed[0]); status(err) != 404 || log != "Reading this check's log failed: Bitbucket answered 404: Pipeline not found\n\n1 of 2 steps failed" {
+		t.Errorf("Log of a refused read = %q, %v", log, err)
+	}
+}
+
+// CLR-244: build statuses are read 100 to a page, following Bitbucket's
+// next link while it stays in the repository's API, never elsewhere with
+// the token.
+func TestBitbucketPagesBuildStatuses(t *testing.T) {
+	b, reqs := recordedBitbucket(t, reply{200, `{"values":[` + bbPR + `]}`},
+		reply{200, `{"values":[{"state":"SUCCESSFUL","key":"k1"}],"next":"` + bbRepo + `/commit/abc123/statuses?pagelen=100&page=2"}`},
+		reply{200, `{"values":[{"state":"FAILED","key":"k2","name":"late"}],"next":"https://evil.example.com/steal?page=3"}`})
+	s, err := b.MergeState(context.Background(), "cinderline/EMB-3")
+	want := PullState{State: MergeFailed, Head: "abc123", Failed: []Check{{Name: "late"}}}
+	if err != nil || !reflect.DeepEqual(s, want) {
+		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
+	}
+	if got := urls(*reqs); len(got) != 3 || got[1] != "GET "+bbRepo+"/commit/abc123/statuses?pagelen=100" || got[2] != "GET "+bbRepo+"/commit/abc123/statuses?pagelen=100&page=2" {
+		t.Errorf("requests = %q", got)
 	}
 }
 

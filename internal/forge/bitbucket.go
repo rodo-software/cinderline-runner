@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -133,35 +134,89 @@ func (b *Bitbucket) MergeState(ctx context.Context, branch string) (PullState, e
 	case pr.State == "DECLINED" || pr.State == "SUPERSEDED":
 		return PullState{State: MergeClosed, Head: head}, nil
 	}
-	var statuses struct {
-		Values []struct {
-			State       string `json:"state"` // SUCCESSFUL, FAILED, INPROGRESS or STOPPED
-			Key         string `json:"key"`
-			Name        string `json:"name"`
-			Description string `json:"description"`
-			URL         string `json:"url"`
-		} `json:"values"`
+	type status struct {
+		State       string `json:"state"` // SUCCESSFUL, FAILED, INPROGRESS or STOPPED
+		Key         string `json:"key"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		URL         string `json:"url"`
 	}
-	// shortcut: the first page (10) of build statuses only; page if a head commit gets more builds.
-	if err := b.do(ctx, http.MethodGet, b.repo+"/commit/"+url.PathEscape(head)+"/statuses", nil, &statuses); err != nil {
-		return PullState{}, err
+	type page struct {
+		Values []status `json:"values"`
+		Next   string   `json:"next"`
 	}
+	// shortcut: 100 build statuses to a page, at most 10 pages.
+	u := b.repo + "/commit/" + url.PathEscape(head) + "/statuses?pagelen=100"
 	s := PullState{State: MergePending, Head: head}
-	for _, st := range statuses.Values {
-		switch st.State {
-		case "INPROGRESS":
-			s.Running = true
-		case "FAILED", "STOPPED":
-			s.State = MergeFailed
-			s.Failed = append(s.Failed, Check{Name: cmp.Or(st.Name, st.Key), Description: st.Description, URL: st.URL})
+	for n := 1; u != "" && n <= 10; n++ {
+		var p page
+		if err := b.do(ctx, http.MethodGet, u, nil, &p); err != nil {
+			return PullState{}, err
+		}
+		for _, st := range p.Values {
+			switch st.State {
+			case "INPROGRESS":
+				s.Running = true
+			case "FAILED", "STOPPED":
+				s.State = MergeFailed
+				s.Failed = append(s.Failed, Check{Name: cmp.Or(st.Name, st.Key), Description: st.Description, URL: st.URL, job: buildNumber(st.URL)})
+			}
+		}
+		// A next link that leaves the repository's API is not followed: the token never goes elsewhere.
+		u = ""
+		if n := p.Next; strings.HasPrefix(n, b.repo+"/") {
+			u = n
 		}
 	}
 	return s, nil
 }
 
-// CheckLog reads no log: Bitbucket Pipelines' step logs are not read
-// (CLR-201 made them optional), and other CI has none on Bitbucket.
-func (b *Bitbucket) CheckLog(context.Context, Check) (string, error) { return "", nil }
+// pipelinesResults is a Bitbucket Pipelines results page, its build number
+// captured.
+var pipelinesResults = regexp.MustCompile(`^https://bitbucket\.org/[^/]+/[^/]+/(?:pipelines/results|addon/pipelines/home#!/results)/(\d+)(?:[/?#]|$)`)
+
+// buildNumber is the number of a Bitbucket Pipelines results page, else "".
+func buildNumber(u string) string {
+	if m := pipelinesResults.FindStringSubmatch(u); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// CheckLog is the end of the log of the first failed step of the
+// Bitbucket Pipelines build whose number the check's job is; a build of
+// another CI, or one without a failed step, has none.
+func (b *Bitbucket) CheckLog(ctx context.Context, c Check) (string, error) {
+	if c.job == "" {
+		return "", nil
+	}
+	var pipeline struct {
+		UUID string `json:"uuid"`
+	}
+	if err := b.do(ctx, http.MethodGet, b.repo+"/pipelines/"+c.job, nil, &pipeline); err != nil {
+		return "", err
+	}
+	base := b.repo + "/pipelines/" + url.PathEscape(pipeline.UUID)
+	var steps struct {
+		Values []struct {
+			UUID  string `json:"uuid"`
+			State struct {
+				Result struct {
+					Name string `json:"name"`
+				} `json:"result"`
+			} `json:"state"`
+		} `json:"values"`
+	}
+	if err := b.do(ctx, http.MethodGet, base+"/steps?pagelen=100", nil, &steps); err != nil {
+		return "", err
+	}
+	for _, st := range steps.Values {
+		if st.State.Result.Name == "FAILED" || st.State.Result.Name == "ERROR" {
+			return logTailMessage(ctx, b.HTTP, "Bitbucket", base+"/steps/"+url.PathEscape(st.UUID)+"/log", map[string]string{"Authorization": "Bearer " + b.token}, bitbucketMessage)
+		}
+	}
+	return "", nil // no failed step: the check's text is sent instead
+}
 
 // sourceBranch is the escaped query that filters pull requests by source branch.
 func sourceBranch(branch string) string {

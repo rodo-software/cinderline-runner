@@ -153,6 +153,9 @@ func (f *Forgejo) MergeState(ctx context.Context, branch string) (PullState, err
 	if len(s.Failed) > 0 || status.State == "failure" || status.State == "error" {
 		s.State = MergeFailed
 	}
+	if s.State == MergeFailed && len(s.Failed) == 0 { // never failed with nothing to say (CLR-244)
+		s.Failed = []Check{{Name: "combined status", Description: "The head's combined commit status is " + status.State + " without a failed status.", head: pr.Head.SHA}}
+	}
 	return s, nil
 }
 

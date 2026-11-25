@@ -51,6 +51,13 @@ const MaxChecks = 20
 
 // modelID is a model id the app accepts (AgentClient::MODEL_ID); any other
 // id is left out.
+// aURL is a URL in a text: a scheme, ://, and what follows up to a space,
+// a quote or a bracket.
+var aURL = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>()\[\]{}]*`)
+
+// noURLs is s with every URL replaced by "<URL>".
+func noURLs(s string) string { return aURL.ReplaceAllString(s, "<URL>") }
+
 var modelID = regexp.MustCompile(`^[A-Za-z0-9._:/-]{1,150}$`)
 
 // modelIDs is the first maxModels ids of s the app accepts, of at most chars
@@ -117,9 +124,11 @@ func clipAll(s []string, n, chars int) []string {
 	return out
 }
 
-// checks is the first MaxChecks checks with a name, each text redacted and
-// cut to its limit, a log to its end; nil stays nil. One without a name
-// is left out: the app refuses it.
+// checks is the first MaxChecks checks with a name, each text redacted,
+// without URLs and cut to its limit, a log to its end; nil stays nil. One
+// without a name is left out: the app refuses it. Only URL keeps its URL:
+// the agent never gets a forge's URL (CL-375), and the app drops that field
+// from what the agent sees.
 func checks(cs []FailedCheck) []FailedCheck {
 	if cs == nil {
 		return nil
@@ -129,12 +138,12 @@ func checks(cs []FailedCheck) []FailedCheck {
 		if len(out) == MaxChecks {
 			break
 		}
-		if c.Name = clip(redact.String(c.Name), maxCheckName); strings.TrimSpace(c.Name) == "" {
+		if c.Name = clip(redact.String(noURLs(c.Name)), maxCheckName); strings.TrimSpace(c.Name) == "" {
 			continue
 		}
-		c.Description = clip(redact.String(c.Description), maxText)
+		c.Description = clip(redact.String(noURLs(c.Description)), maxText)
 		c.URL = clip(redact.String(c.URL), maxURL)
-		c.Log = clipTail(redact.String(c.Log), maxTail)
+		c.Log = clipTail(redact.String(noURLs(c.Log)), maxTail)
 		out = append(out, c)
 	}
 	return out

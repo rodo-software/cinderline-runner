@@ -180,30 +180,46 @@ func TestGitLabRequestMergeRefused(t *testing.T) {
 
 // pullRequestOutcome on GitLab and "awaitMerge reads GitLab
 // merge requests" (the merge wait reads MergeState by branch, decision 0091).
+// CLR-244: the head commit's statuses are read too, for external CI.
 func TestGitLabMergeState(t *testing.T) {
 	const list = "GET " + mrs + "?source_branch=cinderline%2FEMBER-1&state=all"
 	const one = "GET " + mrs + "/5"
+	const statuses = "GET https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo/repository/commits/abc/statuses?per_page=100"
 	const jobs = "GET https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo/pipelines/9/jobs?scope%5B%5D=failed&scope%5B%5D=canceled&per_page=100"
 	mr := func(state string) reply { return reply{200, `[{"iid":5,"state":"` + state + `"}]`} }
+	pipeline := func(p string) reply { return reply{200, `{"sha":"abc","head_pipeline":` + p + `}`} }
+	none := reply{200, `[]`}
+	job := `[{"id":70,"name":"test","failure_reason":"script_failure","allow_failure":false}]`
 	for _, tt := range []struct {
 		name    string
 		replies []reply
 		want    MergeState
+		running bool
 		urls    []string
 	}{
-		{"merged", []reply{mr("merged")}, MergeMerged, []string{list}},
-		{"closed", []reply{mr("closed")}, MergeClosed, []string{list}},
-		{"failed pipeline", []reply{mr("opened"), {200, `{"head_pipeline":{"id":9,"status":"failed"}}`}, {200, `[]`}}, MergeFailed, []string{list, one, jobs}},
-		{"canceled pipeline", []reply{mr("opened"), {200, `{"head_pipeline":{"id":9,"status":"canceled"}}`}, {200, `[]`}}, MergeFailed, []string{list, one, jobs}},
-		{"running pipeline", []reply{mr("opened"), {200, `{"head_pipeline":{"status":"running"}}`}}, MergePending, []string{list, one}},
-		{"no pipeline", []reply{mr("opened"), {200, `{"head_pipeline":null}`}}, MergePending, []string{list, one}},
-		{"none", []reply{{200, `[]`}}, "", []string{list}},
+		{"merged", []reply{mr("merged")}, MergeMerged, false, []string{list}},
+		{"closed", []reply{mr("closed")}, MergeClosed, false, []string{list}},
+		{"failed pipeline", []reply{mr("opened"), pipeline(`{"id":9,"status":"failed"}`), none, {200, job}}, MergeFailed, false, []string{list, one, statuses, jobs}},
+		{"canceled pipeline", []reply{mr("opened"), pipeline(`{"id":9,"status":"canceled"}`), none, {200, job}}, MergeFailed, false, []string{list, one, statuses, jobs}},
+		{"running pipeline", []reply{mr("opened"), pipeline(`{"id":9,"status":"running"}`), none}, MergePending, true, []string{list, one, statuses}},
+		{"pending pipeline", []reply{mr("opened"), pipeline(`{"id":9,"status":"pending"}`), none}, MergePending, true, []string{list, one, statuses}},
+		{"created pipeline", []reply{mr("opened"), pipeline(`{"id":9,"status":"created"}`), none}, MergePending, true, []string{list, one, statuses}},
+		{"preparing external status", []reply{mr("opened"), pipeline(`null`), {200, `[{"name":"jenkins","status":"preparing"}]`}}, MergePending, true, []string{list, one, statuses}},
+		{"passed pipeline", []reply{mr("opened"), pipeline(`{"id":9,"status":"success"}`), none}, MergePending, false, []string{list, one, statuses}},
+		{"no pipeline", []reply{mr("opened"), pipeline(`null`), none}, MergePending, false, []string{list, one, statuses}},
+		{"failed external status", []reply{mr("opened"), pipeline(`null`), {200, `[{"name":"jenkins","status":"failed","allow_failure":false,"target_url":"https://ci.example.com/7"}]`}},
+			MergeFailed, false, []string{list, one, statuses}},
+		{"allowed external failure", []reply{mr("opened"), pipeline(`null`), {200, `[{"name":"jenkins","status":"failed","allow_failure":true}]`}},
+			MergePending, false, []string{list, one, statuses}},
+		{"running external status", []reply{mr("opened"), pipeline(`{"id":9,"status":"success"}`), {200, `[{"name":"jenkins","status":"running"},{"name":"other","status":"failed"}]`}},
+			MergeFailed, true, []string{list, one, statuses}},
+		{"none", []reply{{200, `[]`}}, "", false, []string{list}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", tt.replies...)
 			s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
-			if s.State != tt.want || err != nil {
-				t.Errorf("MergeState = %q, %v; want %q", s.State, err, tt.want)
+			if s.State != tt.want || s.Running != tt.running || err != nil {
+				t.Errorf("MergeState = %q running %v, %v; want %q running %v", s.State, s.Running, err, tt.want, tt.running)
 			}
 			wantURLs(t, *reqs, tt.urls...)
 			if (*reqs)[0].header.Get("Private-Token") != testToken {
@@ -247,6 +263,7 @@ func TestGitLabFailedChecks(t *testing.T) {
 	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
 		reply{200, `[{"iid":5,"state":"opened"}]`},
 		reply{200, `{"sha":"abc","head_pipeline":{"id":9,"sha":"merge-result","status":"failed"}}`},
+		reply{200, `[]`},
 		reply{200, `[{"id":70,"name":"test","failure_reason":"script_failure","web_url":"https://gitlab.com/group/sub/repo/-/jobs/70","allow_failure":false},` +
 			`{"id":71,"name":"flaky","failure_reason":"script_failure","web_url":"u71","allow_failure":true},` +
 			`{"id":72,"name":"deploy","failure_reason":null,"web_url":"u72","allow_failure":false}]`})
@@ -258,7 +275,8 @@ func TestGitLabFailedChecks(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(s, want) {
 		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
 	}
-	wantURLs(t, *reqs, "GET "+mrs+"?source_branch=cinderline%2FEMBER-1&state=all", "GET "+mrs+"/5", "GET "+project+"/pipelines/9/jobs?scope%5B%5D=failed&scope%5B%5D=canceled&per_page=100")
+	wantURLs(t, *reqs, "GET "+mrs+"?source_branch=cinderline%2FEMBER-1&state=all", "GET "+mrs+"/5", "GET "+project+"/repository/commits/abc/statuses?per_page=100",
+		"GET "+project+"/pipelines/9/jobs?scope%5B%5D=failed&scope%5B%5D=canceled&per_page=100")
 
 	g, reqs = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{200, "\x1b[31;1mERROR: Job failed: exit code 1\x1b[0;m"})
 	if log, err := g.CheckLog(context.Background(), want.Failed[0]); !strings.Contains(log, "exit code 1") || err != nil {
@@ -306,5 +324,70 @@ func TestGitLabSkipsForkMergeRequest(t *testing.T) {
 	g, _ = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{200, `[` + fork + `]`})
 	if s, err := g.MergeState(ctx, "cinderline/EMB-3"); s.State != "" || err != nil {
 		t.Errorf("MergeState with only a fork's = %q, %v; want none", s.State, err)
+	}
+}
+
+// CLR-244: the head commit's failed statuses that are not a GitLab job
+// (whose target is a /-/jobs/ page) are external CI's checks, after the
+// pipeline's failed jobs; their log is their description. A failed
+// pipeline without a failed job or status is one check with what GitLab
+// says of it: its status and its YAML errors.
+func TestGitLabExternalStatusesAndFailedWithoutJobs(t *testing.T) {
+	const project = "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo"
+	g, _ := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
+		reply{200, `[{"iid":5,"state":"opened"}]`},
+		reply{200, `{"sha":"abc","head_pipeline":{"id":9,"status":"failed","web_url":"https://gitlab.com/group/sub/repo/-/pipelines/9"}}`},
+		reply{200, `[{"id":70,"name":"test","status":"failed","allow_failure":false,"target_url":"https://gitlab.com/group/sub/repo/-/jobs/70"},` +
+			`{"id":80,"name":"jenkins","status":"failed","allow_failure":false,"description":"Build #12 failed: 3 tests","target_url":"https://ci.example.com/job/12"},` +
+			`{"id":81,"name":"sonar","status":"canceled","allow_failure":false,"description":null,"target_url":null},` +
+			`{"id":82,"name":"optional","status":"failed","allow_failure":true,"target_url":"https://ci.example.com/job/13"},` +
+			`{"id":83,"name":"docs","status":"success","allow_failure":false,"target_url":"https://ci.example.com/job/14"}]`},
+		reply{200, `[{"id":70,"name":"test","failure_reason":"script_failure","web_url":"https://gitlab.com/group/sub/repo/-/jobs/70","allow_failure":false}]`})
+	s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
+	want := PullState{State: MergeFailed, Head: "abc", Failed: []Check{
+		{Name: "test", Description: "script_failure", URL: "https://gitlab.com/group/sub/repo/-/jobs/70", job: "70"},
+		{Name: "jenkins", Description: "Build #12 failed: 3 tests", URL: "https://ci.example.com/job/12"},
+		{Name: "sonar"},
+	}}
+	if err != nil || !reflect.DeepEqual(s, want) {
+		t.Errorf("MergeState = %+v, %v; want %+v", s, err, want)
+	}
+	g, reqs := recordedGitLab(t, "https://gitlab.com/group/sub/repo.git")
+	if log, err := Log(context.Background(), g, want.Failed[1]); err != nil || !strings.Contains(log, "with the CI that reported it") || !strings.HasSuffix(log, "Build #12 failed: 3 tests") || len(*reqs) != 0 {
+		t.Errorf("Log of an external status = %q, %v after %d requests", log, err, len(*reqs))
+	}
+
+	// A job whose trace is empty, or cannot be read twice, gets its failure reason.
+	g, _ = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{200, ""})
+	if log, err := Log(context.Background(), g, want.Failed[0]); err != nil || !strings.HasSuffix(log, "script_failure") {
+		t.Errorf("Log of an empty trace = %q, %v", log, err)
+	}
+	g, _ = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git", reply{403, `{"message":"403 Forbidden"}`}, reply{403, `{"message":"403 Forbidden"}`})
+	if log, err := Log(context.Background(), g, want.Failed[0]); status(err) != 403 || log != "Reading this check's log failed: GitLab answered 403: 403 Forbidden\n\nscript_failure" {
+		t.Errorf("Log of a trace read twice refused = %q, %v", log, err)
+	}
+
+	for _, tc := range []struct {
+		pipeline string
+		want     Check
+	}{
+		{`{"id":9,"status":"failed","web_url":"https://gitlab.com/group/sub/repo/-/pipelines/9","yaml_errors":"jobs:test config contains unknown keys: scrpt"}`,
+			Check{Name: "pipeline", Description: "pipeline failed", URL: "https://gitlab.com/group/sub/repo/-/pipelines/9",
+				text: "The head pipeline's status is failed without a failed job.\n\nYAML errors: jobs:test config contains unknown keys: scrpt"}},
+		{`{"id":9,"status":"canceled","web_url":"w"}`,
+			Check{Name: "pipeline", Description: "pipeline canceled", URL: "w", text: "The head pipeline's status is canceled without a failed job."}},
+	} {
+		g, reqs = recordedGitLab(t, "https://gitlab.com/group/sub/repo.git",
+			reply{200, `[{"iid":5,"state":"opened"}]`}, reply{200, `{"sha":"abc","head_pipeline":` + tc.pipeline + `}`},
+			reply{200, `[{"id":70,"name":"test","status":"failed","allow_failure":true,"target_url":"https://gitlab.com/group/sub/repo/-/jobs/70"}]`},
+			reply{200, `[{"id":70,"name":"test","failure_reason":"script_failure","allow_failure":true}]`})
+		s, err := g.MergeState(context.Background(), "cinderline/EMBER-1")
+		want := PullState{State: MergeFailed, Head: "abc", Failed: []Check{tc.want}}
+		if err != nil || !reflect.DeepEqual(s, want) {
+			t.Errorf("MergeState without failed jobs = %+v, %v; want %+v", s, err, want)
+		}
+		if len(*reqs) != 4 || !strings.HasPrefix(urls(*reqs)[3], "GET "+project+"/pipelines/9/jobs") {
+			t.Errorf("requests = %q", urls(*reqs))
+		}
 	}
 }
