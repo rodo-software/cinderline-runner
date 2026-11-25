@@ -61,7 +61,9 @@ type kind struct {
 	// allowlist. Without a key the turn uses the stored sign-in (CSR-58),
 	// which also needs the provider's sign-in hosts: decision
 	// 2026-11-09-network-allowlist point 5, unchecked against the CLIs; a
-	// missing one shows up as a refused host.
+	// missing one shows up as a refused host. The CLI's own background
+	// traffic is switched off where it can be, and only otherwise added
+	// here, per client (decision 2026-11-25-client-own-traffic).
 	hosts      func(c *CLI, t Turn) []string
 	check      func(c *CLI, t Turn) error // nil: every turn can start
 	ownSession bool                       // the runner picks a fresh turn's session ID

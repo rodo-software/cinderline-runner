@@ -18,6 +18,10 @@ var gemini = kind{
 	},
 	parse: parseGemini,
 	// The Gemini API, or Vertex AI's global endpoint for an express-mode key.
+	// Not www.googleapis.com: a sign-in turn fetches the account's email from
+	// it only when no account is cached (login caches it), for telemetry,
+	// and runs on without it (0.67.0, CLR-252, decision
+	// 2026-11-25-client-own-traffic).
 	hosts: func(c *CLI, _ Turn) []string {
 		switch {
 		case c.Credential == "":
@@ -64,6 +68,7 @@ func geminiSettingsWithAuth(t Turn, mcpURL string, authType string) string {
 		cfg["model"] = map[string]int{"maxSessionTurns": t.MaxTurns}
 	}
 	cfg["general"] = map[string]bool{"enableAutoUpdate": false, "enableAutoUpdateNotification": false}
+	// Else 0.67.0 posts usage logs to play.googleapis.com (CLR-252).
 	cfg["privacy"] = map[string]bool{"usageStatisticsEnabled": false}
 	if t.Token != "" {
 		// shortcut: workers read the repository's GEMINI.md, which Gemini CLI

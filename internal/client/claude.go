@@ -82,6 +82,9 @@ func claudeArgs(t Turn, session, mcpURL string) []string {
 // sub-issue (app repository decision 2026-11-05-workers-skip-project-files).
 func claudeEnv(credential string, t Turn) []string {
 	// No telemetry or update checks: the proxy would refuse and count them.
+	// In 2.1.316 that is feature flags, bootstrap and event logging, all on
+	// api.anthropic.com; with it a turn reaches only that host (CLR-252,
+	// decision 2026-11-25-client-own-traffic).
 	env := []string{claudeHome, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"}
 	if credential != "" {
 		// A `claude setup-token` token is an OAuth token; anything else is an API key.
