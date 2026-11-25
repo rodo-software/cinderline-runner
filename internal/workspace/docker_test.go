@@ -64,9 +64,10 @@ func TestDockerFetch(t *testing.T) {
 	}
 	want := []execCall{
 		{nil, []string{"docker", "volume", "create", "--label", "cinderline.project=CSR", "cinderline-CSR-repo"}},
-		{nil, helperArgv(projectLabel, noTokenEnv, repoMount, "init", "--quiet", "--bare", "/repo")},
+		{nil, []string{"docker", "run", "--rm", "--label", "cinderline.project=CSR", "--network", "none", "-v", "cinderline-CSR-repo:/repo",
+			"--entrypoint", "sh", GitImage, "-c", initRepoScript, "sh", "/repo"}},
 		{tokenVar, helperArgv(projectLabel, tokenEnv, repoMount,
-			"-C", "/repo", "fetch", "--prune", "--quiet", "--no-tags", "https://git.example.com/o/r.git", "+refs/heads/*:refs/heads/*")},
+			"-C", "/repo", "fetch", "--prune", "--quiet", "--no-tags", "--no-write-fetch-head", "https://git.example.com/o/r.git", "+refs/heads/*:refs/heads/*")},
 	}
 	if !reflect.DeepEqual(*calls, want) {
 		t.Errorf("calls =\n%q\nwant\n%q", *calls, want)
@@ -207,7 +208,7 @@ func TestCommandErrorCommand(t *testing.T) {
 		got = append(got, (&CommandError{Argv: c.Argv}).Command())
 	}
 	want := []string{
-		"docker volume create", "git init", "git fetch", // Fetch
+		"docker volume create", "docker run", "git fetch", // Fetch: init is a script
 		"docker volume create", "docker run", "git clone", "git rev-parse", "git checkout", // Prepare
 		"git fetch", "git log", "git push", "git update-ref", // Push
 	}
@@ -314,9 +315,10 @@ func TestIdentity(t *testing.T) {
 func fetchCalls() []execCall {
 	return []execCall{
 		{nil, []string{"docker", "volume", "create", "--label", "cinderline.project=CSR", "cinderline-CSR-repo"}},
-		{nil, helperArgv(projectLabel, noTokenEnv, repoMount, "init", "--quiet", "--bare", "/repo")},
+		{nil, []string{"docker", "run", "--rm", "--label", "cinderline.project=CSR", "--network", "none", "-v", "cinderline-CSR-repo:/repo",
+			"--entrypoint", "sh", GitImage, "-c", initRepoScript, "sh", "/repo"}},
 		{tokenVar, helperArgv(projectLabel, tokenEnv, repoMount,
-			"-C", "/repo", "fetch", "--prune", "--quiet", "--no-tags", "https://git.example.com/o/r.git", "+refs/heads/*:refs/heads/*")},
+			"-C", "/repo", "fetch", "--prune", "--quiet", "--no-tags", "--no-write-fetch-head", "https://git.example.com/o/r.git", "+refs/heads/*:refs/heads/*")},
 	}
 }
 

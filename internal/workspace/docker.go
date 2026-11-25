@@ -160,13 +160,21 @@ func (d *Docker) Fetch(ctx context.Context) error {
 	if err := d.run(ctx, nil, append(append([]string{"docker", "volume", "create"}, labels...), d.volume("repo"))...); err != nil {
 		return err
 	}
-	if err := d.helper(ctx, labels, false, false, "init", "--quiet", "--bare", RepoPath); err != nil {
+	argv := append(append([]string{"docker", "run", "--rm"}, labels...),
+		"--network", "none", "-v", d.volume("repo")+":"+RepoPath, "--entrypoint", "sh", GitImage, "-c", initRepoScript, "sh", RepoPath)
+	if err := d.run(ctx, nil, argv...); err != nil {
 		return err
 	}
 	// The URL is given on every fetch and push, never stored as a remote, so
-	// a changed repository can't leave the token going to the old one.
-	return d.helper(ctx, labels, true, false, "-C", RepoPath, "fetch", "--prune", "--quiet", "--no-tags", d.Repository, "+refs/heads/*:refs/heads/*")
+	// a changed repository can't leave the token going to the old one, and
+	// no FETCH_HEAD keeps it where the agents read the repo volume.
+	return d.helper(ctx, labels, true, false, "-C", RepoPath, "fetch", "--prune", "--quiet", "--no-tags", "--no-write-fetch-head", d.Repository, "+refs/heads/*:refs/heads/*")
 }
+
+// initRepoScript makes the bare clone at $1 if missing and removes the
+// FETCH_HEAD an older runner's fetch left, which names the forge's URL: an
+// agent never gets it (CL decision 2026-11-25-forge-off-limits-for-agents).
+const initRepoScript = `git init --quiet --bare "$1" && rm -f -- "$1/FETCH_HEAD"`
 
 // Push fetches branch from the agent's clone at dir, mounted read-only and
 // without the token, into the helper's clone, scans the branch's commits for

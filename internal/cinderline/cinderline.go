@@ -190,8 +190,9 @@ func (c *Client) Next(ctx context.Context, ref string, r NextRequest) (NextAnswe
 }
 
 // redacted is r with the texts that can hold an agent's output or an error
-// redacted, and every text and list cut to the app's limits: a tail keeps
-// its end, anything else its start. The caller's r is not changed.
+// redacted, the error's URLs replaced, and every text and list cut to the
+// app's limits: a tail keeps its end, anything else its start. The caller's
+// r is not changed.
 func redacted(r NextRequest) NextRequest {
 	text := func(s *string, n int) *string {
 		if s == nil {
@@ -202,6 +203,12 @@ func redacted(r NextRequest) NextRequest {
 	}
 	if r.Last != nil {
 		l := *r.Last
+		if l.Error != nil {
+			// The app quotes it to agents, which get no forge URL (CL
+			// decision 2026-11-25-forge-off-limits-for-agents).
+			e := noURLs(*l.Error)
+			l.Error = &e
+		}
 		l.Error, l.Report, l.Commits = text(l.Error, maxStepError), text(l.Report, maxLongText), text(l.Commits, maxLongText)
 		l.PullRequest, l.Commit = text(l.PullRequest, maxURL), text(l.Commit, maxCommit)
 		if l.Tail != nil {

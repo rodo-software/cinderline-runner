@@ -121,6 +121,26 @@ func TestNextRedactsWhatItSends(t *testing.T) {
 	}
 }
 
+// A step's error reaches agents through the app's notes, so it names no
+// URL, such as the forge's in a failed push (CL decision
+// 2026-11-25-forge-off-limits-for-agents).
+func TestNextErrorHasNoURLs(t *testing.T) {
+	s := &server{status: []int{200}, body: `{"state":"x","step":{"kind":"done"}}`}
+	c := s.client(t)
+	msg := "docker run --rm alpine/git -C /repo push --quiet https://git.example.com/o/r.git refs/push/b:refs/heads/b: exit status 128\n" +
+		"fatal: unable to access 'https://git.example.com/o/r.git/': Could not resolve host"
+	if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Last: &LastStep{Step: "publish", Outcome: "failed", Error: &msg}}); err != nil {
+		t.Fatal(err)
+	}
+	var next NextRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &next)
+	want := "docker run --rm alpine/git -C /repo push --quiet <URL> refs/push/b:refs/heads/b: exit status 128\n" +
+		"fatal: unable to access '<URL>': Could not resolve host"
+	if next.Last.Error == nil || *next.Last.Error != want {
+		t.Errorf("sent %s", s.bodies[0])
+	}
+}
+
 // The push scan's list is cut to the app's limit, its known secrets first
 // as the scan orders them, and a file name that holds a value is redacted.
 func TestNextSecretsFitAndAreRedacted(t *testing.T) {

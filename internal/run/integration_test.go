@@ -14,6 +14,7 @@ package run
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,27 +47,32 @@ const itCredential = "sk-ant-api-integration"
 type scripted struct {
 	*environment.Docker
 	specs []environment.Spec
+	forge string // the forge's host:port, which the agent must not see
 }
 
 func (s *scripted) Run(ctx context.Context, spec environment.Spec) (string, error) {
 	s.specs = append(s.specs, spec)
-	spec.Cmd = []string{"sh", "-c", agentScript(spec.Issue), "sh"}
+	spec.Cmd = []string{"sh", "-c", agentScript(spec.Issue, s.forge), "sh"}
 	return s.Docker.Run(ctx, spec)
 }
 
 // agentScript checks what a real agent relies on, then does the work: the
 // tools volume's Claude Code runs on the image's libc, the prompt arrives on
 // stdin, the credential arrives by name, the clone is on the issue's branch
-// and is the only folder of the runs volume it sees (CLR-207). It commits hello.txt with the identity
+// and is the only folder of the runs volume it sees (CLR-207), and nothing it
+// can read names the forge's host:port, forge (CL decision
+// 2026-11-25-forge-off-limits-for-agents). It commits hello.txt with the identity
 // the runner set and leaves left.txt for the runner to commit (CSR-169). It
 // ends with Claude Code's JSON result.
-func agentScript(ref string) string {
+func agentScript(ref, forge string) string {
 	return `set -eu
 ` + tools.Path + `/bin/claude --version
 grep '# Your task: ` + ref + `' >/dev/null
 test "$ANTHROPIC_API_KEY" = ` + itCredential + `
 test "$(git rev-parse --abbrev-ref HEAD)" = ` + name.Name + `/` + ref + `
 test "$(ls -A ` + workspace.RunsPath + `)" = ` + ref + `
+if { env; git config --list --show-origin; } | grep -F '` + forge + `'; then exit 1; fi
+if grep -rlsF '` + forge + `' ` + workspace.RepoPath + ` .git | grep .; then exit 1; fi
 echo 'written by the scripted agent' > hello.txt
 git add hello.txt
 git commit --quiet -m 'Add hello.txt'
@@ -98,6 +104,7 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	forgejoURL, token := startForgejo(t, ctx, project)
+	env.forge = strings.TrimPrefix(forgejoURL, "http://")
 	repo := forgejoURL + "/it/repo"
 	createRepo(t, ctx, forgejoURL, token)
 
@@ -142,6 +149,10 @@ func TestIntegrationOneIssueToForgejo(t *testing.T) {
 	}
 	if got := env.specs[0].Cmd[0]; got != tools.Path+"/bin/claude" {
 		t.Errorf("the Claude Client ran %q, want the tools volume's claude", got)
+	}
+	// The agent's real command and environment, its MCP config among them.
+	if s := fmt.Sprint(env.specs[0]); strings.Contains(s, env.forge) {
+		t.Errorf("the agent's spec names the forge %s: %s", env.forge, s)
 	}
 
 	pr, found, err := fg.FindPullRequest(ctx, branch)

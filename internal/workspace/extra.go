@@ -50,11 +50,14 @@ done`
 // fetchExtraScript fetches $3 (a branch or tag, or HEAD for the default
 // branch) of URL $2 into folder $1 of the mount and checks it out. A failure
 // removes the folder, so a run never reads a stale copy. The URL is given on
-// every fetch, never stored as a remote.
+// every fetch, never stored as a remote, and the FETCH_HEAD that names it is
+// removed: an agent never gets a forge's URL (CL decision
+// 2026-11-25-forge-off-limits-for-agents).
 const fetchExtraScript = `d=$PWD/$1
 { [ -d "$d/.git" ] || { mkdir -p "$d" && git init --quiet "$d"; }; } &&
   git -C "$d" fetch --quiet --depth 1 --no-tags "$2" "$3" &&
   git -C "$d" checkout --quiet --force --detach FETCH_HEAD &&
+  rm -f -- "$d/.git/FETCH_HEAD" &&
   git -C "$d" clean --quiet -ffdx ||
   { rm -rf -- "$d"; exit 1; }`
 
