@@ -132,14 +132,17 @@ func opencodeConfig(t Turn, mcpURL string, p *namedProvider) string {
 }
 
 // opencodeEnv is the agent container's environment for an OpenCode turn:
-// its data dir (the sessions) and config dir on the state volume, the
+// its data dir (the sessions) and config dir on the state volume, no fetch
+// of the model catalog from models.opencode.ai (the egress proxy refuses it
+// on every turn; OpenCode then uses the catalog built into its pinned
+// version, and a custom provider declares its model in the config), the
 // project's OpenRouter key or, for a turn on its own provider p, only that
 // provider's key if it has one, the config and, for agents with Cinderline
 // access, the scoped token. Agents without it skip the project's AGENTS.md
 // and opencode.json (app repository decision
 // 2026-11-05-workers-skip-project-files); the config above still applies.
 func opencodeEnv(key string, t Turn, mcpURL string, p *namedProvider) []string {
-	env := []string{"XDG_DATA_HOME=" + StatePath + "/opencode/data", "XDG_CONFIG_HOME=" + StatePath + "/opencode/config"}
+	env := []string{"XDG_DATA_HOME=" + StatePath + "/opencode/data", "XDG_CONFIG_HOME=" + StatePath + "/opencode/config", "OPENCODE_DISABLE_MODELS_FETCH=1"}
 	switch {
 	case p == nil:
 		env = append(env, "OPENROUTER_API_KEY="+key)

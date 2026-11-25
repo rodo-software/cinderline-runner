@@ -102,6 +102,7 @@ func TestOpenCodeEnv(t *testing.T) {
 	want := []string{
 		"XDG_DATA_HOME=/state/opencode/data",
 		"XDG_CONFIG_HOME=/state/opencode/config",
+		"OPENCODE_DISABLE_MODELS_FETCH=1",
 		"OPENROUTER_API_KEY=sk-or-k",
 		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(Turn{MaxTurns: 3, Token: "tok"}, "u", nil),
 		"CINDERLINE_TOKEN=tok",
@@ -114,6 +115,7 @@ func TestOpenCodeEnv(t *testing.T) {
 	want = []string{
 		"XDG_DATA_HOME=/state/opencode/data",
 		"XDG_CONFIG_HOME=/state/opencode/config",
+		"OPENCODE_DISABLE_MODELS_FETCH=1",
 		"OPENROUTER_API_KEY=sk-or-k",
 		"OPENCODE_CONFIG_CONTENT=" + opencodeConfig(Turn{MaxTurns: 3}, "u", nil),
 		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
