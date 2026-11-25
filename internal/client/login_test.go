@@ -48,7 +48,7 @@ func TestLoginArgvCodex(t *testing.T) {
 	}
 	want := append(loginPrefix("WEB", "codex"),
 		"-e", "CODEX_HOME="+StatePath+"/codex",
-		"img:1", "sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`,
+		"img:1", "sh", "-c", `mkdir -p "$CODEX_HOME" && export PATH="/opt/cinderline/rg:$PATH" && exec "$0" "$@"`,
 		tools.Path+"/bin/codex", "login", "--device-auth")
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("argv\n got %q\nwant %q", got, want)

@@ -1,7 +1,7 @@
 // Package tools fills and mounts the tools volume: the pinned agent CLIs (Claude
-// Code, OpenCode, Codex), downloaded on the user's machine from their official
-// sources and checked by hash (EMBER-57), in a read-only volume per pinned set
-// that every agent container mounts. No image of ours carries them, so Claude
+// Code, OpenCode, Codex) and ripgrep, downloaded on the user's machine from
+// their official sources and checked by hash (EMBER-57), in a read-only volume
+// per pinned set that every agent container mounts. No image of ours carries them, so Claude
 // Code is never redistributed (2026-11-04-licences-before-publishing).
 package tools
 
@@ -28,8 +28,13 @@ import (
 
 // Path is where agent containers see the volume: the CLIs (Claude Code, OpenCode,
 // Codex) in Path/bin, Gemini CLI in Path/gemini, node in Path/bin, the ponytail
-// plugin in Path/ponytail and, on musl, OpenCode's and Gemini's libraries in Path/lib.
+// plugin in Path/ponytail, ripgrep in RgDir and, on musl, OpenCode's and
+// Gemini's libraries in Path/lib.
 const Path = "/opt/" + name.Name
+
+// RgDir holds only rg, so that putting it on an agent's PATH adds nothing
+// else: Path/bin on PATH would put the volume's node before the image's.
+const RgDir = Path + "/rg"
 
 // fillScript fills the volume at /t from the checked downloads at /s, then
 // clones ponytail at its pinned tag and refuses any other commit. The
@@ -40,6 +45,7 @@ mkdir -p bin
 cp /s/claude /s/opencode /s/codex /s/codex-code-mode-host bin/
 chmod 755 bin/claude bin/opencode bin/codex bin/codex-code-mode-host
 if [ -f /s/node ]; then cp /s/node bin/ && chmod 755 bin/node; fi
+if [ -f /s/rg ]; then mkdir -p rg && cp /s/rg rg/ && chmod 755 rg/rg; fi
 tar -xzf /s/gemini.tgz && mv package gemini
 git clone --quiet --depth 1 --branch "$2" "$1" ponytail
 test "$(git -C ponytail rev-parse HEAD)" = "$3"
@@ -174,6 +180,15 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 			return err
 		}
 	}
+	if s.RgURL != "" {
+		rgTgz := filepath.Join(staging, "rg.tgz")
+		if err := Download(ctx, hc, s.RgURL, rgTgz, s.RgSHA256); err != nil {
+			return err
+		}
+		if err := Extract(rgTgz, s.RgBinary, filepath.Join(staging, "rg")); err != nil {
+			return err
+		}
+	}
 
 	steps := [][]string{
 		{"docker", "volume", "rm", "--force", vol},
@@ -203,6 +218,7 @@ type set struct {
 	CodexHostURL, CodexHostSHA256, CodexHostBinary string
 	GeminiURL, GeminiSRI                           string
 	NodeURL, NodeSHA256, NodeBinary                string
+	RgURL, RgSHA256, RgBinary                      string
 	PonytailTag                                    string
 	PonytailCommit, LibsImage                      string
 }
@@ -241,6 +257,14 @@ func pinned(arch string, musl bool) (set, error) {
 		s.NodeURL = "https://nodejs.org/dist/v" + NodeVersion + "/" + dir + ".tar.gz"
 		s.NodeSHA256 = nodeSHA256[arch]
 		s.NodeBinary = dir + "/bin/node"
+	}
+	// OpenCode downloads the same targets (1.19.5); none runs on arm64 musl.
+	rgTarget := map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-gnu"}[arch]
+	if arch == "amd64" || !musl {
+		dir := "ripgrep-" + RipgrepVersion + "-" + rgTarget
+		s.RgURL = "https://github.com/BurntSushi/ripgrep/releases/download/" + RipgrepVersion + "/" + dir + ".tar.gz"
+		s.RgSHA256 = ripgrepSHA256[rgTarget]
+		s.RgBinary = dir + "/rg"
 	}
 	return s, nil
 }

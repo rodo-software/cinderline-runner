@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"os/exec"
 	"reflect"
 	"slices"
 	"strings"
@@ -217,7 +218,7 @@ func TestOpenCodeRunFresh(t *testing.T) {
 		Dir:     "/runs/CSR-7",
 		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "--mount", "type=volume,src=cinderline-CSR-runs,dst=/runs/CSR-7,volume-subpath=CSR-7", "-v", "cinderline-CSR-state-opencode:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1", "LD_LIBRARY_PATH=/opt/cinderline/lib"}, opencodeEnv("sk-or-k", turn, "https://cs.example/mcp", nil), wantIdentity),
-		Cmd:     append([]string{"/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
+		Cmd:     append([]string{"sh", "-c", `export PATH="/opt/cinderline/rg:$PATH" && exec "$0" "$@"`, "/opt/cinderline/bin/opencode"}, opencodeArgs(turn)...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
 		Idle:    10 * time.Minute,
@@ -345,5 +346,20 @@ func TestOpenCodeTurnWithoutItsProviderIsNotStarted(t *testing.T) {
 		if !errors.Is(err, ErrNotStarted) || ran || len(env.Calls()) != 0 {
 			t.Errorf("%q: err = %v, docker ran %v, env calls %d; want not started", tt.model, err, ran, len(env.Calls()))
 		}
+	}
+}
+
+// OpenCode and Codex start through rgExec: the tools volume's rg dir comes
+// first on the image's own PATH, and the CLI gets its arguments unchanged
+// (CLR-251).
+func TestRgExecPutsRgFirstOnImagePath(t *testing.T) {
+	cmd := exec.Command("sh", "-c", rgExec, "/bin/sh", "-c", `printf '%s|%s' "$PATH" "$1"`, "x", "a b")
+	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if want := tools.RgDir + ":/usr/bin:/bin|a b"; string(out) != want {
+		t.Fatalf("got %q, want %q", out, want)
 	}
 }

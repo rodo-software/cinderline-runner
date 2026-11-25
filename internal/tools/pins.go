@@ -13,6 +13,9 @@ const (
 	// GeminiVersion is the npm package @google/gemini-cli, a self-contained JS
 	// bundle that needs Node.
 	GeminiVersion = "0.67.0"
+	// RipgrepVersion is the GitHub release of BurntSushi/ripgrep that
+	// OpenCode 1.19.5 downloads when it finds no rg (CLR-251).
+	RipgrepVersion = "15.1.0"
 	// NodeVersion is the nodejs.org release, for glibc images; musl takes node
 	// from muslLibsImage, the same version.
 	NodeVersion  = "22.23.4"
@@ -65,6 +68,15 @@ const geminiSRI = "sha512-lDJfCcYem6/6QZdwZFiGfOu1ZxJJ+j4wsr4HlmcYBfqUHTDXLKDv1M
 var nodeSHA256 = map[string]string{
 	"amd64": "b8492284c76a54baf58d61668dd0e41ee0fc98adabf9503d30f05d08f55b4406",
 	"arm64": "f7a1e486dbc8b286847815b477d4fb5e9fb963ed4489c3e1588853d685f589f9",
+}
+
+// ripgrepSHA256 is per ripgrep target, the SHA-256 of
+// ripgrep-<RipgrepVersion>-<target>.tar.gz as the GitHub release API lists
+// it (assets[].digest). The x86_64 musl build is static and serves glibc and
+// musl images; aarch64 has a glibc build only, so arm64 musl images get no rg.
+var ripgrepSHA256 = map[string]string{
+	"x86_64-unknown-linux-musl": "1c9297be4a084eea7ecaedf93eb03d058d6faae29bbc57ecdaf5063921491599",
+	"aarch64-unknown-linux-gnu": "2b661c6ef508e902f388e9098d9c4c5aca72c87b55922d94abdba830b4dc885e",
 }
 
 // muslLibsImage supplies libstdc++ and libgcc_s, which OpenCode's musl build

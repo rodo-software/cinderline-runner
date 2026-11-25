@@ -194,7 +194,7 @@ func TestCodexRunFresh(t *testing.T) {
 		Dir:     "/runs/CSR-7",
 		Mounts:  []string{"-v", "cinderline-CSR-repo:/repo:ro", "--mount", "type=volume,src=cinderline-CSR-runs,dst=/runs/CSR-7,volume-subpath=CSR-7", "-v", "cinderline-CSR-state-codex:/state", "-v", "tools:/opt/cinderline:ro"},
 		Env:     slices.Concat([]string{"DISABLE_AUTOUPDATER=1"}, codexEnv("sk-oa", turn), wantIdentity),
-		Cmd:     append([]string{"sh", "-c", `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`, "/opt/cinderline/bin/codex"}, codexArgs(turn, "https://cs.example/mcp", "")...),
+		Cmd:     append([]string{"sh", "-c", `mkdir -p "$CODEX_HOME" && export PATH="/opt/cinderline/rg:$PATH" && exec "$0" "$@"`, "/opt/cinderline/bin/codex"}, codexArgs(turn, "https://cs.example/mcp", "")...),
 		Stdin:   "do it",
 		Timeout: 30 * time.Minute,
 		Idle:    10 * time.Minute,

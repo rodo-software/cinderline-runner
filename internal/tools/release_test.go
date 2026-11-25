@@ -14,6 +14,7 @@ func TestReleaseNotesNamePins(t *testing.T) {
 		"OpenCode " + OpenCodeVersion,
 		"Gemini CLI " + GeminiVersion,
 		"Node.js " + NodeVersion,
+		"ripgrep " + RipgrepVersion,
 		"ponytail " + PonytailTag,
 	} {
 		if !strings.Contains(got, want) {

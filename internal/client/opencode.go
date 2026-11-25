@@ -20,7 +20,7 @@ var opencode = kind{
 		return opencodeEnv(c.Credential, t, c.MCPURL, p)
 	},
 	cmd: func(_ *CLI, t Turn, _ string) []string {
-		return append([]string{tools.Path + "/bin/opencode"}, opencodeArgs(t)...)
+		return append([]string{"sh", "-c", rgExec, tools.Path + "/bin/opencode"}, opencodeArgs(t)...)
 	},
 	parse: parseOpenCode,
 	hosts: func(c *CLI, t Turn) []string {
@@ -35,6 +35,12 @@ var opencode = kind{
 		return err
 	},
 }
+
+// rgExec runs the CLI ("$0") with the tools volume's rg first on the image's
+// PATH, which `docker run -e PATH` would replace. OpenCode looks for rg on
+// PATH and else downloads it from github.com, which the egress proxy refuses
+// (CLR-251, read from 1.19.5); Codex's shell commands call rg.
+const rgExec = `export PATH="` + tools.RgDir + `:$PATH" && exec "$0" "$@"`
 
 // providerKeyVar holds a provider's key in the agent container; the config
 // names it, as OPENROUTER_API_KEY for OpenRouter.

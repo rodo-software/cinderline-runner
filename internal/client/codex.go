@@ -34,10 +34,11 @@ var codex = kind{
 }
 
 // codexHome puts Codex's home dir on the state volume; codexShell makes it
-// first, as Codex refuses a CODEX_HOME that does not exist.
+// first, as Codex refuses a CODEX_HOME that does not exist, and puts rg on
+// PATH, as Codex's npm package does from its codex-path dir (0.167.0).
 const (
 	codexHome  = "CODEX_HOME=" + StatePath + "/codex"
-	codexShell = `mkdir -p "$CODEX_HOME" && exec "$0" "$@"`
+	codexShell = `mkdir -p "$CODEX_HOME" && ` + rgExec
 )
 
 // codexArgs is Codex's headless argv for one turn; the prompt goes in on

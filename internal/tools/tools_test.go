@@ -270,6 +270,46 @@ func TestGeminiPins(t *testing.T) {
 	}
 }
 
+// ripgrep is the GitHub release OpenCode would download, checked by the
+// SHA-256 the release API lists: the static x86_64 musl build on amd64, the
+// glibc build on arm64 glibc, and none on arm64 musl, which has no build
+// (CLR-251).
+func TestRipgrepPins(t *testing.T) {
+	for _, tc := range []struct {
+		arch   string
+		musl   bool
+		target string
+	}{
+		{"amd64", false, "x86_64-unknown-linux-musl"},
+		{"amd64", true, "x86_64-unknown-linux-musl"},
+		{"arm64", false, "aarch64-unknown-linux-gnu"},
+		{"arm64", true, ""},
+	} {
+		s, err := pinned(tc.arch, tc.musl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.target == "" {
+			if s.RgURL != "" || s.RgSHA256 != "" || s.RgBinary != "" {
+				t.Fatalf("%s musl=%v: rg pinned without a build: %+v", tc.arch, tc.musl, s)
+			}
+			continue
+		}
+		dir := "ripgrep-" + RipgrepVersion + "-" + tc.target
+		if s.RgURL != "https://github.com/BurntSushi/ripgrep/releases/download/"+RipgrepVersion+"/"+dir+".tar.gz" ||
+			len(s.RgSHA256) != 64 || s.RgBinary != dir+"/rg" {
+			t.Fatalf("%s musl=%v: bad ripgrep pins %+v", tc.arch, tc.musl, s)
+		}
+	}
+}
+
+// The fill script puts a downloaded rg alone in RgDir, which agents get on PATH.
+func TestFillScriptInstallsRg(t *testing.T) {
+	if RgDir != Path+"/rg" || !strings.Contains(fillScript, "if [ -f /s/rg ]; then mkdir -p rg && cp /s/rg rg/ && chmod 755 rg/rg; fi") {
+		t.Fatalf("fill script does not install rg in %s:\n%s", RgDir, fillScript)
+	}
+}
+
 // The fill script unpacks the gemini package into gemini/ (gemini/bundle/gemini.js)
 // and installs a downloaded node next to the other CLIs.
 func TestFillScriptInstallsGemini(t *testing.T) {
@@ -280,16 +320,20 @@ func TestFillScriptInstallsGemini(t *testing.T) {
 	}
 }
 
-// On glibc the checked node binary from the nodejs.org tarball and the
-// gemini tarball are staged for the fill script, and no musl step runs.
+// On glibc the checked node binary from the nodejs.org tarball, rg from its
+// release tarball and the gemini tarball are staged for the fill script, and
+// no musl step runs.
 func TestMountStagesGlibcNode(t *testing.T) {
 	_, s := pinsServer(t, []byte("CLAUDE"), tgz(t, map[string]string{"package/bin/opencode": "OC"}))
 	nodeTgz := tgz(t, map[string]string{"node-v" + NodeVersion + "-linux-arm64/bin/node": "NODE"})
-	base := serve(t, map[string][]byte{"/node.tgz": nodeTgz})
+	rgBin := "ripgrep-" + RipgrepVersion + "-aarch64-unknown-linux-gnu/rg"
+	rgTgz := tgz(t, map[string]string{rgBin: "RG"})
+	base := serve(t, map[string][]byte{"/node.tgz": nodeTgz, "/rg.tgz": rgTgz})
 	s.Musl, s.Platform = false, "linux-arm64"
 	s.NodeURL, s.NodeSHA256, s.NodeBinary = base+"/node.tgz", sha256Hex(nodeTgz), "node-v"+NodeVersion+"-linux-arm64/bin/node"
+	s.RgURL, s.RgSHA256, s.RgBinary = base+"/rg.tgz", sha256Hex(rgTgz), rgBin
 	staging := ""
-	var node, gemini []byte
+	var node, rg, gemini []byte
 	f := &fakeDocker{answers: map[string]string{"docker version --format": "arm64\n", "docker run --rm": "glibc\n"}}
 	exec := func(ctx context.Context, env []string, argv ...string) (string, error) {
 		out, err := f.exec(ctx, env, argv...)
@@ -300,6 +344,7 @@ func TestMountStagesGlibcNode(t *testing.T) {
 			if strings.HasSuffix(a, ":/s:ro") {
 				staging = strings.TrimSuffix(argv[i], ":/s:ro")
 				node, _ = os.ReadFile(filepath.Join(staging, "node"))
+				rg, _ = os.ReadFile(filepath.Join(staging, "rg"))
 				gemini, _ = os.ReadFile(filepath.Join(staging, "gemini.tgz"))
 			}
 		}
@@ -309,12 +354,35 @@ func TestMountStagesGlibcNode(t *testing.T) {
 	if _, err := tl.Mount(context.Background(), "img"); err != nil {
 		t.Fatal(err)
 	}
-	if staging == "" || string(node) != "NODE" || len(gemini) == 0 {
-		t.Fatalf("staged node %q, gemini %d bytes, staging %q", node, len(gemini), staging)
+	if staging == "" || string(node) != "NODE" || string(rg) != "RG" || len(gemini) == 0 {
+		t.Fatalf("staged node %q, rg %q, gemini %d bytes, staging %q", node, rg, len(gemini), staging)
 	}
 	for _, c := range f.calls {
 		if slices.Contains(c, muslLibsImage) {
 			t.Fatalf("musl step on glibc: %q", c)
+		}
+	}
+}
+
+func TestMountRefusesTamperedRg(t *testing.T) {
+	_, s := pinsServer(t, []byte("CLAUDE"), tgz(t, map[string]string{"package/bin/opencode": "OC"}))
+	rgTgz := tgz(t, map[string]string{"rg-dir/rg": "RG"})
+	s.RgURL, s.RgSHA256, s.RgBinary = serve(t, map[string][]byte{"/rg.tgz": rgTgz})+"/rg.tgz", sha256Hex([]byte("something else")), "rg-dir/rg"
+	f := &fakeDocker{answers: map[string]string{"docker version --format": "arm64\n", "docker run --rm": "musl\n"}}
+	exec := func(ctx context.Context, env []string, argv ...string) (string, error) {
+		out, err := f.exec(ctx, env, argv...)
+		if len(f.calls) == 3 {
+			return "", errors.New("exit status 1")
+		}
+		return out, err
+	}
+	tl := &Tools{State: t.TempDir(), Exec: exec, pins: func(string, bool) (set, error) { return s, nil }}
+	if _, err := tl.Mount(context.Background(), "img"); err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("tampered rg accepted: %v", err)
+	}
+	for _, c := range f.calls {
+		if c[1] == "volume" && c[2] == "create" {
+			t.Fatal("volume filled from a tampered rg")
 		}
 	}
 }
