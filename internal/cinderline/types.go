@@ -2,6 +2,13 @@ package cinderline
 
 import "github.com/rodo-software/cinderline-runner/internal/config"
 
+// contractSHA256 is the SHA-256 of docs/runner-api/openapi.yaml, the contract
+// these types follow, as copied from the app repository. A test fails when the
+// file differs, so a contract change brings the file, this constant and the
+// types in one commit; compare it with `sha256sum` of the app's file to see
+// drift (decision 2026-11-26-contract-hash).
+const contractSHA256 = "288db4b83778e761cba54d4f1110f8d6df0efda6cbd994d13fd44a85e724b0ac"
+
 // PollRequest is the body of POST /poll: the runner's report and what it
 // holds now.
 type PollRequest struct {

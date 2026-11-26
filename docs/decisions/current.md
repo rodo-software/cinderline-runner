@@ -38,6 +38,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - The contract is [2026-11-16-runner-protocol-v2](2026-11-16-runner-protocol-v2.md), amended by [2026-11-17-second-audit-decisions](2026-11-17-second-audit-decisions.md) and [2026-11-17-local-model-providers](2026-11-17-local-model-providers.md), with [`docs/runner-api/openapi.yaml`](../runner-api/openapi.yaml). Read them there; this file does not copy them.
 - Three requests under `/api/runner/v2`: the poll, `runs/{ref}/next`, and the attachment download. A step never carries a command, a path, a docker option, an environment variable or a URL. (2026-11-16-runner-protocol-v2)
 - The OpenAPI file is authored in the app repository and copied here; a contract change starts there. (AGENTS.md; 2026-11-16-runner-protocol-v2)
+- `contractSHA256` in `internal/cinderline` pins the SHA-256 of the copied file, and a test fails when they differ: a copy updates the constant and the types in the same commit. (2026-11-26-contract-hash)
 - A stop during publishing still pushes and opens the pull request but does not ask the forge to merge: `merge: null`. A stop while waiting for a merge already asked for reports `merge: pending`. (2026-11-17-second-audit-decisions)
 - There is no `X-Cinderline-Agent` header; an MCP request's agent name is its token's name. (2026-11-17-second-audit-decisions)
 
