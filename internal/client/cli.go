@@ -40,6 +40,11 @@ type CLI struct {
 	// Providers are the runner's model providers by name, for OpenCode
 	// (decision 2026-11-17-local-model-providers).
 	Providers map[string]Provider
+	// prepared: PrepareState succeeded for this CLI's state volume and no
+	// turn failed since. Guarded by stateMu, which is held while preparing,
+	// so parallel lanes prepare once.
+	prepared bool
+	stateMu  sync.Mutex
 }
 
 var _ Client = (*CLI)(nil)
@@ -114,7 +119,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err = PrepareState(ctx, c.Exec, c.Project, c.Name); err != nil {
+	if err = c.prepareState(ctx); err != nil {
 		return Result{}, err
 	}
 	session := t.SessionID
@@ -146,6 +151,9 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		Allow:    k.hosts(c, t),
 		AppAllow: t.Allow,
 	})
+	if err != nil {
+		c.forgetState()
+	}
 	res := k.parse(out)
 	res.SessionID = cmp.Or(res.SessionID, t.SessionID)
 	res.Tail = environment.Tail(out)
@@ -199,10 +207,33 @@ func StateVolume(project, client string) string {
 	return workspace.Volume(project, "state-"+client)
 }
 
+// prepareState runs PrepareState unless it succeeded before on this CLI, as
+// it costs a container, about a second, and a run has many turns (CLR-260).
+func (c *CLI) prepareState(ctx context.Context) error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if c.prepared {
+		return nil
+	}
+	err := PrepareState(ctx, c.Exec, c.Project, c.Name)
+	c.prepared = err == nil
+	return err
+}
+
+// forgetState makes the next turn prepare the state volume again. After
+// any failed turn: a volume removed meanwhile, which docker makes anew for
+// root, or one the agent user cannot write, shows only as each CLI's own
+// error text (CLR-260).
+func (c *CLI) forgetState() {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.prepared = false
+}
+
 // PrepareState makes the client's state volume for the project and hands its
 // root and the client's stateDirs to the agent user: a new volume belongs to
-// root, and the CLI writes its config dir and sessions in it. Every turn, as
-// it costs a second and repairs itself.
+// root, and the CLI writes its config dir and sessions in it. Running it again
+// repairs the volume.
 func PrepareState(ctx context.Context, x workspace.Exec, project, client string) error {
 	vol := StateVolume(project, client)
 	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, workspace.Labels(project, "")...), vol)...); err != nil {
