@@ -70,6 +70,7 @@ func commands() []command {
 		{"list-providers", "", "list the runner's model providers, whether each has a key, which are free, and their agent limits and lookaheads", (*CLI).listProviders},
 		{"remove-provider", "NAME", "remove a model provider and its key", (*CLI).removeProvider},
 		{"strict-hosts", "[on|off]", "turn strict host blocking on or off for every project, or show it: when on, a person's answer in Cinderline cannot open a host the egress proxy refused, only allow_hosts in config.json can, which allow-host sets", (*CLI).strictHosts},
+		{"rotate-ca", "", "replace the runner's own CA, which the egress proxy signs certificates with for the hosts it refuses, so Cinderline can show the URL an agent tried; agent containers started afterwards trust the new one", (*CLI).rotateCA},
 		{"version", "", "print the version", (*CLI).version},
 	}
 }

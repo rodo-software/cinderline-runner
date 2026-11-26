@@ -10,7 +10,7 @@ The agent runs a package's code: Claude Code hooks, a Gemini CLI extension's hoo
 - **The client's state volume.** It holds that client's sessions for the project and its stored sign-in, if the project uses one.
 - **The run's scoped Cinderline token** (`CINDERLINE_TOKEN`), on the orchestrator's turns only. Workers and the Merge Resolver run without one (0122). With the token a package can do what the agent can through Cinderline's MCP server: read and write the issues of its run's tree.
 - **The issue's clone, read-write.** What a package changes there is committed and pushed as the issue's work, through the push scan, and a person reviews it in the pull request.
-- **Read-only:** the project's repo volume, extra and linked repositories, the issue's attachments, the tools volume and the run's other packages.
+- **Read-only:** the project's repo volume, extra and linked repositories, the issue's attachments, the tools volume, the run's other packages and the runner CA's certificate, never its key (see "The runner's CA" in the README).
 - **The network, only through the run's egress proxy:** the client's provider, the project's Cinderline host, the package registries, the `allow_hosts` of config, and the hosts a person allowed for the issue (not on a strict runner).
   - These hosts accept data, so a package could send what it reads, including the credential and the token, to any of them.
   - It reaches nothing else: no forge and no host of its own.

@@ -188,6 +188,14 @@ After each turn and each check, the runner tells Cinderline which hosts the prox
 
 With strict host blocking on (`cinderline strict-hosts on`, for every project of the runner), the runner ignores every host Cinderline allows and tells Cinderline so, which then does not ask: the agent goes on without the host. `cinderline strict-hosts` shows whether it is on.
 
+### The runner's CA
+
+The runner makes its own certificate authority on its first start (app decision 2026-11-25-blocked-host-urls), so that Cinderline can show the URL an agent tried on a host the proxy refused, not only the host. The egress proxy uses it to sign a certificate for a host it is refusing anyway, reads the first request, answers it with `403` and closes. It never signs one for an allowed host, whose traffic it passes on untouched. That proxy side is CLR-248; until it ships, the CA signs nothing.
+
+- **Where it lives.** The key and certificate are in `ca/ca.key` in the state folder, readable by your user only (`0600`). The certificate alone is in `ca/ca-<hash>.crt`. The key never leaves the machine: it is not sent to Cinderline, not logged and not mounted into an agent's or check's container.
+- **What a container gets.** Every agent and check container gets only the certificate, read-only, at `/etc/cinderline/ca.crt`, and `NODE_EXTRA_CA_CERTS` points at it. Before the container's command starts, a short script joins the image's own roots (`/etc/ssl/certs/ca-certificates.crt` or its equivalent, or the image's `SSL_CERT_FILE`) and the CA into `/tmp/cinderline-ca-bundle.pem`. It points `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and `GIT_SSL_CAINFO` at that bundle, so the public roots keep working. An image without a bundle at a known place keeps its own roots, and only Node trusts the CA there. Tools that pin certificates or bring their own roots do not trust it, and Cinderline then shows only the host.
+- **Rotation.** The CA is valid for 5 years and replaced 30 days before it ends. `cinderline rotate-ca` replaces it now. A new CA reaches only the containers started after it; the running ones keep the old certificate, whose file stays.
+
 ### Skill packages
 
 An issue in Cinderline can carry skill packages: public git repositories, each pinned by the commit Cinderline resolved (app decision 2026-11-26-skill-packages). The runner checks each one, fetches it at that commit on its own network, outside the agents' proxy and without a token, and refuses any other commit. Each package is kept in one read-only Docker volume per repository and commit, which every project shares; a volume no run has used for 30 days is removed. The runner tells Cinderline per package whether it loaded it.

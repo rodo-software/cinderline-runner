@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rodo-software/cinderline-runner/internal/ca"
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
@@ -145,6 +146,13 @@ func Run(ctx context.Context, o Options) error {
 		return err
 	}
 	warnDropped(log, cfg)
+	// Made on the first start, renewed near its end (CLR-247); each run checks it again.
+	authority, err := ca.Ensure(ca.Dir(o.Paths.State), time.Now())
+	if err != nil {
+		log.Error("the runner's CA failed to load", "err", err)
+		return err
+	}
+	log.Info("runner CA", "certificate", authority.CertFile, "expires", authority.Cert.NotAfter)
 	log.Info("started", "version", o.Version, "socket", o.Paths.Socket)
 	d.apply(cfg)
 
@@ -274,6 +282,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 		Project: p.ID(), Log: log, Exec: workspace.RunCommand, Memory: p.MemoryLimit(),
 		Allow:     environment.ProjectHosts(p.URL, slices.Concat(cfg.AllowHosts, p.AllowHosts)),
 		OnRefused: func(issue, hp string) { proj.AddRefused(issue, hp) },
+		CA:        ca.Dir(d.o.Paths.State),
 	}
 	proj, err = run.NewProject(p, cfg.Providers, sec, d.o.Paths.State, env, log)
 	if err != nil {

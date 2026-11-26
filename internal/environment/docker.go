@@ -22,6 +22,7 @@ import (
 
 	defaultimage "github.com/rodo-software/cinderline-runner/images/default"
 	proxyimage "github.com/rodo-software/cinderline-runner/images/proxy"
+	"github.com/rodo-software/cinderline-runner/internal/ca"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
@@ -47,6 +48,32 @@ var ProxyEnv = []string{
 	"https_proxy=http://proxy:3128", "http_proxy=http://proxy:3128",
 	"NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1",
 }
+
+// CAPath is where an agent's or check's container mounts the runner's CA
+// certificate, read-only; never its key (app decision
+// 2026-11-25-blocked-host-urls).
+const CAPath = "/etc/" + name.Name + "/ca.crt"
+
+// caBundle is the bundle trustScript writes: the image's roots plus the CA.
+const caBundle = "/tmp/" + name.Name + "-ca-bundle.pem"
+
+// trustScript runs before the container's command and execs it with its
+// argv and stdin unchanged. The container runs as the agent user without
+// capabilities, so update-ca-certificates cannot add the CA to the image's
+// store; instead it writes a bundle of the image's own roots, the ones its
+// SSL_CERT_FILE names first, plus the CA, and points the variables OpenSSL,
+// curl, git and Python read at it. The image's own roots, not a fixed list,
+// so a compose image's private roots keep working. An image without a
+// bundle at a known place keeps its roots and only Node trusts the CA.
+const trustScript = `for f in "${SSL_CERT_FILE:-}" /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem /etc/ssl/ca-bundle.pem; do
+  if [ -s "$f" ]; then
+    if cat "$f" ` + CAPath + ` > ` + caBundle + ` 2>/dev/null; then
+      export SSL_CERT_FILE=` + caBundle + ` REQUESTS_CA_BUNDLE=` + caBundle + ` CURL_CA_BUNDLE=` + caBundle + ` GIT_SSL_CAINFO=` + caBundle + `
+    fi
+    break
+  fi
+done
+exec "$@"`
 
 // hardening keeps the agent from gaining privileges (CSR-63): no
 // capabilities, none through setuid binaries, and Docker's default seccomp
@@ -85,6 +112,9 @@ type Docker struct {
 	// OnFetch is called before the default image is pulled or built, a slow
 	// first-time step; nil: none.
 	OnFetch func()
+	// CA is the runner's CA folder (ca.Dir), whose certificate every agent
+	// and check container trusts; "": none, as in tests without one.
+	CA string
 
 	compose atomic.Pointer[Compose] // the project's own compose file; nil: the default environment
 }
@@ -129,6 +159,10 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 			return "", fmt.Errorf("run %s: environment entry %d is not KEY=value", s.Issue, i)
 		}
 		names = append(names, "-e", k)
+	}
+	cmd, trust, err := d.trust(s.Cmd)
+	if err != nil {
+		return "", fmt.Errorf("run %s: %w", s.Issue, err)
 	}
 	compose := d.compose.Load()
 	image := ""
@@ -193,7 +227,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	}
 	// Secrets go by name: their values travel in the docker command's
 	// environment, never in its argv.
-	argv = append(append(append(append(argv, names...), s.Mounts...), image), s.Cmd...)
+	argv = slices.Concat(argv, names, s.Mounts, trust, []string{image}, cmd)
 
 	var timedOut atomic.Bool
 	if s.Timeout > 0 {
@@ -242,6 +276,22 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		err = &OutOfMemoryError{Limit: memory}
 	}
 	return kept, err
+}
+
+// trust returns cmd run through trustScript and the flags that mount the
+// CA's certificate and point Node at it, which adds it to its own roots;
+// without d.CA, cmd alone. The CA is made or renewed first when needed, so
+// a new one reaches only the containers started after it.
+func (d *Docker) trust(cmd []string) ([]string, []string, error) {
+	if d.CA == "" {
+		return cmd, nil, nil
+	}
+	c, err := ca.Ensure(d.CA, time.Now())
+	if err != nil {
+		return nil, nil, fmt.Errorf("the runner's CA: %w", err)
+	}
+	return slices.Concat([]string{"sh", "-c", trustScript, "sh"}, cmd),
+		[]string{"-v", c.CertFile + ":" + CAPath + ":ro", "-e", "NODE_EXTRA_CA_CERTS=" + CAPath}, nil
 }
 
 // oomKilled reports whether the kernel killed a process of the agent

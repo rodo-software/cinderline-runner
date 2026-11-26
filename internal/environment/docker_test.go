@@ -18,6 +18,7 @@ import (
 
 	defaultimage "github.com/rodo-software/cinderline-runner/images/default"
 	proxyimage "github.com/rodo-software/cinderline-runner/images/proxy"
+	"github.com/rodo-software/cinderline-runner/internal/ca"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
 )
 
@@ -950,5 +951,52 @@ func TestDockerMemory(t *testing.T) {
 		if !slices.Equal(argv, []string{"docker", "info", "--format", "{{.MemTotal}}"}) {
 			t.Errorf("ran %q", argv)
 		}
+	}
+}
+
+// CLR-247: with the runner's CA, the agent's container mounts its
+// certificate read-only, never its key, points Node at it, and runs its
+// command through trustScript with its argv unchanged.
+func TestRunTrustsTheRunnersCA(t *testing.T) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return nil })
+	d.CA = ca.Dir(t.TempDir())
+	if _, err := d.Run(context.Background(), turn); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := ca.Ensure(d.CA, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := calls()[5].Argv
+	mount := []string{"-v", authority.CertFile + ":" + CAPath + ":ro", "-e", "NODE_EXTRA_CA_CERTS=" + CAPath}
+	want := slices.Concat(mount, []string{imageTag(), "sh", "-c", trustScript, "sh", "claude", "-p", "<stdin:the prompt>"})
+	if !reflect.DeepEqual(agent[len(agent)-len(want):], want) {
+		t.Errorf("agent call ends in\n%q\nwant\n%q", agent[len(agent)-len(want):], want)
+	}
+	for _, a := range agent {
+		if strings.Contains(a, "ca.key") || strings.Contains(a, "PRIVATE") {
+			t.Errorf("the CA key reaches the container: %q", a)
+		}
+	}
+	for _, v := range []string{"SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO"} {
+		if !strings.Contains(trustScript, v+"="+caBundle) {
+			t.Errorf("trustScript does not set %s", v)
+		}
+	}
+}
+
+// A CA folder that cannot be written fails the turn before anything starts.
+func TestRunWithoutItsCARunsNothing(t *testing.T) {
+	d, calls, _ := runner(nil, func(context.Context, io.Writer) error { return nil })
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.CA = filepath.Join(file, "ca")
+	if _, err := d.Run(context.Background(), turn); err == nil || !strings.Contains(err.Error(), "CA") {
+		t.Errorf("Run = %v, want the CA's error", err)
+	}
+	if got := calls(); len(got) != 0 {
+		t.Errorf("calls = %q, want none", got)
 	}
 }
