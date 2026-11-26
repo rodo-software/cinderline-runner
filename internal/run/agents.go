@@ -110,7 +110,8 @@ func (t *ProviderTurns) leave(run string, providers []config.Provider) bool {
 	return freed
 }
 
-// placesFreed is closed when a run next leaves a provider with a limit.
+// placesFreed is closed when a run next leaves a provider with a limit,
+// or wake is called.
 func (t *ProviderTurns) placesFreed() <-chan struct{} {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -118,6 +119,14 @@ func (t *ProviderTurns) placesFreed() <-chan struct{} {
 		t.left = make(chan struct{})
 	}
 	return t.left
+}
+
+// wake closes placesFreed without a place freed: a turn started or stopped
+// waiting, which its project's next poll reports (CLR-254).
+func (t *ProviderTurns) wake() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.wakeLocked()
 }
 
 func (t *ProviderTurns) wakeLocked() {

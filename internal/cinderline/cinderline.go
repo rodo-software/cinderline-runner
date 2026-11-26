@@ -156,6 +156,8 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 	r.Report.ProviderModels = models
 	r.ProviderPlaces = first(r.ProviderPlaces, maxProviders)
 	r.Running = refs(r.Running, maxRunning)
+	// Only runs of running may wait, so it fits running's limit too.
+	r.Waiting = slices.DeleteFunc(slices.Clone(r.Waiting), func(w WaitingRun) bool { return !slices.Contains(r.Running, w.Ref) })
 	r.Held = refs(r.Held, maxListed)
 	if r.Review != nil {
 		review := []ReviewFact{}

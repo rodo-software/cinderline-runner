@@ -24,6 +24,16 @@ type PollRequest struct {
 	// runner's providers with a limit; left out when none has one (decision
 	// 2026-11-25-provider-places in the app repository).
 	ProviderPlaces []ProviderPlace `json:"provider_places,omitempty"`
+	// Waiting are the runs of Running whose turn waits now for a place on a
+	// model provider; left out when none does (decision
+	// 2026-11-25-provider-places in the app repository).
+	Waiting []WaitingRun `json:"waiting,omitempty"`
+}
+
+// WaitingRun is a run, by its issue, whose turn waits for a place on Provider.
+type WaitingRun struct {
+	Ref      string `json:"ref"`
+	Provider string `json:"provider"`
 }
 
 // ProviderPlace is a provider's free admission places in one poll.

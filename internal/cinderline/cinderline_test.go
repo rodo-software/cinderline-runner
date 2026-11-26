@@ -531,7 +531,8 @@ func TestRequestsFitTheAppsLimits(t *testing.T) {
 	if _, err := c.Poll(context.Background(), PollRequest{
 		Report:  Report{Errors: []ReportError{{Kind: KindNotStarted, Message: long}}, ModelProviders: append([]string{strings.Repeat("p", 51)}, refs...)},
 		Running: append([]string{strings.Repeat("R", 60)}, refs...), Held: refs,
-		Review: []ReviewFact{{Ref: "CSR-1", PullRequest: "open", Conflicts: conflicts}},
+		Waiting: []WaitingRun{{Ref: strings.Repeat("R", 60), Provider: "lan"}, {Ref: "CSR-1", Provider: "lan"}, {Ref: "CSR-30", Provider: "lan"}},
+		Review:  []ReviewFact{{Ref: "CSR-1", PullRequest: "open", Conflicts: conflicts}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -542,6 +543,9 @@ func TestRequestsFitTheAppsLimits(t *testing.T) {
 		len(poll.Review[0].Conflicts) != maxConflicts || utf8.RuneCountInString(poll.Review[0].Conflicts[0]) != maxText ||
 		len(poll.Report.ModelProviders) != maxProviders || poll.Report.ModelProviders[0] != "CSR-0" {
 		t.Errorf("poll sent running %d, held %d, message %d, conflicts %d", len(poll.Running), len(poll.Held), utf8.RuneCountInString(poll.Report.Errors[0].Message), len(poll.Review[0].Conflicts))
+	}
+	if want := []WaitingRun{{Ref: "CSR-1", Provider: "lan"}}; !slices.Equal(poll.Waiting, want) {
+		t.Errorf("poll sent waiting %+v, want only the run of running %+v", poll.Waiting, want)
 	}
 
 	tail, report := strings.Repeat("x", 5000)+"END", strings.Repeat("r", 70000)

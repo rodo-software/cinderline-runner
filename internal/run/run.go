@@ -474,10 +474,17 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 	tctx, end := p.stoppable(ctx, j.ref)
 	res, err := func() (client.Result, error) {
 		if pr, ok := p.turnProvider(agent); ok && p.Turns != nil {
+			waited := false
 			waiting := func() {
 				p.Log.Info("turn waits for its model provider", "project", p.Config.Key, "issue", issue, "agent", agent.Name, "provider", pr.Name, "max_agents", pr.MaxAgents)
+				p.setWaiting(j.ref, pr.Name)
+				waited = true
 			}
-			if err := p.Turns.take(tctx, j.slot, pr.Name, pr.MaxAgents, waiting); err != nil {
+			err := p.Turns.take(tctx, j.slot, pr.Name, pr.MaxAgents, waiting)
+			if waited {
+				p.setWaiting(j.ref, "") // with a place, or ended by the stop or ctx
+			}
+			if err != nil {
 				return client.Result{}, err
 			}
 			defer p.Turns.done(pr.Name)
@@ -584,6 +591,37 @@ func (p *Project) setTurn(ref string, cancel context.CancelCauseFunc) {
 		p.stopRuns = map[string]context.CancelCauseFunc{}
 	}
 	p.stopRuns[ref] = cancel
+}
+
+// setWaiting records that run ref's turn waits for a place on provider;
+// "": it no longer does. The poll reports it as waiting (CLR-254), and the
+// loop polls at once so the app hears it before poll_after. CLR-254 keeps
+// that to a signal the loop already selects on, placesFreed, which every
+// project's loop shares, so the other projects poll once for nothing.
+func (p *Project) setWaiting(ref, provider string) {
+	p.mu.Lock()
+	if provider == "" {
+		delete(p.waits, ref)
+	} else {
+		if p.waits == nil {
+			p.waits = map[string]string{}
+		}
+		p.waits[ref] = provider
+	}
+	p.mu.Unlock()
+	p.Turns.wake()
+}
+
+// waitingRuns are the runs whose turn waits for a place on a provider, by
+// ref; nil: none.
+func (p *Project) waitingRuns() []cinderline.WaitingRun {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []cinderline.WaitingRun
+	for _, ref := range slices.Sorted(maps.Keys(p.waits)) {
+		out = append(out, cinderline.WaitingRun{Ref: ref, Provider: p.waits[ref]})
+	}
+	return out
 }
 
 // stopTurn ends the step in flight of run ref, if any, as stopped.

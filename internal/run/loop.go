@@ -145,8 +145,9 @@ func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan s
 			detected = nil
 			timer.Reset(0) // the first poll that can take a job
 		case <-placesFreed:
-			// A run of any project left a provider with a limit: its place
-			// reaches the app at once, not after poll_after (CLR-253).
+			// A run of any project left a provider with a limit, or a turn
+			// started or stopped waiting for one: the app hears it at once,
+			// not after poll_after (CLR-253, CLR-254).
 			placesFreed = p.Turns.placesFreed()
 			timer.Reset(0)
 
@@ -177,7 +178,7 @@ func (l *loop) poll() (wait time.Duration) {
 	// A slot is offered only with its run's memory reserved, so no other
 	// project's loop can offer the same memory; a slot that gets no job
 	// frees it again (decision 2026-11-24-agent-memory-limit).
-	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs()}
+	req := cinderline.PollRequest{Report: l.report(), Running: l.runningRefs(), Waiting: p.waitingRuns()}
 	if len(l.running) > 1 {
 		req.MaxParallel = len(l.running) // decision 2026-11-24-lanes in the app repository
 	}

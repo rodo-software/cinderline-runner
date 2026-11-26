@@ -106,6 +106,7 @@ type Project struct {
 	hosts    map[string][]string       // by run's issue ref: the host:port pairs it refused since takeRefused, once each
 	status   localapi.ProjectStatus
 	stopRuns map[string]context.CancelCauseFunc // by run's issue ref: ends its step in flight
+	waits    map[string]string                  // by run's issue ref: the provider its turn waits for a place on
 	// memory is a run's share of the budget as the last run's prepare
 	// measured it; 0: none measured yet, so the project's memory setting.
 	memory int64
