@@ -48,17 +48,6 @@ func TestClaudeArgsWorkerHasNoMCPServer(t *testing.T) {
 	}
 }
 
-// claudeArgs loads a plugin only when pluginDir is set.
-func TestClaudeArgsPluginOnlyForPonytailTeams(t *testing.T) {
-	if a := claudeArgs(Turn{Model: "m", MaxTurns: 5}, "s", "u"); slices.Contains(a, "--plugin-dir") {
-		t.Errorf("args %q load a plugin", a)
-	}
-	a := claudeArgs(Turn{Model: "m", MaxTurns: 5, Ponytail: true}, "s", "u")
-	if got, want := a[len(a)-2:], []string{"--plugin-dir", "/opt/cinderline/ponytail"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("args end %q, want %q", got, want)
-	}
-}
-
 func TestClaudeArgsDefaultModel(t *testing.T) {
 	if a := claudeArgs(Turn{MaxTurns: 5}, "s", "u"); slices.Contains(a, "--model") || slices.Contains(a, "--effort") {
 		t.Errorf("args %q pass --model or --effort without one", a)

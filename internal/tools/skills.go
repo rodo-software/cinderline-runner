@@ -31,20 +31,53 @@ func SkillVolume(url, commit string) string {
 	return name.Name + "-skill-" + hex.EncodeToString(h[:16])
 }
 
-// SkillRoot is the package's root in its volume, for a mount's subpath:
-// path ("": the repository's root) in the repository's folder.
-func SkillRoot(path string) string {
-	if path == "" {
-		return workspace.SkillRepo
-	}
-	return workspace.SkillRepo + "/" + path
-}
-
 // skillCheckScript exits 3 when the volume at /t is not complete, and 4 when
-// $1 is no folder of the repository, or reaches one through a symlink.
+// $1 is no folder of the repository, or reaches one through a symlink. Else
+// it prints what the package's root holds for SkillContents, one path per
+// line: each skills/<name> with a SKILL.md, gemini-extension.json, and the
+// OpenCode plugin files. Only names of safe characters, never through a
+// symlink, so each stays a folder of the volume as a mount's subpath.
 const skillCheckScript = `test -f /t/complete || exit 3
 p=/t/` + workspace.SkillRepo + `${1:+/$1}
-test -d "$p" && test "$(realpath "$p")" = "$p" || exit 4`
+test -d "$p" && test "$(realpath "$p")" = "$p" || exit 4
+cd "$p"
+for f in skills/* gemini-extension.json .opencode/plugin/*.ts .opencode/plugin/*.js .opencode/plugins/*.ts .opencode/plugins/*.js; do
+  case ${f##*/} in .*|*[!A-Za-z0-9._-]*) continue ;; esac
+  case $f in skills/*) test -f "$f/SKILL.md" ;; *) test -f "$f" ;; esac &&
+    test "$(realpath "$f")" = "$p/$f" && echo "$f"
+done
+true`
+
+// SkillContents is what a skill package's root holds for the clients that
+// do not load it whole as Claude Code does (docs/skills/client-loading.md).
+type SkillContents struct {
+	Skills    []string // the folders of skills/ that hold a SKILL.md, by name
+	Extension bool     // gemini-extension.json: Gemini CLI loads the root as an extension
+	// Plugins are the OpenCode plugin files, relative to the root, found
+	// as OpenCode finds a project's: .opencode/{plugin,plugins}/*.{ts,js}.
+	Plugins []string
+}
+
+var (
+	skillFolder  = regexp.MustCompile(`^skills/([A-Za-z0-9_-][A-Za-z0-9._-]{0,99})$`)
+	openCodeFile = regexp.MustCompile(`^\.opencode/plugins?/[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}\.(ts|js)$`)
+)
+
+// parseContents reads skillCheckScript's output; a line it does not expect
+// is left out, so nothing else of the package becomes a path.
+func parseContents(out string) SkillContents {
+	var c SkillContents
+	for _, line := range strings.Split(out, "\n") {
+		if m := skillFolder.FindStringSubmatch(line); m != nil {
+			c.Skills = append(c.Skills, m[1])
+		} else if line == "gemini-extension.json" {
+			c.Extension = true
+		} else if openCodeFile.MatchString(line) {
+			c.Plugins = append(c.Plugins, line)
+		}
+	}
+	return c
+}
 
 // Skills fills and tidies the volumes of skill packages (decision
 // 2026-11-26-skill-packages in the app repository).
@@ -62,50 +95,50 @@ func (s *Skills) lockFile(volume string) string {
 
 // Fill returns the volume of the package at url and commit, filled first
 // unless it is complete, behind a file lock so that projects fill it once
-// and share it. It fails when path is not a folder of the repository, and
-// records the use for Tidy. url, commit and path are checked by the caller.
-func (s *Skills) Fill(ctx context.Context, url, commit, path string) (string, error) {
+// and share it, and what the package's root at path holds. It fails when
+// path is not a folder of the repository, and records the use for Tidy.
+// url, commit and path are checked by the caller.
+func (s *Skills) Fill(ctx context.Context, url, commit, path string) (string, SkillContents, error) {
 	vol := SkillVolume(url, commit)
 	if err := os.MkdirAll(filepath.Join(s.State, "skills"), 0o700); err != nil {
-		return "", err
+		return "", SkillContents{}, err
 	}
 	unlock, err := lock(s.lockFile(vol))
 	if err != nil {
-		return "", err
+		return "", SkillContents{}, err
 	}
 	defer unlock()
 	// Under the lock, so Tidy never removes a volume between this use and its record.
 	now := time.Now()
 	if err := os.Chtimes(s.lockFile(vol), now, now); err != nil {
-		return "", err
+		return "", SkillContents{}, err
 	}
-	err = s.check(ctx, vol, path)
+	out, err := s.check(ctx, vol, path)
 	if exit := (interface{ ExitCode() int })(nil); errors.As(err, &exit) && exit.ExitCode() == 3 {
 		// An interrupted fill left no marker: fill it anew, in an empty volume.
 		for _, argv := range [][]string{{"docker", "volume", "rm", "--force", vol}, {"docker", "volume", "create", vol}} {
 			if _, err := s.Exec(ctx, nil, argv...); err != nil {
-				return "", err
+				return "", SkillContents{}, err
 			}
 		}
 		if err := workspace.FetchSkill(ctx, s.Exec, s.Log, s.Project, vol, url, commit); err != nil {
-			return "", err
+			return "", SkillContents{}, err
 		}
-		err = s.check(ctx, vol, path)
+		out, err = s.check(ctx, vol, path)
 	}
 	if exit := (interface{ ExitCode() int })(nil); errors.As(err, &exit) && exit.ExitCode() == 4 {
-		return "", fmt.Errorf("%q is not a folder of the repository", path)
+		return "", SkillContents{}, fmt.Errorf("%q is not a folder of the repository", path)
 	}
 	if err != nil {
-		return "", err
+		return "", SkillContents{}, err
 	}
-	return vol, nil
+	return vol, parseContents(out), nil
 }
 
 // check runs skillCheckScript on vol, read-only.
-func (s *Skills) check(ctx context.Context, vol, path string) error {
-	_, err := s.Exec(ctx, nil, "docker", "run", "--rm", "--network", "none", "-v", vol+":/t:ro",
+func (s *Skills) check(ctx context.Context, vol, path string) (string, error) {
+	return s.Exec(ctx, nil, "docker", "run", "--rm", "--network", "none", "-v", vol+":/t:ro",
 		"--entrypoint", "sh", workspace.GitImage, "-c", skillCheckScript, "sh", path)
-	return err
 }
 
 // Tidy removes the skill package volumes no run has used for SkillUnused,

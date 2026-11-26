@@ -212,7 +212,6 @@ type Team struct {
 	Name       string      `json:"name"`
 	MaxMinutes int         `json:"max_minutes"`
 	MaxTurns   int         `json:"max_turns"`
-	Ponytail   bool        `json:"ponytail"`
 	Agents     []TeamAgent `json:"agents"`
 }
 

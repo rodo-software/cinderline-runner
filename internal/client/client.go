@@ -5,7 +5,11 @@ package client
 
 import (
 	"context"
+	"path"
 	"time"
+
+	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // Client runs agent turns.
@@ -36,9 +40,9 @@ type Turn struct {
 	// Token is the run's scoped Cinderline token for the MCP server; empty
 	// gives the agent none, as workers and the Merge Resolver (0122). Never log it.
 	Token string
-	// Ponytail loads the ponytail plugin, for teams that enable it
-	// (2026-11-03-per-team-ponytail-plugin). Claude Code only.
-	Ponytail bool
+	// Skills are the skill packages the run loaded, for every turn of it
+	// (app decision 2026-11-26-skill-packages).
+	Skills []SkillMount
 	// Allow is the host:port pairs a person allowed in Cinderline for the
 	// turn's issue, which the caller has checked, for the run's allowlist
 	// next to the provider's (decision 2026-11-17-hosts-from-cinderline).
@@ -47,6 +51,28 @@ type Turn struct {
 	// read-only at workspace.AttachmentsPath; "": the run has none.
 	Attachments string
 }
+
+// SkillMount is a skill package a run loaded: its name, its read-only volume
+// with the repository in workspace.SkillRepo, the package's root in the
+// repository (Path; "": the repository's root) and what that root holds.
+// Every turn mounts the repository at workspace.SkillsPath/<Name>, and each
+// client loads the package its own way (docs/skills/client-loading.md).
+type SkillMount struct {
+	Name, Volume, Path string
+	tools.SkillContents
+}
+
+// root is where the turn's container sees the package's root.
+func (s SkillMount) root() string { return path.Join(workspace.SkillsPath, s.Name, s.Path) }
+
+// mount is the docker flags that mount folder sub of the package's volume
+// read-only at dst.
+func (s SkillMount) mount(sub, dst string) []string {
+	return []string{"--mount", "type=volume,src=" + s.Volume + ",dst=" + dst + ",readonly,volume-subpath=" + sub}
+}
+
+// in is folder sub of the package's root ("": the root) as a folder of its volume.
+func (s SkillMount) in(sub string) string { return path.Join(workspace.SkillRepo, s.Path, sub) }
 
 // Result is the parsed outcome of a turn.
 type Result struct {

@@ -3,13 +3,17 @@ package run
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
 
 var commit = strings.Repeat("a", 40)
@@ -21,19 +25,20 @@ func pkg(name, url, path string) cinderline.Skill {
 // fills records the skill package fetches of a project and answers each
 // from errs by URL (none: filled).
 type fills struct {
-	mu    sync.Mutex
-	calls []string // url@commit:path
-	errs  map[string]error
+	mu       sync.Mutex
+	calls    []string // url@commit:path
+	errs     map[string]error
+	contents map[string]tools.SkillContents // by URL; none: an empty package
 }
 
-func (f *fills) fill(_ context.Context, url, commit, path string) (string, error) {
+func (f *fills) fill(_ context.Context, url, commit, path string) (string, tools.SkillContents, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, url+"@"+commit+":"+path)
 	if err := f.errs[url]; err != nil {
-		return "", err
+		return "", tools.SkillContents{}, err
 	}
-	return "vol-" + path, nil
+	return "vol-" + path, f.contents[url], nil
 }
 
 // Nothing of a package becomes a path or an argument before it passes the
@@ -100,7 +105,7 @@ func TestSkillChecks(t *testing.T) {
 			t.Errorf("state %d %+v, want %s", i, s, want)
 		}
 	}
-	if loaded[0] != (Skill{Name: "impeccable", Volume: "vol-plugin", Root: "repo/plugin"}) || loaded[1].Root != "repo" {
+	if !reflect.DeepEqual(loaded[0], client.SkillMount{Name: "impeccable", Volume: "vol-plugin", Path: "plugin"}) || loaded[1].Path != "" {
 		t.Errorf("loaded %+v", loaded)
 	}
 }
@@ -163,8 +168,10 @@ func TestRunReportsSkillStates(t *testing.T) {
 	f := newFixture(t)
 	f.p.StrictHosts = true
 	f.p.AllowSkills = []config.AllowedSkill{{Name: "ponytail", URL: "https://github.com/o/ponytail"}}
-	f.p.fillSkill = (&fills{}).fill
-	app := &fakeApp{onNext: stepsOf(`{"kind":"done","session":"kept"}`)}
+	pony := tools.SkillContents{Skills: []string{"ponytail-help"}, Extension: true}
+	f.p.fillSkill = (&fills{contents: map[string]tools.SkillContents{"https://github.com/o/ponytail": pony}}).fill
+	f.cl.Runs = []client.RunReply{ok("s1", "Planned."), ok("w1", "Part done.")}
+	app := &fakeApp{onNext: stepsOf(runNew, `{"kind":"run","issue":{"ref":"CSR-1.2","title":"Part"},"agent":"Coder","session":"new","token":null,"prompt":"Part."}`, `{"kind":"done","session":"kept"}`)}
 	jb := soloJob()
 	jb.Skills = []cinderline.Skill{pkg("ponytail", "https://github.com/o/ponytail", ""), pkg("impeccable", "https://github.com/o/impeccable", "plugin"), pkg("bad", "ftp://x/y", "")}
 	if started, err := f.p.run(context.Background(), app.client(t), proj, jb, 0); !started || err != nil {
@@ -176,6 +183,12 @@ func TestRunReportsSkillStates(t *testing.T) {
 			t.Errorf("workspace.skills %+v, want %+v", r.Workspace.Skills, want)
 		}
 	}
+	// Every turn of the run mounts the loaded packages, the orchestrator's
+	// and a worker's alike (CLR-258).
+	mounts := []client.SkillMount{{Name: "ponytail", Volume: "vol-", SkillContents: pony}}
+	if ts := turns(f.cl); len(ts) != 2 || !reflect.DeepEqual(ts[0].Skills, mounts) || !reflect.DeepEqual(ts[1].Skills, mounts) {
+		t.Errorf("turns %+v, want each with %+v", ts, mounts)
+	}
 
 	g := newFixture(t)
 	app = &fakeApp{onNext: stepsOf(`{"kind":"done","session":"kept"}`)}
@@ -184,5 +197,26 @@ func TestRunReportsSkillStates(t *testing.T) {
 	}
 	if s := app.requests()[0].Workspace.Skills; s != nil {
 		t.Errorf("workspace.skills %+v, want none", s)
+	}
+}
+
+// Gemini CLI loads plain skills by folder name, so a later package's skill
+// folder of a name an earlier one has is logged; an extension's skills are
+// Gemini CLI's own to name. Every package still loads.
+func TestSkillGeminiClashIsLogged(t *testing.T) {
+	f := newFixture(t)
+	var logs strings.Builder
+	f.p.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	f.p.fillSkill = (&fills{contents: map[string]tools.SkillContents{
+		"https://github.com/o/a":   {Skills: []string{"review", "a"}},
+		"https://github.com/o/ext": {Skills: []string{"review"}, Extension: true},
+		"https://github.com/o/b":   {Skills: []string{"review"}},
+	}}).fill
+	loaded, _ := f.p.skillPackages(context.Background(), "CSR-1", []cinderline.Skill{pkg("a", "https://github.com/o/a", ""), pkg("ext", "https://github.com/o/ext", ""), pkg("b", "https://github.com/o/b", "")})
+	if len(loaded) != 3 {
+		t.Fatalf("loaded %+v", loaded)
+	}
+	if n := strings.Count(logs.String(), "skill not loaded in Gemini CLI turns"); n != 1 || !strings.Contains(logs.String(), "skill=b skill_folder=review earlier=a") {
+		t.Errorf("%d clashes logged:\n%s", n, logs.String())
 	}
 }

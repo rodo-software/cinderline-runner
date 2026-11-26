@@ -9,16 +9,10 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/name"
-	"github.com/rodo-software/cinderline-runner/internal/tools"
 )
-
-// Skill is a skill package a run loaded: its name, its read-only volume and
-// its root in that volume. Mounting it into the turns is CLR-258.
-type Skill struct {
-	Name, Volume, Root string
-}
 
 // maxSkills is the most skill packages a job names (the app's contract).
 const maxSkills = 10
@@ -63,9 +57,10 @@ func (p *Project) skillAllowed(s cinderline.Skill) bool {
 // strict runner unless config allows them, and fetches the others at their
 // commit. It returns those loaded, and the state of each one for next. One
 // that is not loaded is logged and the run goes on without it.
-func (p *Project) skillPackages(ctx context.Context, ref string, skills []cinderline.Skill) (loaded []Skill, states []cinderline.SkillState) {
+func (p *Project) skillPackages(ctx context.Context, ref string, skills []cinderline.Skill) (loaded []client.SkillMount, states []cinderline.SkillState) {
 	log := p.Log.With("project", p.Config.Key, "issue", ref)
 	names := map[string]bool{}
+	geminiSkills := map[string]string{} // skill folder: the package that has it as a plain skill
 	for i, s := range skills {
 		state := cinderline.SkillFailed
 		err := checkSkill(s)
@@ -82,14 +77,24 @@ func (p *Project) skillPackages(ctx context.Context, ref string, skills []cinder
 		case p.fillSkill == nil:
 			log.Warn("skill package not loaded: this runner cannot fetch it", "skill", s.Name)
 		default:
-			vol, err := p.fillSkill(ctx, s.URL, s.Commit, s.Path)
+			vol, contents, err := p.fillSkill(ctx, s.URL, s.Commit, s.Path)
 			if err != nil {
 				log.Warn("skill package not loaded: it could not be fetched at its commit", "skill", s.Name, "url", s.URL, "commit", s.Commit, "err", err)
 				break
 			}
 			state = cinderline.SkillLoaded
-			loaded = append(loaded, Skill{Name: s.Name, Volume: vol, Root: tools.SkillRoot(s.Path)})
+			loaded = append(loaded, client.SkillMount{Name: s.Name, Volume: vol, Path: s.Path, SkillContents: contents})
 			log.Info("skill package loaded", "skill", s.Name, "commit", s.Commit, "volume", vol)
+			if contents.Extension {
+				break // an extension's skills are Gemini CLI's own to name
+			}
+			for _, k := range contents.Skills {
+				if first, ok := geminiSkills[k]; ok {
+					log.Warn("skill not loaded in Gemini CLI turns: an earlier package has a skill folder of its name", "skill", s.Name, "skill_folder", k, "earlier", first)
+				} else {
+					geminiSkills[k] = s.Name
+				}
+			}
 		}
 		if i < maxSkills && err == nil {
 			names[s.Name] = true

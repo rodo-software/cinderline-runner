@@ -43,7 +43,7 @@ type job struct {
 	idle             time.Duration   // the project's idle limit for a turn
 	fg               forge.Forge
 	ws               cinderline.RunWorkspace
-	skills           []Skill // the skill packages loaded; not mounted into turns before CLR-258
+	skills           []client.SkillMount // the skill packages loaded, for every turn
 	// manager is a run in the Project Manager slot: it reads a fresh clone
 	// of the base, never commits or pushes, and refuses a check, publish or
 	// resolve step (CLR-194).
@@ -438,7 +438,7 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		last.Outcome, last.Error = "not_started", ptr(err.Error())
 		return last, client.Result{}, nil
 	}
-	turn := client.Turn{Dir: j.dir, Attachments: attachmentsDir(p.State, p.Config, j.ref), Prompt: step.Prompt, MaxTurns: j.team.MaxTurns, MaxMinutes: j.team.MaxMinutes, Ponytail: j.team.Ponytail, Idle: j.idle, Allow: p.allowHosts(issue, step.AllowHosts)}
+	turn := client.Turn{Dir: j.dir, Attachments: attachmentsDir(p.State, p.Config, j.ref), Prompt: step.Prompt, MaxTurns: j.team.MaxTurns, MaxMinutes: j.team.MaxMinutes, Skills: j.skills, Idle: j.idle, Allow: p.allowHosts(issue, step.AllowHosts)}
 	var prev *client.Usage // the resumed session's usage total before the turn
 	switch step.Session {
 	case "new":

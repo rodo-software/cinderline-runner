@@ -68,6 +68,14 @@ type kind struct {
 	check      func(c *CLI, t Turn) error // nil: every turn can start
 	ownSession bool                       // the runner picks a fresh turn's session ID
 	libs       bool                       // needs Tools.OpenCodeEnv: on musl, the libraries from the tools volume
+	// skillMounts are the turn's mounts for its skill packages in the
+	// CLI's own folders, next to each package at workspace.SkillsPath; nil:
+	// none, the CLI reads them there.
+	skillMounts func(t Turn) []string
+	// stateDirs are folders of the state volume, parents first, that
+	// PrepareState makes for the agent user: skillMounts mounts into them,
+	// and docker would make a missing one for root.
+	stateDirs []string
 }
 
 var kinds = map[string]kind{"claude": claude, "codex": codex, "opencode": opencode, "gemini": gemini}
@@ -119,6 +127,12 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 	}
 	if t.Attachments != "" {
 		mounts = append(mounts, "-v", t.Attachments+":"+workspace.AttachmentsPath+":ro")
+	}
+	for _, s := range t.Skills {
+		mounts = append(mounts, s.mount(workspace.SkillRepo, workspace.SkillsPath+"/"+s.Name)...)
+	}
+	if k.skillMounts != nil {
+		mounts = append(mounts, k.skillMounts(t)...)
 	}
 	out, err := c.Env.Run(ctx, environment.Spec{
 		Issue:    path.Base(t.Dir), // the clone is RunsPath/<REF>
@@ -186,15 +200,19 @@ func StateVolume(project, client string) string {
 }
 
 // PrepareState makes the client's state volume for the project and hands its
-// root to the agent user: a new volume belongs to root, and the CLI writes
-// its config dir and sessions in it. Every turn, as it costs a second and
-// repairs itself.
+// root and the client's stateDirs to the agent user: a new volume belongs to
+// root, and the CLI writes its config dir and sessions in it. Every turn, as
+// it costs a second and repairs itself.
 func PrepareState(ctx context.Context, x workspace.Exec, project, client string) error {
 	vol := StateVolume(project, client)
 	if _, err := x(ctx, nil, append(append([]string{"docker", "volume", "create"}, workspace.Labels(project, "")...), vol)...); err != nil {
 		return fmt.Errorf("state volume: %w", err)
 	}
-	if _, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none", "-v", vol+":/s", "--entrypoint", "sh", workspace.GitImage, "-c", "chown "+workspace.AgentUser+" /s"); err != nil {
+	script := "chown " + workspace.AgentUser + " /s"
+	if dirs := strings.Join(kinds[client].stateDirs, " "); dirs != "" {
+		script += " && cd /s && mkdir -p " + dirs + " && chown " + workspace.AgentUser + " " + dirs
+	}
+	if _, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none", "-v", vol+":/s", "--entrypoint", "sh", workspace.GitImage, "-c", script); err != nil {
 		return fmt.Errorf("state volume: %w", err)
 	}
 	return nil

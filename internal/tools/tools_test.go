@@ -156,7 +156,7 @@ func TestVolumeNaming(t *testing.T) {
 	}
 	names := map[string]bool{g.volume(): true, m.volume(): true, a.volume(): true}
 	changed := g
-	changed.PonytailCommit = strings.Repeat("0", 40)
+	changed.NodeSHA256 = strings.Repeat("0", 64)
 	names[changed.volume()] = true
 	if len(names) != 4 {
 		t.Fatalf("pinned sets share a volume: %v", names)
@@ -462,8 +462,7 @@ func TestMountFillsMissingVolume(t *testing.T) {
 		{"docker", "volume", "create", vol},
 		{"docker", "run", "--rm", "--platform", "linux/arm64", "--network", "none", "-v", vol + ":/t", "--entrypoint", "sh", muslLibsImage,
 			"-c", "mkdir -p /t/lib /t/bin && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/ && cp /usr/local/bin/node /t/bin/node"},
-		{"docker", "run", "--rm", "-v", vol + ":/t", "-v", staging + ":/s:ro", "--entrypoint", "sh", workspace.GitImage, "-c", fillScript,
-			"sh", PonytailRepo, s.PonytailTag, s.PonytailCommit},
+		{"docker", "run", "--rm", "-v", vol + ":/t", "-v", staging + ":/s:ro", "--entrypoint", "sh", workspace.GitImage, "-c", fillScript},
 	}
 	if !reflect.DeepEqual(f.calls, want) {
 		t.Fatalf("argv\n got %q\nwant %q", f.calls, want)

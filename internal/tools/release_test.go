@@ -15,7 +15,6 @@ func TestReleaseNotesNamePins(t *testing.T) {
 		"Gemini CLI " + GeminiVersion,
 		"Node.js " + NodeVersion,
 		"ripgrep " + RipgrepVersion,
-		"ponytail " + PonytailTag,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("ReleaseNotes() lacks %q:\n%s", want, got)

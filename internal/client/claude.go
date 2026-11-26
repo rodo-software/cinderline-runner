@@ -45,7 +45,8 @@ func newSessionID() string {
 // prompt goes in on stdin. The runner picks the session ID, so a fresh turn
 // is --session-id and a continued one --resume. Without a token,
 // --strict-mcp-config leaves the agent with no MCP server at all, which is
-// how workers and the Merge Resolver run (0122).
+// how workers and the Merge Resolver run (0122). Each skill package is a
+// plugin.
 func claudeArgs(t Turn, session, mcpURL string) []string {
 	a := []string{"-p"}
 	if t.SessionID != "" {
@@ -68,9 +69,13 @@ func claudeArgs(t Turn, session, mcpURL string) []string {
 		}}})
 		a = append(a, "--mcp-config", string(cfg))
 	}
+	// Strict also for a skill package's own MCP servers: they stay off.
 	a = append(a, "--strict-mcp-config")
-	if t.Ponytail {
-		a = append(a, "--plugin-dir", tools.Path+"/ponytail")
+	// The whole package, so its hooks, subagents and skills load (Willem,
+	// 2026-11-26); a manifest is not needed (CLR-256). Never --bare, under
+	// which plugins load nothing.
+	for _, s := range t.Skills {
+		a = append(a, "--plugin-dir", s.root())
 	}
 	return a
 }

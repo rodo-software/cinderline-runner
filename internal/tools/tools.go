@@ -27,17 +27,15 @@ import (
 )
 
 // Path is where agent containers see the volume: the CLIs (Claude Code, OpenCode,
-// Codex) in Path/bin, Gemini CLI in Path/gemini, node in Path/bin, the ponytail
-// plugin in Path/ponytail, ripgrep in RgDir and, on musl, OpenCode's and
-// Gemini's libraries in Path/lib.
+// Codex) in Path/bin, Gemini CLI in Path/gemini, node in Path/bin, ripgrep in
+// RgDir and, on musl, OpenCode's and Gemini's libraries in Path/lib.
 const Path = "/opt/" + name.Name
 
 // RgDir holds only rg, so that putting it on an agent's PATH adds nothing
 // else: Path/bin on PATH would put the volume's node before the image's.
 const RgDir = Path + "/rg"
 
-// fillScript fills the volume at /t from the checked downloads at /s, then
-// clones ponytail at its pinned tag and refuses any other commit. The
+// fillScript fills the volume at /t from the checked downloads at /s. The
 // marker comes last, so an interrupted fill is redone.
 const fillScript = `set -e
 cd /t
@@ -47,9 +45,6 @@ chmod 755 bin/claude bin/opencode bin/codex bin/codex-code-mode-host
 if [ -f /s/node ]; then cp /s/node bin/ && chmod 755 bin/node; fi
 if [ -f /s/rg ]; then mkdir -p rg && cp /s/rg rg/ && chmod 755 rg/rg; fi
 tar -xzf /s/gemini.tgz && mv package gemini
-git clone --quiet --depth 1 --branch "$2" "$1" ponytail
-test "$(git -C ponytail rev-parse HEAD)" = "$3"
-rm -rf ponytail/.git
 touch complete`
 
 // Mount is how an agent container gets the tools volume.
@@ -199,7 +194,7 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 			"--entrypoint", "sh", muslLibsImage, "-c", "mkdir -p /t/lib /t/bin && cp -L /usr/lib/libstdc++.so.6 /usr/lib/libgcc_s.so.1 /t/lib/ && cp /usr/local/bin/node /t/bin/node"})
 	}
 	steps = append(steps, []string{"docker", "run", "--rm", "-v", vol + ":/t", "-v", staging + ":/s:ro",
-		"--entrypoint", "sh", workspace.GitImage, "-c", fillScript, "sh", PonytailRepo, s.PonytailTag, s.PonytailCommit})
+		"--entrypoint", "sh", workspace.GitImage, "-c", fillScript})
 	for _, argv := range steps {
 		if _, err := x(ctx, nil, argv...); err != nil {
 			return err
@@ -219,8 +214,7 @@ type set struct {
 	GeminiURL, GeminiSRI                           string
 	NodeURL, NodeSHA256, NodeBinary                string
 	RgURL, RgSHA256, RgBinary                      string
-	PonytailTag                                    string
-	PonytailCommit, LibsImage                      string
+	LibsImage                                      string
 }
 
 // pinned is the set for a Docker engine arch (amd64 or arm64) and libc.
@@ -250,7 +244,7 @@ func pinned(arch string, musl bool) (set, error) {
 		CodexHostBinary: chb,
 		GeminiURL:       "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-" + GeminiVersion + ".tgz",
 		GeminiSRI:       geminiSRI,
-		PonytailTag:     PonytailTag, PonytailCommit: PonytailCommit, LibsImage: muslLibsImage,
+		LibsImage:       muslLibsImage,
 	}
 	if !musl {
 		dir := "node-v" + NodeVersion + "-linux-" + a

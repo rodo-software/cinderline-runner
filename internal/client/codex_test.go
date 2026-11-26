@@ -206,7 +206,8 @@ func TestCodexRunFresh(t *testing.T) {
 	if res.SessionID != "th_1" || res.Report != "Done." || res.Tail != environment.Tail(out) || res.Usage == nil || res.HitTurnLimit {
 		t.Errorf("Result = %+v", res)
 	}
-	if len(docker) != 2 || !slices.Contains(docker[0], "volume") || !slices.Contains(docker[1], "chown 1000:1000 /s") {
+	if len(docker) != 2 || !slices.Contains(docker[0], "volume") || !slices.Contains(docker[1], "chown 1000:1000 /s && cd /s && mkdir -p codex codex/skills && chown 1000:1000 codex codex/skills") {
+		// The folders a skill package's mounts go into belong to the agent user (CLR-258).
 		t.Errorf("state volume preparation = %q", docker)
 	}
 }

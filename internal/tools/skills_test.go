@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -29,6 +32,7 @@ type skillDocker struct {
 	removed  []string
 	inUse    []string
 	fetchErr error
+	contents string // what the check prints for a complete volume
 }
 
 func (d *skillDocker) exec(_ context.Context, _ []string, argv ...string) (string, error) {
@@ -64,6 +68,7 @@ func (d *skillDocker) exec(_ context.Context, _ []string, argv ...string) (strin
 		if p := argv[len(argv)-1]; p != "" && !slices.Contains(d.folders, p) {
 			return "", skillExit(4)
 		}
+		return d.contents, nil
 	case strings.Contains(cmd, "git -C /t/repo fetch"):
 		// Slow, so a second project's fill would overlap it.
 		time.Sleep(20 * time.Millisecond)
@@ -94,7 +99,7 @@ func TestSkillFilledOnceForTwoProjects(t *testing.T) {
 	for i, proj := range []string{"CSR", "WEB"} {
 		s := &Skills{State: state, Exec: d.exec, Log: slog.New(slog.DiscardHandler), Project: proj}
 		wg.Go(func() {
-			v, err := s.Fill(context.Background(), ponyURL, ponyCommit, "plugin")
+			v, _, err := s.Fill(context.Background(), ponyURL, ponyCommit, "plugin")
 			if err != nil {
 				t.Error(err)
 			}
@@ -107,7 +112,7 @@ func TestSkillFilledOnceForTwoProjects(t *testing.T) {
 		t.Fatalf("volumes %q, fetches %q; want one fetch into %s", vols, d.fetches, want)
 	}
 	s := &Skills{State: state, Exec: d.exec, Log: slog.New(slog.DiscardHandler), Project: "CSR"}
-	if _, err := s.Fill(context.Background(), ponyURL, ponyCommit, ""); err != nil || len(d.fetches) != 1 {
+	if _, _, err := s.Fill(context.Background(), ponyURL, ponyCommit, ""); err != nil || len(d.fetches) != 1 {
 		t.Errorf("third use: %v, %d fetches", err, len(d.fetches))
 	}
 }
@@ -117,11 +122,11 @@ func TestSkillFilledOnceForTwoProjects(t *testing.T) {
 func TestSkillFailedFetchIsRedone(t *testing.T) {
 	d := &skillDocker{fetchErr: errors.New("fetched commit ffff, not 0123: refused")}
 	s := &Skills{State: t.TempDir(), Exec: d.exec, Log: slog.New(slog.DiscardHandler), Project: "CSR"}
-	if _, err := s.Fill(context.Background(), ponyURL, ponyCommit, ""); err == nil || !strings.Contains(err.Error(), "refused") {
+	if _, _, err := s.Fill(context.Background(), ponyURL, ponyCommit, ""); err == nil || !strings.Contains(err.Error(), "refused") {
 		t.Fatalf("err %v", err)
 	}
 	d.fetchErr = nil
-	if _, err := s.Fill(context.Background(), ponyURL, ponyCommit, ""); err != nil || len(d.fetches) != 2 {
+	if _, _, err := s.Fill(context.Background(), ponyURL, ponyCommit, ""); err != nil || len(d.fetches) != 2 {
 		t.Errorf("second use: %v, %d fetches", err, len(d.fetches))
 	}
 }
@@ -131,7 +136,7 @@ func TestSkillFailedFetchIsRedone(t *testing.T) {
 func TestSkillPathMustBeAFolder(t *testing.T) {
 	d := &skillDocker{}
 	s := &Skills{State: t.TempDir(), Exec: d.exec, Log: slog.New(slog.DiscardHandler), Project: "CSR"}
-	if _, err := s.Fill(context.Background(), ponyURL, ponyCommit, "plugin"); err == nil || !strings.Contains(err.Error(), "not a folder") {
+	if _, _, err := s.Fill(context.Background(), ponyURL, ponyCommit, "plugin"); err == nil || !strings.Contains(err.Error(), "not a folder") {
 		t.Fatalf("err %v", err)
 	}
 	if len(d.fetches) != 1 {
@@ -139,13 +144,69 @@ func TestSkillPathMustBeAFolder(t *testing.T) {
 	}
 }
 
-func TestSkillVolumeAndRoot(t *testing.T) {
+// Fill says what the package's root holds, from the check's output, both
+// when it fetched the package and when it only checked it.
+func TestSkillFillReturnsContents(t *testing.T) {
+	d := &skillDocker{contents: "skills/a\ngemini-extension.json\n.opencode/plugins/index.js\n"}
+	s := &Skills{State: t.TempDir(), Exec: d.exec, Log: slog.New(slog.DiscardHandler), Project: "CSR"}
+	want := SkillContents{Skills: []string{"a"}, Extension: true, Plugins: []string{".opencode/plugins/index.js"}}
+	for range 2 {
+		if _, c, err := s.Fill(context.Background(), ponyURL, ponyCommit, ""); err != nil || !reflect.DeepEqual(c, want) {
+			t.Errorf("contents %+v, %v; want %+v", c, err, want)
+		}
+	}
+	if len(d.fetches) != 1 {
+		t.Errorf("%d fetches", len(d.fetches))
+	}
+}
+
+// The check lists, in the package's root, only the skill folders with a
+// SKILL.md, the Gemini manifest and the OpenCode plugin files OpenCode
+// itself would load, each by a name of safe characters and never through a
+// symlink; parseContents keeps only what it expects.
+func TestSkillCheckScriptListsContents(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir()) // macOS's /var is a symlink: the script compares realpaths
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "repo", "plugin")
+	for _, f := range []string{
+		"skills/good/SKILL.md", "skills/also.good_1/SKILL.md", "skills/bad name/SKILL.md", "skills/.hidden/SKILL.md",
+		"skills/bad,dst=x/SKILL.md", "skills/none/README.md", "skills/SKILL.md", "gemini-extension.json",
+		".opencode/plugins/index.js", ".opencode/plugin/p.ts", ".opencode/plugins/helper.cjs", ".opencode/plugins/x.mjs",
+		"outside/SKILL.md",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(root, "outside"), filepath.Join(root, "skills", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "complete"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("sh", "-c", strings.ReplaceAll(skillCheckScript, "/t", dir), "sh", "plugin").Output()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	want := SkillContents{Skills: []string{"also.good_1", "good"}, Extension: true, Plugins: []string{".opencode/plugin/p.ts", ".opencode/plugins/index.js"}}
+	if got := parseContents(string(out)); !reflect.DeepEqual(got, want) {
+		t.Errorf("contents %+v from\n%s\nwant %+v", got, out, want)
+	}
+	odd := "skills/a/b\nskills/../x\n/etc\ngemini-extension.json.bak\n.opencode/plugins/../../x.js\nskills/" + strings.Repeat("a", 101) + "\n"
+	if got := parseContents(odd); !reflect.DeepEqual(got, SkillContents{}) {
+		t.Errorf("odd lines parsed as %+v", got)
+	}
+}
+
+func TestSkillVolume(t *testing.T) {
 	v := SkillVolume(ponyURL, ponyCommit)
 	if !skillVolume.MatchString(v) || v == SkillVolume(ponyURL+"x", ponyCommit) || v == SkillVolume(ponyURL, strings.Repeat("f", 40)) {
 		t.Errorf("volume %s", v)
-	}
-	if SkillRoot("") != "repo" || SkillRoot("plugin") != "repo/plugin" {
-		t.Errorf("roots %q %q", SkillRoot(""), SkillRoot("plugin"))
 	}
 }
 

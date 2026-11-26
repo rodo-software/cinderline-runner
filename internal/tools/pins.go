@@ -18,12 +18,7 @@ const (
 	RipgrepVersion = "15.1.0"
 	// NodeVersion is the nodejs.org release, for glibc images; musl takes node
 	// from muslLibsImage, the same version.
-	NodeVersion  = "22.23.4"
-	PonytailRepo = "https://github.com/DietrichGebert/ponytail"
-	PonytailTag  = "v5.3.2"
-	// PonytailCommit is what PonytailTag points at; the clone is refused
-	// otherwise, so a moved tag can't change the plugin.
-	PonytailCommit = "16352ac229eb08a9598dcae48fe9f2b342567d86"
+	NodeVersion = "22.23.4"
 )
 
 // claudeSHA256 is per platform, copied from

@@ -11,8 +11,9 @@
 # volume's libraries) and the tools volume a runner has filled. Each check
 # needs its client's key in the environment: ANTHROPIC_API_KEY, CODEX_API_KEY
 # (an OpenAI key), GEMINI_API_KEY, or OPENROUTER_API_KEY plus OPENCODE_MODEL
-# (e.g. openrouter/<model id>). PKG is a package checkout on this machine;
-# by default, ponytail is copied from the tools volume. Outputs stay in OUT.
+# (e.g. openrouter/<model id>). PKG is a package checkout on this machine,
+# such as ponytail's (the tools volume no longer holds it since CLR-258).
+# Outputs stay in OUT.
 set -eu
 
 N=cinderline
@@ -24,10 +25,7 @@ OUT=${OUT:-$PWD/skills-spike-out}
 mkdir -p "$OUT/repo"
 chmod 777 "$OUT/repo"
 [ -d "$OUT/repo/.git" ] || git -C "$OUT/repo" init -q
-if [ -z "${PKG:-}" ]; then
-	PKG=$OUT/ponytail
-	[ -d "$PKG" ] || docker run --rm --user "$(id -u):$(id -g)" -v "$TOOLS:/t:ro" -v "$OUT:/o" --entrypoint cp "$IMAGE" -r /t/ponytail /o/
-fi
+: "${PKG:?set PKG to a package checkout, e.g. git clone --depth 1 --branch v5.3.2 https://github.com/DietrichGebert/ponytail}"
 
 # run is one agent container as the runner starts it: user 1000, the tools
 # volume read-only, a fresh state folder, the repository as working folder.

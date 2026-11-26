@@ -16,7 +16,9 @@ var gemini = kind{
 	cmd: func(_ *CLI, t Turn, _ string) []string {
 		return append([]string{"sh", "-c", geminiShell(`"$` + geminiSettingsVar + `"`), tools.Path + "/bin/node", tools.Path + "/gemini/bundle/gemini.js"}, geminiArgs(t)...)
 	},
-	parse: parseGemini,
+	parse:       parseGemini,
+	skillMounts: geminiSkillMounts,
+	stateDirs:   []string{"gemini", "gemini/.gemini", "gemini/.gemini/extensions", "gemini/.agents", "gemini/.agents/skills"},
 	// The Gemini API, or Vertex AI's global endpoint for an express-mode key.
 	// Not www.googleapis.com: a sign-in turn fetches the account's email from
 	// it only when no account is cached (login caches it), for telemetry,
@@ -35,6 +37,45 @@ var gemini = kind{
 
 // geminiHome puts Gemini CLI's home on the state volume.
 const geminiHome = "GEMINI_CLI_HOME=" + StatePath + "/gemini"
+
+// geminiExtensions and geminiSkills are the folders of GEMINI_CLI_HOME
+// that Gemini CLI loads extensions and skills from without an install step.
+const (
+	geminiExtensions = StatePath + "/gemini/.gemini/extensions"
+	geminiSkills     = StatePath + "/gemini/.agents/skills"
+)
+
+// geminiSkillMounts loads each package as fully as Gemini CLI can without an
+// install step or network (CLR-256): one with gemini-extension.json as an
+// extension, which brings its skills, context file and hooks; any other as
+// plain skills, one mount per skill folder, as Gemini CLI looks only one
+// level deep. Skill folders are not namespaced there, so a skill whose name
+// an earlier package's took is left out (the run logs it). Both folders are
+// a tmpfs, so the mount points stay out of the project's state volume.
+func geminiSkillMounts(t Turn) []string {
+	var ext, skills []string
+	taken := map[string]bool{}
+	for _, s := range t.Skills {
+		if s.Extension {
+			ext = append(ext, s.mount(s.in(""), geminiExtensions+"/"+s.Name)...)
+			continue
+		}
+		for _, k := range s.Skills {
+			if !taken[k] {
+				taken[k] = true
+				skills = append(skills, s.mount(s.in("skills/"+k), geminiSkills+"/"+k)...)
+			}
+		}
+	}
+	var m []string
+	if ext != nil {
+		m = append(append(m, "--mount", "type=tmpfs,dst="+geminiExtensions), ext...)
+	}
+	if skills != nil {
+		m = append(append(m, "--mount", "type=tmpfs,dst="+geminiSkills), skills...)
+	}
+	return m
+}
 
 // geminiShell writes settings, a shell word, as the user settings file and
 // runs the CLI.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/environment"
@@ -94,7 +95,8 @@ func opencodeArgs(t Turn) []string {
 // opencodeConfig is OpenCode's inline config (OPENCODE_CONFIG_CONTENT): the
 // turn's provider, OpenRouter or p, its key and the scoped token read from
 // the environment, the
-// cinderline MCP server only for agents with a token, and the team's
+// cinderline MCP server only for agents with a token, the skill packages,
+// and the team's
 // max_turns as the steps of the default build agent. After that many steps
 // OpenCode asks the model for a text-only answer, so a turn ends with a
 // report instead of an error.
@@ -127,14 +129,33 @@ func opencodeConfig(t Turn, mcpURL string, p *namedProvider) string {
 			"models":  map[string]any{p.model: map[string]any{}},
 		}}
 	}
-	cfg, _ := json.Marshal(map[string]any{
+	cfg := map[string]any{
 		"$schema":    "https://opencode.ai/config.json",
 		"autoupdate": false,
 		"provider":   provider,
 		"agent":      map[string]any{"build": map[string]int{"steps": t.MaxTurns}},
 		"mcp":        mcp,
-	})
-	return string(cfg)
+	}
+	// Each skill package's skills/, and its plugin files, which OpenCode
+	// imports by path without an npm install (CLR-256). A plugin may also
+	// register the package's skills; OpenCode then has them twice by name.
+	var paths, plugins []string
+	for _, s := range t.Skills {
+		if len(s.Skills) > 0 {
+			paths = append(paths, path.Join(s.root(), "skills"))
+		}
+		for _, f := range s.Plugins {
+			plugins = append(plugins, path.Join(s.root(), f))
+		}
+	}
+	if paths != nil {
+		cfg["skills"] = map[string][]string{"paths": paths}
+	}
+	if plugins != nil {
+		cfg["plugin"] = plugins
+	}
+	out, _ := json.Marshal(cfg)
+	return string(out)
 }
 
 // opencodeEnv is the agent container's environment for an OpenCode turn:

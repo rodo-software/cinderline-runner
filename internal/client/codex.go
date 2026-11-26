@@ -17,7 +17,9 @@ var codex = kind{
 	cmd: func(c *CLI, t Turn, _ string) []string {
 		return append([]string{"sh", "-c", codexShell, tools.Path + "/bin/codex"}, codexArgs(t, c.MCPURL, c.BaseURL)...)
 	},
-	parse: parseCodex,
+	parse:       parseCodex,
+	skillMounts: codexSkillMounts,
+	stateDirs:   []string{"codex", "codex/skills"},
 	// OpenAI's API, or the configured base URL's.
 	hosts: func(c *CLI, _ Turn) []string {
 		if c.BaseURL != "" {
@@ -40,6 +42,28 @@ const (
 	codexHome  = "CODEX_HOME=" + StatePath + "/codex"
 	codexShell = `mkdir -p "$CODEX_HOME" && ` + rgExec
 )
+
+// codexSkills is $CODEX_HOME/skills, the one skill root under CODEX_HOME.
+const codexSkills = StatePath + "/codex/skills"
+
+// codexSkillMounts mounts each package's skills/ read-only at
+// $CODEX_HOME/skills/<name>, which Codex searches for SKILL.md. Plain skills
+// only: a package's hooks need its plugin installed with features.plugins
+// on, an install step and network on every turn (CLR-256, open point 2).
+// The folder itself is a tmpfs, so the mount points stay out of the
+// project's state volume and Codex can still write its system skills there.
+func codexSkillMounts(t Turn) []string {
+	var m []string
+	for _, s := range t.Skills {
+		if len(s.Skills) > 0 {
+			m = append(m, s.mount(s.in("skills"), codexSkills+"/"+s.Name)...)
+		}
+	}
+	if m == nil {
+		return nil
+	}
+	return append([]string{"--mount", "type=tmpfs,dst=" + codexSkills}, m...)
+}
 
 // codexArgs is Codex's headless argv for one turn; the prompt goes in on
 // stdin through "-". Options before the resume subcommand.

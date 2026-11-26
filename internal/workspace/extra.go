@@ -11,11 +11,14 @@ import (
 // read-only, one folder per repository (CSR-160). LinkedPath is where they
 // see the repositories of linked projects, one folder per project key with
 // a folder per repository in it (CSR-161). AttachmentsPath is where they see
-// the files attached to the run's issue (CSR-173).
+// the files attached to the run's issue (CSR-173). SkillsPath is where they
+// see the run's skill packages, read-only, one folder per package with its
+// repository in it (CLR-258).
 const (
 	ExtraPath       = "/extra"
 	LinkedPath      = "/linked"
 	AttachmentsPath = "/attachments"
+	SkillsPath      = "/skills"
 )
 
 // Extra is one repository to fetch: its folder under the mount (KEY/name
