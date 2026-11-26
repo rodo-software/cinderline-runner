@@ -8,6 +8,9 @@ package run
 // proxy at host.docker.internal, as a local model provider is (decision
 // 2026-11-17-local-model-providers); example.com through the public roots.
 // Needs outbound HTTPS to example.com, as TestIntegrationAllowlist.
+// CLR-248: the proxy reads the first request to a refused host over TLS
+// that curl in the agent's container verifies, answers it with 403 and
+// reports its URL without the query.
 
 import (
 	"context"
@@ -24,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,6 +35,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/ca"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -40,6 +45,7 @@ echo "signed by the CA: $(r curl -sS --fail --max-time 30 "$0")"
 echo "public: $(r curl -sS --fail --max-time 30 https://example.com/)"
 echo "bundle: $(r test -s "$SSL_CERT_FILE" -a "$SSL_CERT_FILE" = "$GIT_SSL_CAINFO" -a "$SSL_CERT_FILE" = "$REQUESTS_CA_BUNDLE" -a "$SSL_CERT_FILE" = "$CURL_CA_BUNDLE")"
 echo "node: $(r test "$NODE_EXTRA_CA_CERTS" = "$1")"
+echo "refused: $(curl -sS --max-time 30 -w ' %{http_code}' 'https://example.net/blocked/path?token=query-marker' | tr -d '\n')"
 `
 
 func TestIntegrationRunnersCA(t *testing.T) {
@@ -65,13 +71,15 @@ func TestIntegrationRunnersCA(t *testing.T) {
 
 	project := "ITC" + strconv.Itoa(os.Getpid())
 	var logs lockedBuffer
+	var refused []environment.Refusal // written after the agent ends, in Run
 	env := &environment.Docker{
-		Project: project,
-		Exec:    workspace.RunCommand,
-		Log:     slog.New(slog.NewTextHandler(&logs, nil)),
-		Allow:   []string{"example.com:443"},
-		Memory:  4 << 30,
-		CA:      dir,
+		Project:   project,
+		Exec:      workspace.RunCommand,
+		Log:       slog.New(slog.NewTextHandler(&logs, nil)),
+		Allow:     []string{"example.com:443"},
+		Memory:    4 << 30,
+		CA:        dir,
+		OnRefused: func(_ string, r environment.Refusal) { refused = append(refused, r) },
 	}
 	t.Cleanup(func() {
 		if err := env.Cleanup(context.WithoutCancel(ctx)); err != nil {
@@ -95,15 +103,22 @@ func TestIntegrationRunnersCA(t *testing.T) {
 		"public: reached",
 		"bundle: reached",
 		"node: reached",
+		"refused: Blocked by " + name.Name + "'s egress proxy: this host is not allowed for this run. 403",
 	} {
 		if !strings.Contains(out, want+"\n") {
 			t.Errorf("agent output lacks %q:\n%s", want, out)
 		}
 	}
+	want := environment.Refusal{Host: "example.net:443", Reason: "not_allowed", Method: "GET", URL: "https://example.net/blocked/path"}
+	if !slices.Contains(refused, want) {
+		t.Errorf("refused = %+v, want %+v", refused, want)
+	}
+	if strings.Contains(logs.String(), "query-marker") {
+		t.Errorf("the run log holds the query:\n%s", logs.String())
+	}
 }
 
-// leaf is a server certificate for host, signed by the CA, as the proxy
-// signs one for a refused host.
+// leaf is a server certificate for host, signed by the CA.
 func leaf(t *testing.T, authority *ca.CA, host string) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

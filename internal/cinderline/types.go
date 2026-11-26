@@ -331,11 +331,33 @@ type LastStep struct {
 	// What the push scan found, at publish and stop: a known one comes with
 	// the outcome secret, nothing pushed; the others are warnings.
 	Secrets []StepSecret `json:"secrets,omitempty"`
-	// RefusedHosts are the host:port pairs the egress proxy refused during
-	// a run, resolve or check step, once each, in lower case (decision
-	// 2026-11-17-hosts-from-cinderline). Untrusted: the agent chose them.
-	RefusedHosts []string `json:"refused_hosts,omitempty"`
+	// Refused are the hosts the egress proxy refused during a run, resolve
+	// or check step, one per host:port with the first request it read
+	// there (app decision 2026-11-25-blocked-host-urls). Untrusted: the
+	// agent chose them.
+	Refused []RefusedHost `json:"refused,omitempty"`
 }
+
+// RefusedHost is a host the step's egress proxy refused, why, and the first
+// request it read there.
+type RefusedHost struct {
+	Host   string `json:"host"`   // host:port, in lower case as the allowlist writes it
+	Reason string `json:"reason"` // one of the Refused* reasons
+	// Method and URL are the first refused request's, the URL
+	// scheme://host[:port]/path without query, fragment or user info; nil
+	// when the proxy could not read it, as from a client that pins
+	// certificates or ignores the runner's CA.
+	Method *string `json:"method,omitempty"`
+	URL    *string `json:"url,omitempty"`
+}
+
+// Why the proxy refused a host (RefusedHost.Reason).
+const (
+	RefusedNotAllowed     = "not_allowed"     // on no allowlist
+	RefusedPrivateAddress = "private_address" // allowed from Cinderline, but a private address (decision 2026-11-19-app-host-addresses)
+	RefusedStrict         = "strict"          // allowed from Cinderline, but strict host blocking is on
+	RefusedRunnerMachine  = "runner_machine"  // localhost, a loopback address or host.docker.internal
+)
 
 // StepSecret is a secret the push scan found: its kind and place, never its
 // value (decision 2026-11-17-open-questions-answered, point 2).

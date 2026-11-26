@@ -3,6 +3,8 @@ package environment
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -119,13 +121,14 @@ var issueLabels = []string{"--label", "cinderline.project=CSR", "--label", "cind
 // run's allowlist as its arguments.
 func TestUp(t *testing.T) {
 	d, calls := scripted(nil, nil)
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}, false); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", []string{"cs.example:443", "api.anthropic.com:443"}, false, nil); err != nil {
 		t.Fatal(err)
 	}
 	want := []execCall{
 		{nil, append(append([]string{"docker", "network", "create", "--internal"}, issueLabels...), "cinderline-CSR-CSR-31")},
 		{nil, append(append([]string{"docker", "run", "--detach"}, issueLabels...),
 			"--name", "cinderline-CSR-CSR-31-proxy", "--network", "cinderline-CSR-CSR-31", "--network-alias", "proxy",
+			"-e", "PROXY_NAME=cinderline",
 			"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
 			"--memory", "64m", "--memory-swap", "64m",
 			"cinderline-proxy:abc", "cs.example:443", "api.anthropic.com:443")},
@@ -139,7 +142,7 @@ func TestUp(t *testing.T) {
 func TestUpFailureLeavesNothing(t *testing.T) {
 	boom := errors.New("boom")
 	d, calls := scripted(nil, map[int]error{1: boom})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, false); !errors.Is(err, boom) {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, false, nil); !errors.Is(err, boom) {
 		t.Errorf("up = %v, want boom", err)
 	}
 	if got := (*calls)[len(*calls)-1].Argv; !reflect.DeepEqual(got, []string{"docker", "network", "rm", "cinderline-CSR-CSR-31"}) {
@@ -151,7 +154,7 @@ func TestUpFailureLeavesNothing(t *testing.T) {
 // issue's later turns still run (decision 2026-11-11-audit-fixes).
 func TestUpRemovesALeftoverNetwork(t *testing.T) {
 	d, calls := scripted(nil, map[int]error{0: errors.New("network already exists")})
-	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, false); err != nil {
+	if err := d.up(context.Background(), "CSR-31", "cinderline-proxy:abc", nil, false, nil); err != nil {
 		t.Fatalf("up = %v", err)
 	}
 	var got []string
@@ -437,31 +440,37 @@ func TestProxyEnv(t *testing.T) {
 	}
 }
 
-// CSR-63: every CONNECT the proxy refused shows up in the run's log by host
-// and is handed to OnRefused, which counts it for the runner report. Lines
-// that are not refusals are ignored.
+// CSR-63, CLR-248: every connection the proxy refused shows up in the run's
+// log by host and reason, never its URL, and is handed to OnRefused with
+// its reason and first request, for the runner report. Lines that are not
+// refusals are ignored.
 func TestRunLogsAndCountsRefusedHosts(t *testing.T) {
 	d, _, logs := runner(nil, func(context.Context, io.Writer) error { return nil })
 	record := d.Exec
 	d.Exec = func(ctx context.Context, env []string, argv ...string) (string, error) {
 		if len(argv) > 1 && argv[1] == "logs" {
 			_, _ = record(ctx, env, argv...)
-			return `{"time":"2026-11-09T12:00:00Z","level":"WARN","msg":"refused","host":"evil.example","port":"443"}` + "\n" +
+			return `{"time":"2026-11-09T12:00:00Z","level":"WARN","msg":"refused","host":"evil.example","port":"443","reason":"not_allowed","method":"GET","url":"https://evil.example/path-marker"}` + "\n" +
 				`{"time":"2026-11-09T12:00:01Z","level":"INFO","msg":"listening","addr":":3128"}` + "\n" +
 				"not json\n" +
-				`{"time":"2026-11-09T12:00:02Z","level":"WARN","msg":"refused","host":"probe.example","port":"80"}` + "\n", nil
+				`{"time":"2026-11-09T12:00:02Z","level":"WARN","msg":"refused","host":"probe.example","port":"80","reason":"private_address"}` + "\n", nil
 		}
 		return record(ctx, env, argv...)
 	}
 	var refused []string
-	d.OnRefused = func(issue, host string) { refused = append(refused, issue+" "+host) }
+	d.OnRefused = func(issue string, r Refusal) {
+		refused = append(refused, issue+" "+r.Host+" "+r.Reason+" "+r.Method+" "+r.URL)
+	}
 	if _, err := d.Run(context.Background(), turn); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"CSR-31 evil.example:443", "CSR-31 probe.example:80"}; !reflect.DeepEqual(refused, want) {
+	if want := []string{"CSR-31 evil.example:443 not_allowed GET https://evil.example/path-marker", "CSR-31 probe.example:80 private_address  "}; !reflect.DeepEqual(refused, want) {
 		t.Errorf("OnRefused got %q, want %q", refused, want)
 	}
-	for _, want := range []string{"host=evil.example:443", "host=probe.example:80"} {
+	if strings.Contains(logs.String(), "path-marker") {
+		t.Errorf("the run log holds the URL:\n%s", logs)
+	}
+	for _, want := range []string{"host=evil.example:443 reason=not_allowed", "host=probe.example:80 reason=private_address"} {
 		if !strings.Contains(logs.String(), `msg="host refused"`) || !strings.Contains(logs.String(), want) {
 			t.Errorf("run log lacks a host refused line with %s:\n%s", want, logs)
 		}
@@ -982,6 +991,31 @@ func TestRunTrustsTheRunnersCA(t *testing.T) {
 		if !strings.Contains(trustScript, v+"="+caBundle) {
 			t.Errorf("trustScript does not set %s", v)
 		}
+	}
+	// CLR-248: the proxy gets a new intermediate of the CA by name, its
+	// certificate and key in the docker command's environment, never in its
+	// argv, and never the CA's own key.
+	proxy := calls()[3]
+	if !hasPair(proxy.Argv, "-e", "PROXY_CA") || len(proxy.Env) != 1 || !strings.HasPrefix(proxy.Env[0], "PROXY_CA=-----BEGIN CERTIFICATE-----") {
+		t.Fatalf("proxy call = %q with env %d entries, want PROXY_CA by name", proxy.Argv, len(proxy.Env))
+	}
+	for _, a := range proxy.Argv {
+		if strings.Contains(a, "PRIVATE") {
+			t.Errorf("a key in the proxy's argv: %q", a)
+		}
+	}
+	block, rest := pem.Decode([]byte(strings.TrimPrefix(proxy.Env[0], "PROXY_CA=")))
+	key, _ := pem.Decode(rest)
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || key == nil || key.Type != "PRIVATE KEY" {
+		t.Fatalf("PROXY_CA: %v, key %v", err, key)
+	}
+	if cert.Equal(authority.Cert) || cert.CheckSignatureFrom(authority.Cert) != nil || !cert.IsCA {
+		t.Error("PROXY_CA is not an intermediate the CA signed")
+	}
+	own, _ := x509.MarshalPKCS8PrivateKey(authority.Key)
+	if bytes.Equal(key.Bytes, own) {
+		t.Error("the proxy gets the CA's own key")
 	}
 }
 

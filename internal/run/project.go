@@ -106,9 +106,9 @@ type Project struct {
 	prepMu   sync.Mutex    // one run prepares at a time: every slot's run shares the environment, the bare repository and the extra volumes
 
 	mu       sync.Mutex
-	clients  []cinderline.ReportClient // the last detection; nil before the first
-	refused  int                       // connections the egress proxy refused since start
-	hosts    map[string][]string       // by run's issue ref: the host:port pairs it refused since takeRefused, once each
+	clients  []cinderline.ReportClient           // the last detection; nil before the first
+	refused  int                                 // connections the egress proxy refused since start
+	hosts    map[string][]cinderline.RefusedHost // by run's issue ref: the hosts it refused since takeRefused, as AddRefused keeps them
 	status   localapi.ProjectStatus
 	stopRuns map[string]context.CancelCauseFunc // by run's issue ref: ends its step in flight
 	waits    map[string]string                  // by run's issue ref: the provider its turn waits for a place on
@@ -340,31 +340,54 @@ func (p *Project) hasClients() bool {
 }
 
 // AddRefused counts one connection the egress proxy refused, for the
-// report, and keeps its host:port for the step's facts of run ref: once, in
-// lower case as the allowlist writes it, and only a well-formed one. Two
-// runs may refuse at once, so the hosts are per run (CLR-194).
-func (p *Project) AddRefused(ref, hostPort string) {
+// report, and keeps its host for the step's facts of run ref: the first
+// MaxRefused hosts, each once by host:port in lower case as the allowlist
+// writes it, and only a well-formed one, with its reason and the first
+// request the proxy read there (app decision 2026-11-25-blocked-host-urls).
+// Two runs may refuse at once, so the hosts are per run (CLR-194).
+func (p *Project) AddRefused(ref string, r environment.Refusal) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.refused++
-	hp := strings.ToLower(hostPort)
-	if !config.ValidHostPort(hp) || slices.Contains(p.hosts[ref], hp) {
+	hp := strings.ToLower(r.Host)
+	if !config.ValidHostPort(hp) {
 		return
 	}
-	if p.hosts == nil {
-		p.hosts = map[string][]string{}
+	hosts := p.hosts[ref]
+	i := slices.IndexFunc(hosts, func(h cinderline.RefusedHost) bool { return h.Host == hp })
+	switch {
+	case i < 0 && len(hosts) < cinderline.MaxRefused:
+		if p.hosts == nil {
+			p.hosts = map[string][]cinderline.RefusedHost{}
+		}
+		h := cinderline.RefusedHost{Host: hp, Reason: r.Reason}
+		if r.URL != "" {
+			h.Method, h.URL = &r.Method, &r.URL
+		}
+		p.hosts[ref] = append(hosts, h)
+	case i >= 0 && hosts[i].URL == nil && r.URL != "":
+		// An earlier connection's handshake failed: this is the first request.
+		hosts[i].Method, hosts[i].URL = &r.Method, &r.URL
 	}
-	p.hosts[ref] = append(p.hosts[ref], hp)
 }
 
 // takeRefused returns the hosts run ref refused since its last call and
-// forgets them.
-func (p *Project) takeRefused(ref string) []string {
+// forgets them. A host the step's allowHosts named that the proxy found on
+// no allowlist was dropped by the runner: on a strict runner as strict,
+// otherwise as the private address allowHosts drops (decision
+// 2026-11-19-app-host-addresses).
+func (p *Project) takeRefused(ref string, allowHosts []string) []cinderline.RefusedHost {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	hosts := p.hosts[ref]
-	if p.hosts != nil {
-		delete(p.hosts, ref)
+	delete(p.hosts, ref)
+	for i, h := range hosts {
+		if h.Reason == cinderline.RefusedNotAllowed && slices.ContainsFunc(allowHosts, func(a string) bool { return strings.EqualFold(a, h.Host) }) {
+			hosts[i].Reason = cinderline.RefusedPrivateAddress
+			if p.StrictHosts {
+				hosts[i].Reason = cinderline.RefusedStrict
+			}
+		}
 	}
 	return hosts
 }

@@ -281,7 +281,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 	env := &environment.Docker{
 		Project: p.ID(), Log: log, Exec: workspace.RunCommand, Memory: p.MemoryLimit(),
 		Allow:     environment.ProjectHosts(p.URL, slices.Concat(cfg.AllowHosts, p.AllowHosts)),
-		OnRefused: func(issue, hp string) { proj.AddRefused(issue, hp) },
+		OnRefused: func(issue string, r environment.Refusal) { proj.AddRefused(issue, r) },
 		CA:        ca.Dir(d.o.Paths.State),
 	}
 	proj, err = run.NewProject(p, cfg.Providers, sec, d.o.Paths.State, env, log)

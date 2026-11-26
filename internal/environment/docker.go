@@ -106,9 +106,9 @@ type Docker struct {
 	// MemoryLimit; a mem_limit on the compose file's agent service wins.
 	// Run refuses to start an agent without one.
 	Memory int64
-	// OnRefused is called with each host:port the run's proxy refused, and
-	// the run's issue; nil: none.
-	OnRefused func(issue, hostPort string)
+	// OnRefused is called with each connection the run's proxy refused,
+	// and the run's issue; nil: none.
+	OnRefused func(issue string, r Refusal)
 	// OnFetch is called before the default image is pulled or built, a slow
 	// first-time step; nil: none.
 	OnFetch func()
@@ -160,7 +160,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		}
 		names = append(names, "-e", k)
 	}
-	cmd, trust, err := d.trust(s.Cmd)
+	cmd, trust, intermediate, err := d.trust(s.Cmd)
 	if err != nil {
 		return "", fmt.Errorf("run %s: %w", s.Issue, err)
 	}
@@ -185,7 +185,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	for _, hp := range s.AppAllow {
 		allow = append(allow, "public:"+hp)
 	}
-	if err := d.up(ctx, s.Issue, proxy, allow, hostGateway); err != nil {
+	if err := d.up(ctx, s.Issue, proxy, allow, hostGateway, intermediate); err != nil {
 		return "", err
 	}
 	var p *composed
@@ -278,20 +278,25 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 	return kept, err
 }
 
-// trust returns cmd run through trustScript and the flags that mount the
-// CA's certificate and point Node at it, which adds it to its own roots;
+// trust returns cmd run through trustScript, the flags that mount the
+// CA's certificate and point Node at it, which adds it to its own roots,
+// and a new intermediate of the CA for the turn's proxy (ca.Intermediate);
 // without d.CA, cmd alone. The CA is made or renewed first when needed, so
 // a new one reaches only the containers started after it.
-func (d *Docker) trust(cmd []string) ([]string, []string, error) {
+func (d *Docker) trust(cmd []string) ([]string, []string, []byte, error) {
 	if d.CA == "" {
-		return cmd, nil, nil
+		return cmd, nil, nil, nil
 	}
 	c, err := ca.Ensure(d.CA, time.Now())
 	if err != nil {
-		return nil, nil, fmt.Errorf("the runner's CA: %w", err)
+		return nil, nil, nil, fmt.Errorf("the runner's CA: %w", err)
+	}
+	intermediate, err := ca.Intermediate(c, time.Now())
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("the runner's CA: %w", err)
 	}
 	return slices.Concat([]string{"sh", "-c", trustScript, "sh"}, cmd),
-		[]string{"-v", c.CertFile + ":" + CAPath + ":ro", "-e", "NODE_EXTRA_CA_CERTS=" + CAPath}, nil
+		[]string{"-v", c.CertFile + ":" + CAPath + ":ro", "-e", "NODE_EXTRA_CA_CERTS=" + CAPath}, intermediate, nil
 }
 
 // oomKilled reports whether the kernel killed a process of the agent
@@ -308,9 +313,19 @@ func (d *Docker) oomKilled(ctx context.Context, issue, agent string) bool {
 	return strings.TrimSpace(out) == "true"
 }
 
-// refused logs each host the run's proxy refused, by name, and hands it to
-// OnRefused for the runner report: a blocked host fails visibly, and a model
-// that probes once in many turns still shows up.
+// Refusal is one connection the run's proxy refused (images/proxy/cmd).
+type Refusal struct {
+	Host   string // host:port
+	Reason string // as cinderline.RefusedHost's
+	// Method and URL are the first request's, without query; "" when the
+	// proxy did not read it.
+	Method, URL string
+}
+
+// refused logs each host the run's proxy refused, by name and reason, and
+// hands it to OnRefused for the runner report: a blocked host fails
+// visibly, and a model that probes once in many turns still shows up. The
+// URL is the agent's text, so only the report carries it.
 func (d *Docker) refused(ctx context.Context, issue string) {
 	log := d.log().With("project", d.Project, "issue", issue)
 	out, err := d.exec(ctx, "docker", "logs", d.network(issue)+"-proxy")
@@ -319,14 +334,14 @@ func (d *Docker) refused(ctx context.Context, issue string) {
 		return
 	}
 	for _, line := range strings.Split(out, "\n") {
-		var e struct{ Time, Msg, Host, Port string }
+		var e struct{ Time, Msg, Host, Port, Reason, Method, URL string }
 		if json.Unmarshal([]byte(line), &e) != nil || e.Msg != "refused" {
 			continue
 		}
-		hp := e.Host + ":" + e.Port
-		log.Warn("host refused", "host", hp, "at", e.Time)
+		r := Refusal{Host: e.Host + ":" + e.Port, Reason: e.Reason, Method: e.Method, URL: e.URL}
+		log.Warn("host refused", "host", r.Host, "reason", r.Reason, "at", e.Time)
 		if d.OnRefused != nil {
-			d.OnRefused(issue, hp)
+			d.OnRefused(issue, r)
 		}
 	}
 }
@@ -509,10 +524,13 @@ func (d *Docker) network(issue string) string {
 // upstream DNS, starts the egress proxy on it as proxy, allowing allow, and
 // connects the proxy to the default bridge as its way out. hostGateway maps
 // HostGateway to the runner's machine in the proxy, which reaches only the
-// ports allow lists on it. What an earlier
+// ports allow lists on it. intermediate, if set, is the turn's
+// intermediate CA, with which the proxy reads the first request of a
+// refused HTTPS host; it goes by name, its value in the docker command's
+// environment, never its argv. What an earlier
 // turn left under these names is removed first when it is in the way. A
 // failure leaves nothing behind.
-func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string, hostGateway bool) error {
+func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []string, hostGateway bool, intermediate []byte) error {
 	labels := workspace.Labels(d.Project, issue)
 	net := d.network(issue)
 	create := append(append([]string{"docker", "network", "create", "--internal"}, labels...), net)
@@ -530,11 +548,18 @@ func (d *Docker) up(ctx context.Context, issue, proxyImage string, allow []strin
 	if hostGateway {
 		proxy = append(proxy, "--add-host", HostGateway+":host-gateway")
 	}
+	// The proxy's 403 names the egress block; its source cannot import the name.
+	proxy = append(proxy, "-e", "PROXY_NAME="+name.Name)
+	var env []string
+	if intermediate != nil {
+		proxy, env = append(proxy, "-e", "PROXY_CA"), []string{"PROXY_CA=" + string(intermediate)}
+	}
 	proxy = slices.Concat(proxy, hardening, []string{"--read-only"}, memoryLimit(proxyMemory), []string{proxyImage}, allow)
-	for _, argv := range [][]string{proxy, {"docker", "network", "connect", "bridge", net + "-proxy"}} {
-		if _, err := d.exec(ctx, argv...); err != nil {
-			return errors.Join(err, d.down(ctx, issue))
-		}
+	if _, err := d.Exec(ctx, env, proxy...); err != nil {
+		return errors.Join(err, d.down(ctx, issue))
+	}
+	if _, err := d.exec(ctx, "docker", "network", "connect", "bridge", net+"-proxy"); err != nil {
+		return errors.Join(err, d.down(ctx, issue))
 	}
 	return nil
 }

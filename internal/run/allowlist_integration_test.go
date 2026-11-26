@@ -75,10 +75,10 @@ func TestIntegrationAllowlist(t *testing.T) {
 		Log:     slog.New(slog.NewTextHandler(&logs, nil)),
 		Allow:   []string{"example.com:443"},
 		Memory:  4 << 30,
-		OnRefused: func(_, host string) {
+		OnRefused: func(_ string, r environment.Refusal) {
 			mu.Lock()
 			defer mu.Unlock()
-			refused = append(refused, host)
+			refused = append(refused, r.Host+" "+r.Reason)
 		},
 	}
 	t.Cleanup(func() {
@@ -113,15 +113,16 @@ func TestIntegrationAllowlist(t *testing.T) {
 	mu.Lock()
 	got := slices.Clone(refused)
 	mu.Unlock()
-	for _, host := range []string{"example.net:443", "host.docker.internal:80"} {
+	// CLR-248: each with the rule that refused it.
+	for _, host := range []string{"example.net:443 not_allowed", "host.docker.internal:80 runner_machine"} {
 		if !slices.Contains(got, host) {
 			t.Errorf("refused hosts = %q, want %s among them", got, host)
 		}
-		if !strings.Contains(logs.String(), "host="+host) {
+		if hp, _, _ := strings.Cut(host, " "); !strings.Contains(logs.String(), "host="+hp) {
 			t.Errorf("run log lacks the refused %s", host)
 		}
 	}
-	if slices.Contains(got, "example.com:443") {
+	if slices.ContainsFunc(got, func(h string) bool { return strings.HasPrefix(h, "example.com:443 ") }) {
 		t.Errorf("the allowed host was refused: %q", got)
 	}
 }

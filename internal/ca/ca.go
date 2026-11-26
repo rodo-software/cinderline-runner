@@ -78,9 +78,8 @@ func Rotate(dir string, now time.Time) (*CA, error) {
 }
 
 // create makes a new CA: an ECDSA P-256 key and a self-signed certificate
-// that may sign the proxy's certificates, and through one intermediate,
-// which leaves the proxy ticket (CLR-248) the choice of keeping this key out
-// of the proxy's container too.
+// that signs, through one intermediate per turn (Intermediate), the
+// certificates the egress proxy makes for refused hosts.
 func create(dir string, now time.Time) (*CA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -187,4 +186,48 @@ func writeFile(dir, base string, b []byte, perm os.FileMode) error {
 		return err
 	}
 	return os.Rename(f.Name(), filepath.Join(dir, base))
+}
+
+// IntermediateValidity is how long a turn's intermediate is valid: a turn's
+// proxy lives hours at most.
+const IntermediateValidity = 48 * time.Hour
+
+// Intermediate makes a new intermediate CA for one turn's egress proxy and
+// returns its certificate and its PKCS #8 key, PEM (CLR-248). It may sign
+// only end certificates and ends within IntermediateValidity, never after
+// c, so the CA's own key never enters a container and a proxy's key is
+// useless soon after its turn.
+func Intermediate(c *CA, now time.Time) ([]byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, err
+	}
+	end := now.Add(IntermediateValidity)
+	if end.After(c.Cert.NotAfter) {
+		end = c.Cert.NotAfter
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: name.Name + " egress proxy", Organization: []string{name.Name + " runner"}},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              end,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		MaxPathLenZero:        true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.Cert, &key.PublicKey, c.Key)
+	if err != nil {
+		return nil, err
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...), nil
 }

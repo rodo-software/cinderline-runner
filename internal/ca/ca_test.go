@@ -1,6 +1,7 @@
 package ca
 
 import (
+	"crypto"
 	"crypto/x509"
 	"encoding/pem"
 	"os"
@@ -125,6 +126,54 @@ func TestEnsureReplacesABrokenCA(t *testing.T) {
 		}
 		if c.Cert.Equal(a.Cert) || !c.Key.PublicKey.Equal(c.Cert.PublicKey) {
 			t.Errorf("%s: not replaced by a matching pair", name)
+		}
+	}
+}
+
+// CLR-248: a turn's intermediate is a CA that the runner's CA signed, may
+// sign only certificates for hosts, ends within IntermediateValidity and
+// never after the CA, and comes as its certificate and its own key: never
+// the CA's.
+func TestIntermediate(t *testing.T) {
+	c, err := Ensure(Dir(t.TempDir()), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []time.Time{now, c.Cert.NotAfter.Add(-time.Hour)} {
+		b, err := Intermediate(c, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cert *x509.Certificate
+		var keys int
+		for block, rest := pem.Decode(b); block != nil; block, rest = pem.Decode(rest) {
+			switch block.Type {
+			case "CERTIFICATE":
+				if cert, err = x509.ParseCertificate(block.Bytes); err != nil {
+					t.Fatal(err)
+				}
+			case "PRIVATE KEY":
+				keys++
+				k, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if c.Key.Equal(k) || !cert.PublicKey.(interface{ Equal(crypto.PublicKey) bool }).Equal(k.(crypto.Signer).Public()) {
+					t.Error("the key is the CA's, or not the intermediate's")
+				}
+			}
+		}
+		if cert == nil || keys != 1 {
+			t.Fatalf("bundle %q, want one certificate and one key", b)
+		}
+		if err := cert.CheckSignatureFrom(c.Cert); err != nil {
+			t.Error(err)
+		}
+		if !cert.IsCA || cert.MaxPathLen != 0 || !cert.MaxPathLenZero {
+			t.Errorf("CA %v, max path %d", cert.IsCA, cert.MaxPathLen)
+		}
+		if end := min(at.Add(IntermediateValidity).Unix(), c.Cert.NotAfter.Unix()); cert.NotAfter.Unix() != end || !cert.NotBefore.Before(at) {
+			t.Errorf("at %v: valid %v to %v", at, cert.NotBefore, cert.NotAfter)
 		}
 	}
 }

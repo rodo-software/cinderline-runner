@@ -2,7 +2,8 @@ package main
 
 // Acceptance tests for CSR-63: the egress proxy lets the agent reach exactly
 // the listed host:port pairs, refuses everything else, and logs each refusal
-// as one JSON line with the host, the port and the time, never the content.
+// as one JSON line with the host, the port, the reason and the time, never
+// the request's headers or body.
 
 import (
 	"bufio"
@@ -123,7 +124,7 @@ func TestAppOpenedNameResolvingToPrivateAddressIsRefused(t *testing.T) {
 		t.Fatalf("refusals = %v, want one per request", got)
 	}
 	for _, line := range got {
-		if line["host"] != "internal.example" || line["port"] != "80" {
+		if line["host"] != "internal.example" || line["port"] != "80" || line["reason"] != "private_address" {
 			t.Errorf("refusal = %v", line)
 		}
 	}
@@ -239,7 +240,7 @@ func startProxy(t *testing.T, allow ...string) (string, *syncBuffer) {
 		t.Fatal(err)
 	}
 	log := &syncBuffer{}
-	srv := httptest.NewServer(newProxy(set, log))
+	srv := httptest.NewServer(newProxy(set, nil, "cinderline", log))
 	t.Cleanup(srv.Close)
 	return srv.Listener.Addr().String(), log
 }
@@ -332,11 +333,11 @@ func TestConnectToAListedHostTunnels(t *testing.T) {
 func TestConnectToAnUnlistedHostIsRefusedAndLogged(t *testing.T) {
 	port := echoServer(t)
 	proxy, log := startProxy(t, "localhost:"+strconv.Itoa(port))
-	tests := []struct{ target, host, port string }{
-		{"localhost:" + strconv.Itoa(port+1), "localhost", strconv.Itoa(port + 1)},
-		{"sub.localhost:" + strconv.Itoa(port), "sub.localhost", strconv.Itoa(port)},
-		{"127.0.0.1:" + strconv.Itoa(port), "127.0.0.1", strconv.Itoa(port)},
-		{"evil.example:443", "evil.example", "443"},
+	tests := []struct{ target, host, port, reason string }{
+		{"localhost:" + strconv.Itoa(port+1), "localhost", strconv.Itoa(port + 1), "runner_machine"},
+		{"sub.localhost:" + strconv.Itoa(port), "sub.localhost", strconv.Itoa(port), "not_allowed"},
+		{"127.0.0.1:" + strconv.Itoa(port), "127.0.0.1", strconv.Itoa(port), "runner_machine"},
+		{"evil.example:443", "evil.example", "443", "not_allowed"},
 	}
 	for _, tt := range tests {
 		if status, _, _ := connect(t, proxy, tt.target, "X-Probe: payload-marker\r\n"); status != http.StatusForbidden {
@@ -348,8 +349,8 @@ func TestConnectToAnUnlistedHostIsRefusedAndLogged(t *testing.T) {
 		t.Fatalf("refusals = %v, want one per refused target", got)
 	}
 	for i, tt := range tests {
-		if got[i]["host"] != tt.host || got[i]["port"] != tt.port || got[i]["time"] == nil {
-			t.Errorf("refusal %d = %v, want host %s port %s and a time", i, got[i], tt.host, tt.port)
+		if got[i]["host"] != tt.host || got[i]["port"] != tt.port || got[i]["reason"] != tt.reason || got[i]["time"] == nil {
+			t.Errorf("refusal %d = %v, want host %s port %s for %s and a time", i, got[i], tt.host, tt.port, tt.reason)
 		}
 	}
 	if strings.Contains(log.String(), "payload-marker") {
@@ -394,8 +395,8 @@ func TestHTTPToAnUnlistedHostIsRefusedAndLogged(t *testing.T) {
 		t.Errorf("GET = %d, want 403", resp.StatusCode)
 	}
 	got := refusals(t, log.String())
-	if len(got) != 1 || got[0]["host"] != "evil.example" || got[0]["port"] != "80" {
-		t.Errorf("refusals = %v, want evil.example port 80", got)
+	if len(got) != 1 || got[0]["host"] != "evil.example" || got[0]["port"] != "80" || got[0]["reason"] != "not_allowed" || got[0]["url"] != "http://evil.example/upload" {
+		t.Errorf("refusals = %v, want evil.example port 80 with its URL", got)
 	}
 	if strings.Contains(log.String(), "payload-marker") {
 		t.Errorf("the log holds request content:\n%s", log)

@@ -163,29 +163,61 @@ func TestNextSecretsFitAndAreRedacted(t *testing.T) {
 	}
 }
 
-// CLR-193: the refused hosts are cut to the app's limits, the first 20 that
-// fit 260 characters; a host that holds a secret is left out, not redacted,
-// so every entry stays a host:port. None leaves the key out.
-func TestNextRefusedHostsFit(t *testing.T) {
+// CLR-193, CLR-248: the refused hosts are cut to the app's limits, the
+// first 20 that fit 260 characters with a known reason; a host that holds a
+// secret is left out, not redacted, so every entry stays a host:port. A
+// method or URL that does not fit, holds a secret or still has a query,
+// fragment or user info is left out with the other, the host kept. None
+// leaves the key out.
+func TestNextRefusedFit(t *testing.T) {
 	redact.Add("test secret", "secret-value-1234567890")
 	s := &server{status: []int{200, 200}, body: `{"state":"x","step":{"kind":"done"}}`}
 	c := s.client(t)
-	hosts := []string{strings.Repeat("a", 259) + ":1", "secret-value-1234567890.evil.example:443"}
-	for i := range 25 {
-		hosts = append(hosts, fmt.Sprintf("h%d.example:443", i))
+	get := "GET"
+	req := func(host, reason, method, u string) RefusedHost {
+		return RefusedHost{Host: host, Reason: reason, Method: &method, URL: &u}
 	}
-	for _, last := range []*LastStep{{Step: "run", RefusedHosts: hosts}, {Step: "run"}} {
+	hosts := []RefusedHost{
+		{Host: strings.Repeat("a", 259) + ":1", Reason: RefusedNotAllowed},
+		{Host: "secret-value-1234567890.evil.example:443", Reason: RefusedNotAllowed},
+		{Host: "odd.example:443", Reason: "made_up"},
+		req("a.example:443", RefusedNotAllowed, "GET", "https://a.example/p"),
+		req("b.example:443", RefusedPrivateAddress, "GET", "https://b.example/"+strings.Repeat("x", 2000)),
+		req("c.example:443", RefusedStrict, "GET", "https://c.example/secret-value-1234567890"),
+		req("d.example:443", RefusedRunnerMachine, strings.Repeat("M", 21), "https://d.example/"),
+		req("e.example:443", RefusedNotAllowed, "GET", "https://e.example/p?q=1"),
+		req("f.example:443", RefusedNotAllowed, "GET", "https://u:p@f.example/p"),
+		req("g.example:443", RefusedNotAllowed, "GET", "https://g.example/p#f"),
+		req("h.example:443", RefusedNotAllowed, "GET", "file:///etc/passwd"),
+		{Host: "i.example:443", Reason: RefusedNotAllowed, Method: &get},
+	}
+	for i := range 25 {
+		hosts = append(hosts, RefusedHost{Host: fmt.Sprintf("h%d.example:443", i), Reason: RefusedNotAllowed})
+	}
+	for _, last := range []*LastStep{{Step: "run", Refused: hosts}, {Step: "run"}} {
 		if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Last: last}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	var next NextRequest
 	_ = json.Unmarshal([]byte(s.bodies[0]), &next)
-	if got := next.Last.RefusedHosts; len(got) != maxRefusedHosts || got[0] != "h0.example:443" || got[19] != "h19.example:443" {
-		t.Errorf("sent %v", got)
+	got := next.Last.Refused
+	if len(got) != MaxRefused || got[0].Host != "a.example:443" || got[8].Host != "i.example:443" || got[9].Host != "h0.example:443" || got[19].Host != "h10.example:443" {
+		t.Fatalf("sent %+v", got)
 	}
-	if strings.Contains(s.bodies[1], "refused_hosts") {
-		t.Errorf("sent %s, want no refused_hosts", s.bodies[1])
+	if got[0].Method == nil || *got[0].Method != "GET" || got[0].URL == nil || *got[0].URL != "https://a.example/p" {
+		t.Errorf("a.example lost its request: %+v", got[0])
+	}
+	for i, r := range got[1:9] {
+		if r.Method != nil || r.URL != nil {
+			t.Errorf("entry %d %s kept %v %v, want neither", i+1, r.Host, r.Method, r.URL)
+		}
+	}
+	if got[1].Reason != RefusedPrivateAddress || got[2].Reason != RefusedStrict || got[3].Reason != RefusedRunnerMachine {
+		t.Errorf("reasons = %+v", got[1:4])
+	}
+	if strings.Contains(s.bodies[0], `"method":null`) || strings.Contains(s.bodies[1], "refused") {
+		t.Errorf("sent %s and %s, want no empty fields and no refused", s.bodies[0], s.bodies[1])
 	}
 }
 

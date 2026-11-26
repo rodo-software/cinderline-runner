@@ -1,6 +1,7 @@
 package cinderline
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -39,8 +40,9 @@ const (
 	maxSessions      = 2     // sessions
 	maxPath          = 255   // workspace branch, base and paths
 	maxSecrets       = 50    // last.secrets
-	maxRefusedHosts  = 20    // last.refused_hosts
 	maxHostPort      = 260   // one refused host:port; a longer one is left out
+	maxMethod        = 20    // a refused request's method; a longer one is left out with its URL
+	maxRefusedURL    = 2000  // a refused request's URL; a longer one is left out with its method
 	maxCheckName     = 255   // a failed check's name
 	maxTools         = 200   // last.usage.tools
 	maxToolCalls     = 1e6   // one tool's calls in last.usage.tools
@@ -51,6 +53,9 @@ const (
 
 // MaxChecks is the most failed checks of a review fact or a step.
 const MaxChecks = 20
+
+// MaxRefused is the most refused hosts of a step (last.refused).
+const MaxRefused = 20
 
 // modelID is a model id the app accepts (AgentClient::MODEL_ID); any other
 // id is left out.
@@ -164,4 +169,44 @@ func reason(s *string) *string {
 		return nil
 	}
 	return &v
+}
+
+// refused is the first MaxRefused refused hosts that fit the app's limits,
+// with a known reason; nil stays nil. A host that is too long or holds a
+// secret is left out, not redacted or clipped, so each stays a host:port.
+// So is a method and URL that do not fit, hold a secret, or still have a
+// query, fragment or user info, which the proxy already removed: the host
+// stays, without them.
+func refused(rs []RefusedHost) []RefusedHost {
+	if rs == nil {
+		return nil
+	}
+	out := make([]RefusedHost, 0, min(len(rs), MaxRefused))
+	for _, r := range rs {
+		if len(out) == MaxRefused {
+			break
+		}
+		switch r.Reason {
+		case RefusedNotAllowed, RefusedPrivateAddress, RefusedStrict, RefusedRunnerMachine:
+		default:
+			continue
+		}
+		if utf8.RuneCountInString(r.Host) > maxHostPort || redact.String(r.Host) != r.Host {
+			continue
+		}
+		if r.Method == nil || r.URL == nil || !cleanRequest(*r.Method, *r.URL) {
+			r.Method, r.URL = nil, nil
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// cleanRequest says a refused request's method and URL may be sent as they
+// are.
+func cleanRequest(method, u string) bool {
+	p, err := url.Parse(u)
+	return method != "" && len(method) <= maxMethod && redact.String(method) == method &&
+		utf8.RuneCountInString(u) <= maxRefusedURL && redact.String(u) == u &&
+		err == nil && (p.Scheme == "http" || p.Scheme == "https") && p.User == nil && p.RawQuery == "" && !p.ForceQuery && p.Fragment == ""
 }

@@ -422,16 +422,16 @@ func TestAStopEndsOnlyItsOwnRunsTurn(t *testing.T) {
 // Refused hosts are each run's own: a step reports only its issue's.
 func TestRefusedHostsArePerRun(t *testing.T) {
 	f := newFixture(t)
-	f.p.AddRefused("CSR-1", "a.example:443")
-	f.p.AddRefused("CSR-2", "b.example:443")
-	f.p.AddRefused("CSR-1", "A.example:443")
-	if got := f.p.takeRefused("CSR-1"); !slices.Equal(got, []string{"a.example:443"}) {
+	f.p.AddRefused("CSR-1", notAllowed("a.example:443"))
+	f.p.AddRefused("CSR-2", notAllowed("b.example:443"))
+	f.p.AddRefused("CSR-1", notAllowed("A.example:443"))
+	if got := hostsOf(f.p.takeRefused("CSR-1", nil)); !slices.Equal(got, []string{"a.example:443"}) {
 		t.Errorf("CSR-1 refused %q", got)
 	}
-	if got := f.p.takeRefused("CSR-1"); got != nil {
-		t.Errorf("CSR-1 refused %q again", got)
+	if got := f.p.takeRefused("CSR-1", nil); got != nil {
+		t.Errorf("CSR-1 refused %v again", got)
 	}
-	if got := f.p.takeRefused("CSR-2"); !slices.Equal(got, []string{"b.example:443"}) {
+	if got := hostsOf(f.p.takeRefused("CSR-2", nil)); !slices.Equal(got, []string{"b.example:443"}) {
 		t.Errorf("CSR-2 refused %q", got)
 	}
 	if f.p.refused != 3 {

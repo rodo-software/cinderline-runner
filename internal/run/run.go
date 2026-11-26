@@ -247,10 +247,10 @@ func (p *Project) step(ctx context.Context, c *cinderline.Client, j *job, h *hel
 		return nil, malformed(c, step.Kind, "a Project Manager run is never checked, published or merged")
 	}
 	if step.Kind == "run" || step.Kind == "resolve" || step.Kind == "check" {
-		p.takeRefused(j.ref) // what an earlier step left is not this one's
+		p.takeRefused(j.ref, nil) // what an earlier step left is not this one's
 		defer func() {
 			if last != nil {
-				last.RefusedHosts = p.takeRefused(j.ref)
+				last.Refused = p.takeRefused(j.ref, step.AllowHosts)
 			}
 		}()
 	}

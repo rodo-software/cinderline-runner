@@ -68,7 +68,7 @@ func stopAt(n int, r reply) func(int, cinderline.PollRequest, func()) reply {
 func TestThePollRequest(t *testing.T) {
 	f := newFixture(t)
 	f.p.clients = []cinderline.ReportClient{{Name: "claude", State: "ready"}}
-	f.p.AddRefused("CSR-9", "evil.example:443")
+	f.p.AddRefused("CSR-9", notAllowed("evil.example:443"))
 	f.p.StrictHosts = true
 	f.p.saveNote("CSR-9", Note{Dir: "/runs/CSR-9", Session: "s", Client: "claude", Origin: "kept"})
 	f.ws.Strandeds = []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"}}}}

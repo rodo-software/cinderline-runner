@@ -3,11 +3,13 @@ package run
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 )
@@ -46,12 +48,12 @@ func TestEachStepReportsItsRefusedHosts(t *testing.T) {
 	f.cl.Runs = []client.RunReply{ok("s", "Done.")}
 	f.p.Clients["claude"] = refusingClient{f.cl, func() {
 		for _, hp := range []string{"Evil.Example:443", "pypi.org:443", "evil.example:443", "garbage:"} {
-			f.p.AddRefused("CSR-1", hp)
+			f.p.AddRefused("CSR-1", notAllowed(hp))
 		}
 	}}
 	f.env.Runs = []environment.RunReply{{}}
-	f.p.Env = refusingEnv{f.env, func() { f.p.AddRefused("CSR-1", "files.pythonhosted.org:443") }}
-	f.p.AddRefused("CSR-1", "before.example:443")
+	f.p.Env = refusingEnv{f.env, func() { f.p.AddRefused("CSR-1", notAllowed("files.pythonhosted.org:443")) }}
+	f.p.AddRefused("CSR-1", notAllowed("before.example:443"))
 	app := &fakeApp{onNext: stepsOf(runNew, checkStep, `{"kind":"stop"}`)}
 	if _, err := f.run(t, app); err != nil {
 		t.Fatal(err)
@@ -60,14 +62,14 @@ func TestEachStepReportsItsRefusedHosts(t *testing.T) {
 	if len(lasts) != 3 {
 		t.Fatalf("lasts = %+v", lasts)
 	}
-	if got := lasts[0].RefusedHosts; !slices.Equal(got, []string{"evil.example:443", "pypi.org:443"}) {
+	if got := hostsOf(lasts[0].Refused); !slices.Equal(got, []string{"evil.example:443", "pypi.org:443"}) {
 		t.Errorf("run step refused %q", got)
 	}
-	if got := lasts[1].RefusedHosts; lasts[1].Step != "check" || !slices.Equal(got, []string{"files.pythonhosted.org:443"}) {
+	if got := hostsOf(lasts[1].Refused); lasts[1].Step != "check" || !slices.Equal(got, []string{"files.pythonhosted.org:443"}) {
 		t.Errorf("check step %s refused %q", lasts[1].Step, got)
 	}
-	if got := lasts[2].RefusedHosts; got != nil {
-		t.Errorf("stop step refused %q, want none", got)
+	if got := lasts[2].Refused; got != nil {
+		t.Errorf("stop step refused %v, want none", got)
 	}
 	if f.p.refused != 6 {
 		t.Errorf("refused count %d, want 6", f.p.refused)
@@ -111,6 +113,87 @@ func TestAStepOpensTheHostsAPersonAllowed(t *testing.T) {
 					t.Errorf("missing drop log for %s: %s", hp, logs.String())
 				}
 			}
+		}
+	}
+}
+
+// notAllowed is a refusal of hp as on no allowlist, without its request.
+func notAllowed(hp string) environment.Refusal {
+	return environment.Refusal{Host: hp, Reason: cinderline.RefusedNotAllowed}
+}
+
+// hostsOf is the host:port of each refused host.
+func hostsOf(rs []cinderline.RefusedHost) []string {
+	var out []string
+	for _, r := range rs {
+		out = append(out, r.Host)
+	}
+	return out
+}
+
+// CLR-248: a step reports each refused host once, with the proxy's reason
+// and the first request the proxy read there, also when an earlier
+// connection to it had none; at most 20 hosts.
+func TestAStepReportsEachHostsReasonAndFirstRequest(t *testing.T) {
+	f := newFixture(t)
+	refuse := func(hp, reason, method, url string) {
+		f.p.AddRefused("CSR-1", environment.Refusal{Host: hp, Reason: reason, Method: method, URL: url})
+	}
+	refuse("pinned.example:443", cinderline.RefusedNotAllowed, "", "")
+	refuse("pinned.example:443", cinderline.RefusedNotAllowed, "GET", "https://pinned.example/first")
+	refuse("pinned.example:443", cinderline.RefusedNotAllowed, "POST", "https://pinned.example/second")
+	refuse("localhost:8080", cinderline.RefusedRunnerMachine, "", "")
+	refuse("internal.example:443", cinderline.RefusedPrivateAddress, "GET", "https://internal.example/")
+	for i := range 30 {
+		refuse(fmt.Sprintf("h%d.example:443", i), cinderline.RefusedNotAllowed, "", "")
+	}
+	got := f.p.takeRefused("CSR-1", nil)
+	if len(got) != cinderline.MaxRefused || got[19].Host != "h16.example:443" {
+		t.Fatalf("refused %q, want the first 20 hosts", hostsOf(got))
+	}
+	if r := got[0]; r.Reason != "not_allowed" || r.Method == nil || *r.Method != "GET" || *r.URL != "https://pinned.example/first" {
+		t.Errorf("pinned.example = %+v, want its first request", r)
+	}
+	if r := got[1]; r.Host != "localhost:8080" || r.Reason != "runner_machine" || r.URL != nil {
+		t.Errorf("localhost = %+v", r)
+	}
+	if r := got[2]; r.Reason != "private_address" || *r.URL != "https://internal.example/" {
+		t.Errorf("internal.example = %+v", r)
+	}
+	if f.p.refused != 35 {
+		t.Errorf("refused count %d, want every connection", f.p.refused)
+	}
+}
+
+// CLR-248: a host a person allowed in Cinderline that the proxy still
+// found on no allowlist was dropped by the runner: on a strict runner it is
+// reported as strict, otherwise as a private address. The proxy's own
+// reasons and the hosts the step did not allow stay.
+func TestAStepReportsWhyItDroppedAnAllowedHost(t *testing.T) {
+	allow := `"allow_hosts":["PyPI.org:443","10.0.0.5:443","localhost:8080"],`
+	for _, strict := range []bool{false, true} {
+		f := newFixture(t)
+		f.p.StrictHosts = strict
+		f.cl.Runs = []client.RunReply{ok("s", "Done.")}
+		f.p.Clients["claude"] = refusingClient{f.cl, func() {
+			f.p.AddRefused("CSR-1", notAllowed("pypi.org:443"))
+			f.p.AddRefused("CSR-1", notAllowed("10.0.0.5:443"))
+			f.p.AddRefused("CSR-1", environment.Refusal{Host: "localhost:8080", Reason: cinderline.RefusedRunnerMachine})
+			f.p.AddRefused("CSR-1", notAllowed("other.example:443"))
+			f.p.AddRefused("CSR-1", environment.Refusal{Host: "app.example:443", Reason: cinderline.RefusedPrivateAddress})
+		}}
+		app := &fakeApp{onNext: stepsOf(strings.Replace(runNew, `"prompt"`, allow+`"prompt"`, 1))}
+		if _, err := f.run(t, app); err != nil {
+			t.Fatal(err)
+		}
+		dropped := map[bool]string{false: "private_address", true: "strict"}[strict]
+		var got []string
+		for _, r := range app.lasts()[0].Refused {
+			got = append(got, r.Host+" "+r.Reason)
+		}
+		want := []string{"pypi.org:443 " + dropped, "10.0.0.5:443 " + dropped, "localhost:8080 runner_machine", "other.example:443 not_allowed", "app.example:443 private_address"}
+		if !slices.Equal(got, want) {
+			t.Errorf("strict %v: refused %q, want %q", strict, got, want)
 		}
 	}
 }
