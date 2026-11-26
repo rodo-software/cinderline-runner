@@ -485,6 +485,39 @@ func TestPollLimitsFreeProvidersToReportedProviders(t *testing.T) {
 	}
 }
 
+// CLR-253, decision 2026-11-25-provider-places in the app repository: the
+// poll carries the free places of the providers with a limit, the first 50,
+// and leaves the field out without one; a job names the provider it takes
+// a place on, "" for null or an older app.
+func TestPollProviderPlaces(t *testing.T) {
+	s := &server{status: []int{200}, body: `{"poll_after":30,"jobs":[{"issue":{"ref":"CSR-1","title":"T","body":""},"team":{"name":"Dev","max_minutes":1,"max_turns":1,"agents":[{"name":"X","client":"opencode"}]},"provider":"lan"},{"issue":{"ref":"CSR-2","title":"T","body":""},"team":{"name":"Dev","max_minutes":1,"max_turns":1,"agents":[{"name":"X","client":"claude"}]},"provider":null}],"manager_job":{"issue":{"ref":"CSR-3","title":"T","body":""},"team":{"name":"PM","max_minutes":1,"max_turns":1,"agents":[{"name":"X","client":"claude"}]}}}`}
+	c := s.client(t)
+	places := make([]ProviderPlace, 51)
+	for i := range places {
+		places[i] = ProviderPlace{Provider: "p" + strconv.Itoa(i), Free: i}
+	}
+	ans, err := c.Poll(context.Background(), PollRequest{ProviderPlaces: places})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ans.Jobs[0].Provider != "lan" || ans.Jobs[1].Provider != "" || ans.ManagerJob.Provider != "" {
+		t.Errorf("providers %q, %q, %q; want lan and none", ans.Jobs[0].Provider, ans.Jobs[1].Provider, ans.ManagerJob.Provider)
+	}
+	var req PollRequest
+	if err := json.Unmarshal([]byte(s.bodies[0]), &req); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(req.ProviderPlaces, places[:50]) || !strings.Contains(s.bodies[0], `"provider_places":[{"provider":"p0","free":0},`) {
+		t.Errorf("provider_places = %+v, want the first 50, a 0 sent too", req.ProviderPlaces)
+	}
+	if _, err := c.Poll(context.Background(), PollRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(s.bodies[1], "provider_places") {
+		t.Errorf("no provider with a limit, yet the field is sent: %s", s.bodies[1])
+	}
+}
+
 // Texts and lists are cut to the app's limits, in characters.
 func TestRequestsFitTheAppsLimits(t *testing.T) {
 	s := &server{status: []int{200}, body: `{"state":"x","step":{"kind":"done"}}`}

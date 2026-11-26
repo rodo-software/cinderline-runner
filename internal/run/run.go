@@ -35,6 +35,7 @@ var errStopped = errors.New("stopped by Cinderline")
 // job is a run's fixed facts for its steps.
 type job struct {
 	ref, title, body string // the issue's; body is untrusted
+	slot             string // the run's slot, as the budget and the provider places name it (Project.slot)
 	branch, base     string
 	dir              string
 	team             cinderline.Team // the lead first
@@ -476,7 +477,7 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 			waiting := func() {
 				p.Log.Info("turn waits for its model provider", "project", p.Config.Key, "issue", issue, "agent", agent.Name, "provider", pr.Name, "max_agents", pr.MaxAgents)
 			}
-			if err := p.Turns.take(tctx, pr.Name, pr.MaxAgents, waiting); err != nil {
+			if err := p.Turns.take(tctx, j.slot, pr.Name, pr.MaxAgents, waiting); err != nil {
 				return client.Result{}, err
 			}
 			defer p.Turns.done(pr.Name)

@@ -187,7 +187,7 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 		}
 	}
 	j := &job{
-		ref: ref, title: jb.Issue.Title, body: jb.Issue.Body, branch: name.Name + "/" + ref, base: base,
+		ref: ref, title: jb.Issue.Title, body: jb.Issue.Body, slot: p.slot(slot), branch: name.Name + "/" + ref, base: base,
 		team: team, check: proj.CheckCommand, idle: time.Duration(max(proj.IdleMinutes, 0)) * time.Minute, fg: fg, manager: manager,
 	}
 	extras, notes := p.extraRepositories(ctx, ref)

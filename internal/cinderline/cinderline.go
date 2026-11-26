@@ -154,6 +154,7 @@ func (c *Client) Poll(ctx context.Context, r PollRequest) (PollAnswer, error) {
 		}
 	}
 	r.Report.ProviderModels = models
+	r.ProviderPlaces = first(r.ProviderPlaces, maxProviders)
 	r.Running = refs(r.Running, maxRunning)
 	r.Held = refs(r.Held, maxListed)
 	if r.Review != nil {

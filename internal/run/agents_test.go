@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 	"time"
 
@@ -20,15 +21,15 @@ func TestProviderTurnsLimit(t *testing.T) {
 	waits := 0
 	waiting := func() { waits++ }
 	for range 2 {
-		if err := turns.take(ctx, "lan", 2, waiting); err != nil {
+		if err := turns.take(ctx, "CSR", "lan", 2, waiting); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := turns.take(ctx, "other", 1, waiting); err != nil {
+	if err := turns.take(ctx, "CSR", "other", 1, waiting); err != nil {
 		t.Fatal(err)
 	}
 	for range 3 {
-		if err := turns.take(ctx, "open", 0, waiting); err != nil {
+		if err := turns.take(ctx, "CSR", "open", 0, waiting); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -37,7 +38,7 @@ func TestProviderTurnsLimit(t *testing.T) {
 	}
 
 	got := make(chan error, 1)
-	go func() { got <- turns.take(ctx, "lan", 2, waiting) }()
+	go func() { got <- turns.take(ctx, "CSR", "lan", 2, waiting) }()
 	select {
 	case err := <-got:
 		t.Fatalf("a third turn on lan started (%v)", err)
@@ -66,12 +67,12 @@ func TestProviderTurnsLimit(t *testing.T) {
 func TestProviderTurnsLowerLimitAndCancel(t *testing.T) {
 	var turns ProviderTurns
 	for range 2 {
-		if err := turns.take(context.Background(), "lan", 2, nil); err != nil {
+		if err := turns.take(context.Background(), "CSR", "lan", 2, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got := make(chan error, 1)
-	go func() { got <- turns.take(context.Background(), "lan", 1, nil) }()
+	go func() { got <- turns.take(context.Background(), "CSR", "lan", 1, nil) }()
 	turns.done("lan")
 	select {
 	case err := <-got:
@@ -85,7 +86,7 @@ func TestProviderTurnsLowerLimitAndCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancelCause(context.Background())
 	why := errors.New("stopped")
-	go func() { got <- turns.take(ctx, "lan", 1, nil) }()
+	go func() { got <- turns.take(ctx, "CSR", "lan", 1, nil) }()
 	time.Sleep(20 * time.Millisecond)
 	cancel(why)
 	if err := <-got; !errors.Is(err, why) {
@@ -105,7 +106,7 @@ func providerFixture(t *testing.T, model string) (*fixture, cinderline.Job) {
 	f.p.Clients["opencode"] = f.cl
 	f.p.Providers = []config.Provider{{Name: "lan", BaseURL: "http://studio.local:8080/v1", MaxAgents: 1}}
 	f.p.Turns = &ProviderTurns{}
-	if err := f.p.Turns.take(context.Background(), "lan", 1, nil); err != nil {
+	if err := f.p.Turns.take(context.Background(), "elsewhere", "lan", 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	jb := soloJob()
@@ -193,5 +194,139 @@ func TestAStopEndsATurnWaitingForItsProvider(t *testing.T) {
 	}
 	if n := f.p.Turns.busy["lan"]; n != 1 {
 		t.Errorf("lan busy %d, want only the turn held elsewhere", n)
+	}
+}
+
+// placesOf are the places reserved for poll, by provider, read as the poll sends them.
+func placesOf(t *ProviderTurns, poll string, providers []config.Provider) map[string]int {
+	out := map[string]int{}
+	for _, pl := range t.reserve(poll, providers) {
+		out[pl.Provider] = pl.Free
+	}
+	return out
+}
+
+// CLR-253: a provider with max_agents has max_agents + lookahead places for
+// runs in play; a provider without a limit has none listed, and with no
+// limited provider the list is nil. A run is in play once, on every
+// provider it is on, and leaves them all when it ends.
+func TestProviderPlaces(t *testing.T) {
+	var turns ProviderTurns
+	providers := []config.Provider{{Name: "lan", MaxAgents: 1}, {Name: "ahead", MaxAgents: 1, Lookahead: 1}, {Name: "open"}}
+	check := func(what string, want map[string]int) {
+		t.Helper()
+		got := placesOf(&turns, "CSR", providers)
+		turns.unreserve("CSR")
+		if !maps.Equal(got, want) {
+			t.Errorf("%s: places %v, want %v", what, got, want)
+		}
+	}
+	check("idle", map[string]int{"lan": 1, "ahead": 2})
+	turns.enter("CSR", "lan")
+	turns.enter("CSR", "lan") // once
+	turns.enter("CSR", "ahead")
+	check("one run on both", map[string]int{"lan": 0, "ahead": 1})
+	turns.enter("WEB", "ahead")
+	check("two runs on ahead", map[string]int{"lan": 0, "ahead": 0})
+	turns.enter("APP", "ahead") // past the cap: a run that goes is never refused
+	check("three runs on ahead", map[string]int{"lan": 0, "ahead": 0})
+	if left := turns.leave("CSR", providers); !left {
+		t.Error("CSR left lan and ahead, both limited, yet no limited place was freed")
+	}
+	check("CSR ended", map[string]int{"lan": 1, "ahead": 0})
+	turns.leave("APP", providers)
+	check("APP ended", map[string]int{"lan": 1, "ahead": 1})
+	if turns.leave("APP", providers) {
+		t.Error("a run that is in play nowhere freed a place")
+	}
+	turns.enter("WEB", "open")
+	turns.leave("WEB", []config.Provider{{Name: "open"}, {Name: "ahead"}})
+	check("WEB ended", map[string]int{"lan": 1, "ahead": 2})
+
+	if got := turns.reserve("CSR", []config.Provider{{Name: "open"}}); got != nil {
+		t.Errorf("no provider with a limit: %v, want nil", got)
+	}
+	turns.unreserve("CSR")
+	if len(turns.inPlay) != 0 || len(turns.reserved) != 0 {
+		t.Errorf("left in play %v, reserved %v; want none", turns.inPlay, turns.reserved)
+	}
+}
+
+// A place is in one outstanding poll at a time: a second poll gets only
+// what the first left, its own earlier reservation is replaced, and an
+// unreserve gives the places back.
+func TestProviderPlacesReservedByOnePoll(t *testing.T) {
+	var turns ProviderTurns
+	providers := []config.Provider{{Name: "lan", MaxAgents: 2, Lookahead: 1}}
+	turns.enter("APP", "lan")
+	if got := placesOf(&turns, "CSR", providers)["lan"]; got != 2 {
+		t.Errorf("CSR's poll: %d, want 2", got)
+	}
+	if got := placesOf(&turns, "CSR", providers)["lan"]; got != 2 {
+		t.Errorf("CSR's next poll: %d, want its own 2 again", got)
+	}
+	if got := placesOf(&turns, "WEB", providers)["lan"]; got != 0 {
+		t.Errorf("WEB's poll next to CSR's: %d, want 0", got)
+	}
+	turns.unreserve("CSR")
+	if got := placesOf(&turns, "WEB", providers)["lan"]; got != 2 {
+		t.Errorf("WEB's poll after CSR's: %d, want 2", got)
+	}
+}
+
+// take puts the run in play on the provider at once, also when its turn
+// waits, and a run already in play is not counted again.
+func TestATurnPutsItsRunInPlay(t *testing.T) {
+	var turns ProviderTurns
+	providers := []config.Provider{{Name: "lan", MaxAgents: 1}}
+	if err := turns.take(context.Background(), "CSR", "lan", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	turns.done("lan")
+	if err := turns.take(context.Background(), "CSR", "lan", 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan error, 1)
+	go func() { got <- turns.take(context.Background(), "WEB", "lan", 1, nil) }()
+	until(t, "WEB in play", func() bool { turns.mu.Lock(); defer turns.mu.Unlock(); return len(turns.inPlay["lan"]) == 2 })
+	if p := placesOf(&turns, "X", providers)["lan"]; p != 0 {
+		t.Errorf("places %d, want 0", p)
+	}
+	turns.unreserve("X")
+	turns.done("lan")
+	if err := <-got; err != nil {
+		t.Fatal(err)
+	}
+	turns.done("lan")
+	turns.leave("CSR", providers)
+	turns.leave("WEB", providers)
+	if len(turns.inPlay) != 0 {
+		t.Errorf("in play %v, want none", turns.inPlay)
+	}
+}
+
+// A run that leaves a limited provider wakes every waiter of placesFreed; one
+// that leaves only providers without a limit does not.
+func TestLeavingAProviderWakes(t *testing.T) {
+	var turns ProviderTurns
+	freed := turns.placesFreed()
+	turns.enter("CSR", "open")
+	turns.leave("CSR", []config.Provider{{Name: "open"}})
+	select {
+	case <-freed:
+		t.Error("woken by a provider without a limit")
+	default:
+	}
+	turns.enter("CSR", "lan")
+	turns.leave("CSR", []config.Provider{{Name: "lan", MaxAgents: 1}})
+	select {
+	case <-freed:
+	default:
+		t.Error("not woken when a place on lan was freed")
+	}
+	select {
+	case <-turns.placesFreed():
+		t.Error("the next channel is closed already")
+	default:
 	}
 }

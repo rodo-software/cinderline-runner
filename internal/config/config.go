@@ -207,15 +207,18 @@ type Project struct {
 // as "<Name>/<model id>". Free says its models cost nothing per token, as
 // whoever added it marked it (decision 2026-11-19-free-model-providers).
 // MaxAgents is the most agent turns on it at once, over every project of
-// the runner, 0 to MaxProviderAgents; 0 is no limit (CLR-243).
+// the runner, 0 to MaxProviderAgents; 0 is no limit (CLR-243). Lookahead
+// is how many runs past MaxAgents may be in play on it, 0 to
+// MaxProviderAgents; 0, the default, is one run per place (CLR-253).
 type Provider struct {
 	Name      string `json:"name"`
 	BaseURL   string `json:"base_url"`
 	Free      bool   `json:"free,omitempty"`
 	MaxAgents int    `json:"max_agents,omitempty"`
+	Lookahead int    `json:"lookahead,omitempty"`
 }
 
-// MaxProviderAgents is the most a provider's max_agents may be.
+// MaxProviderAgents is the most a provider's max_agents, and its lookahead, may be.
 const MaxProviderAgents = 100
 
 // providerName is what a provider's name may be; the report caps names at 50.
@@ -223,11 +226,17 @@ var providerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,49}$`)
 
 // Validate reports a name that is not lower-case letters, digits and dashes
 // or is openrouter, which OpenCode already has, a base URL that is not
-// http(s)://host[:port][/path], without user info, query or fragment, or a
-// max_agents out of range.
+// http(s)://host[:port][/path], without user info, query or fragment, a
+// max_agents or lookahead out of range, or a lookahead without max_agents.
 func (p Provider) Validate() error {
 	if p.MaxAgents < 0 || p.MaxAgents > MaxProviderAgents {
 		return fmt.Errorf("provider %s: max_agents must be 0 (no limit) to %d", p.Name, MaxProviderAgents)
+	}
+	if p.Lookahead < 0 || p.Lookahead > MaxProviderAgents {
+		return fmt.Errorf("provider %s: lookahead must be 0 (none) to %d", p.Name, MaxProviderAgents)
+	}
+	if p.Lookahead > 0 && p.MaxAgents == 0 {
+		return fmt.Errorf("provider %s: a lookahead needs max_agents: it is the runs past that limit", p.Name)
 	}
 	if !providerName.MatchString(p.Name) || p.Name == "openrouter" {
 		return fmt.Errorf("provider name %q must be up to 50 lower-case letters, digits and dashes, and not openrouter", p.Name)

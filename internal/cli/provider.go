@@ -13,14 +13,18 @@ import (
 
 // providerFlags parses a provider command, which has no --project: a
 // provider is the runner's, for every project (decision 2026-11-17-local-model-providers).
-// A non-nil free and maxAgents get the command's --free and --max-agents flags.
-func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int, free *bool, maxAgents *int) (*config.Config, []string, int) {
+// A non-nil free, maxAgents and lookahead get the command's --free,
+// --max-agents and --lookahead flags.
+func (c *CLI) providerFlags(cmd, usage string, args []string, nargs int, free *bool, maxAgents, lookahead *int) (*config.Config, []string, int) {
 	f := c.flags(cmd, usage)
 	if free != nil {
 		f.BoolVar(free, "free", false, freeHelp)
 	}
 	if maxAgents != nil {
 		f.IntVar(maxAgents, "max-agents", 0, maxAgentsHelp)
+	}
+	if lookahead != nil {
+		f.IntVar(lookahead, "lookahead", 0, lookaheadHelp)
 	}
 	if !c.parsed(f, args, nargs) {
 		return nil, nil, 2
@@ -37,6 +41,9 @@ const freeHelp = "the provider's models cost nothing per token, such as a model 
 
 // maxAgentsHelp is the help of --max-agents (CLR-243).
 const maxAgentsHelp = "the most agent turns on the provider at once, over every project of this runner; a turn past it waits for one to end; 0 is no limit"
+
+// lookaheadHelp is the help of --lookahead (CLR-253).
+const lookaheadHelp = "how many runs past --max-agents may be in play on the provider, waiting at their turns; 0, the default, starts a run only when a place is free, for a server that keeps one conversation cached"
 
 // agentLimit says what a provider's max_agents allows, after "has".
 func agentLimit(n int) string {
@@ -62,12 +69,12 @@ func providerIndex(cfg *config.Config, n string) (int, error) {
 // and asks for its optional key.
 func (c *CLI) addProvider(args []string) int {
 	var free bool
-	var maxAgents int
-	cfg, rest, code := c.providerFlags("add-provider", "[--free] [--max-agents N] NAME URL", args, 2, &free, &maxAgents)
+	var maxAgents, lookahead int
+	cfg, rest, code := c.providerFlags("add-provider", "[--free] [--max-agents N] [--lookahead N] NAME URL", args, 2, &free, &maxAgents, &lookahead)
 	if code != 0 {
 		return code
 	}
-	pr := config.Provider{Name: rest[0], BaseURL: rest[1], Free: free, MaxAgents: maxAgents}
+	pr := config.Provider{Name: rest[0], BaseURL: rest[1], Free: free, MaxAgents: maxAgents, Lookahead: lookahead}
 	if err := pr.Validate(); err != nil {
 		return c.fail(err)
 	}
@@ -106,7 +113,7 @@ func (c *CLI) addProvider(args []string) int {
 // listProviders prints the runner's providers, one per line, and whether
 // each has a key, never the key.
 func (c *CLI) listProviders(args []string) int {
-	cfg, _, code := c.providerFlags("list-providers", "", args, 0, nil, nil)
+	cfg, _, code := c.providerFlags("list-providers", "", args, 0, nil, nil, nil)
 	if code != 0 {
 		return code
 	}
@@ -127,20 +134,25 @@ func (c *CLI) listProviders(args []string) int {
 		default:
 			key += fmt.Sprintf("\tmax %d agents", pr.MaxAgents)
 		}
+		if pr.Lookahead > 0 {
+			key += fmt.Sprintf("\tlookahead %d", pr.Lookahead)
+		}
 		fmt.Fprintf(c.Stdout, "%s\t%s\t%s\n", pr.Name, pr.BaseURL, key)
 	}
 	return 0
 }
 
 // setProviderUsage is set-provider's arguments.
-const setProviderUsage = "NAME [--free=true|false] [--max-agents N]"
+const setProviderUsage = "NAME [--free=true|false] [--max-agents N] [--lookahead N]"
 
-// setProvider marks a provider free or not and sets its agent limit; its key stays.
+// setProvider marks a provider free or not and sets its agent limit and
+// lookahead; its key stays.
 func (c *CLI) setProvider(args []string) int {
 	// NAME comes before the flags, as key's NAME does: flag parsing stops at it.
 	f := c.flags("set-provider", setProviderUsage)
 	free := f.Bool("free", false, freeHelp)
 	maxAgents := f.Int("max-agents", 0, maxAgentsHelp)
+	lookahead := f.Int("lookahead", 0, lookaheadHelp)
 	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
 		f.Usage()
 		return 2
@@ -169,6 +181,9 @@ func (c *CLI) setProvider(args []string) int {
 	if set["max-agents"] {
 		pr.MaxAgents = *maxAgents
 	}
+	if set["lookahead"] {
+		pr.Lookahead = *lookahead
+	}
 	if err := pr.Validate(); err != nil {
 		return c.fail(err)
 	}
@@ -184,6 +199,9 @@ func (c *CLI) setProvider(args []string) int {
 		if set["max-agents"] {
 			fmt.Fprintf(c.Stdout, "%s already has %s\n", pr.Name, agentLimit(pr.MaxAgents))
 		}
+		if set["lookahead"] {
+			fmt.Fprintf(c.Stdout, "%s already has a lookahead of %d\n", pr.Name, pr.Lookahead)
+		}
 		return 0
 	}
 	if err := cfg.Save(c.Paths.File); err != nil {
@@ -195,13 +213,16 @@ func (c *CLI) setProvider(args []string) int {
 	if set["max-agents"] {
 		fmt.Fprintf(c.Stdout, "%s now has %s\n", pr.Name, agentLimit(pr.MaxAgents))
 	}
+	if set["lookahead"] {
+		fmt.Fprintf(c.Stdout, "%s now has a lookahead of %d\n", pr.Name, pr.Lookahead)
+	}
 	c.reload()
 	return 0
 }
 
 // removeProvider removes a provider and its key.
 func (c *CLI) removeProvider(args []string) int {
-	cfg, rest, code := c.providerFlags("remove-provider", "NAME", args, 1, nil, nil)
+	cfg, rest, code := c.providerFlags("remove-provider", "NAME", args, 1, nil, nil, nil)
 	if code != 0 {
 		return code
 	}

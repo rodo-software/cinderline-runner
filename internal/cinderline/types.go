@@ -20,6 +20,16 @@ type PollRequest struct {
 	Held []string `json:"held,omitzero"`
 	// Review, when not nil, asks for the Review list; an empty list asks too.
 	Review []ReviewFact `json:"review,omitzero"`
+	// ProviderPlaces are the runs the app may start now on each of the
+	// runner's providers with a limit; left out when none has one (decision
+	// 2026-11-25-provider-places in the app repository).
+	ProviderPlaces []ProviderPlace `json:"provider_places,omitempty"`
+}
+
+// ProviderPlace is a provider's free admission places in one poll.
+type ProviderPlace struct {
+	Provider string `json:"provider"`
+	Free     int    `json:"free"`
 }
 
 // Report is what the runner tells the app about itself, always whole.
@@ -161,6 +171,10 @@ type LinkedProject struct {
 type Job struct {
 	Issue JobIssue `json:"issue"`
 	Team  Team     `json:"team"`
+	// Provider is the provider of the poll's ProviderPlaces the run takes a
+	// place on from now until it ends; "": none, or an app before provider
+	// places (decision 2026-11-25-provider-places in the app repository).
+	Provider string `json:"provider"`
 }
 
 // JobIssue is the offered issue. Body is untrusted text.

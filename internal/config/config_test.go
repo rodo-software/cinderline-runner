@@ -458,6 +458,7 @@ func TestValidateProviders(t *testing.T) {
 		{{Name: "v6", BaseURL: "http://[::1]:8080"}},
 		{{Name: "plain", BaseURL: "https://llm.example.com"}},
 		{{Name: "limited", BaseURL: "http://h:1/v1", MaxAgents: 1}, {Name: "most", BaseURL: "http://g:1/v1", MaxAgents: MaxProviderAgents}},
+		{{Name: "ahead", BaseURL: "http://h:1/v1", MaxAgents: 1, Lookahead: MaxProviderAgents}},
 	} {
 		if err := (&Config{Projects: []Project{ok}, Providers: good}).Validate(); err != nil {
 			t.Errorf("%+v: %v", good, err)
@@ -483,6 +484,10 @@ func TestValidateProviders(t *testing.T) {
 		"bad host":      {{Name: "a", BaseURL: "http://h*st:1/v1"}},
 		"negative max":  {{Name: "a", BaseURL: "http://h:1/v1", MaxAgents: -1}},
 		"max too high":  {{Name: "a", BaseURL: "http://h:1/v1", MaxAgents: MaxProviderAgents + 1}},
+		// CLR-253: lookahead is runs past max_agents, so it needs one.
+		"lookahead without max": {{Name: "a", BaseURL: "http://h:1/v1", Lookahead: 1}},
+		"negative lookahead":    {{Name: "a", BaseURL: "http://h:1/v1", MaxAgents: 1, Lookahead: -1}},
+		"lookahead too high":    {{Name: "a", BaseURL: "http://h:1/v1", MaxAgents: 1, Lookahead: MaxProviderAgents + 1}},
 	} {
 		if err := (&Config{Projects: []Project{ok}, Providers: bad}).Validate(); err == nil || !strings.Contains(err.Error(), "provider") {
 			t.Errorf("%s: err = %v, want a provider error", name, err)

@@ -83,8 +83,9 @@ type loop struct {
 	// so a manager run that does not start holds off no team run.
 	teamHold, managerHold startHold
 
-	teamWaits, managerWaits bool // the team's or the manager's run did not fit in the memory budget at its last offer
-	managerFirst            bool // the manager's slot reserves first at the next poll that offers both
+	teamWaits, managerWaits bool            // the team's or the manager's run did not fit in the memory budget at its last offer
+	full                    map[string]bool // by provider: the last poll that offered a slot had no free place on it
+	managerFirst            bool            // the manager's slot reserves first at the next poll that offers both
 }
 
 // startHold is a slot's wait after a run that did not start.
@@ -109,6 +110,10 @@ func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan s
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	detected := p.detected
+	var placesFreed <-chan struct{} // nil without Turns: never
+	if p.Turns != nil {
+		placesFreed = p.Turns.placesFreed()
+	}
 	for {
 		if l.draining && !l.teamBusy() && l.manager == "" && !l.upkeep {
 			return
@@ -130,12 +135,20 @@ func (p *Project) Loop(ctx context.Context, c *cinderline.Client, drain <-chan s
 		case e := <-l.runDone:
 			l.ended(e)
 			timer.Reset(0) // the app may have the next job
+			if placesFreed != nil {
+				placesFreed = p.Turns.placesFreed() // a place this run freed: this poll tells it already
+			}
 		case facts := <-l.upkeepDone:
 			l.upkeep, l.upkeepRefs, l.facts, l.lastUpkeep = false, nil, facts, time.Now()
 			timer.Reset(0) // its facts, and a job the pass held back, need not wait for poll_after
 		case <-detected:
 			detected = nil
 			timer.Reset(0) // the first poll that can take a job
+		case <-placesFreed:
+			// A run of any project left a provider with a limit: its place
+			// reaches the app at once, not after poll_after (CLR-253).
+			placesFreed = p.Turns.placesFreed()
+			timer.Reset(0)
 
 		case <-timer.C:
 			timer.Reset(l.poll())
@@ -197,6 +210,14 @@ func (l *loop) poll() (wait time.Duration) {
 		// run fits the team's offer does not shut out the manager's for good.
 		l.managerFirst = !l.managerFirst
 	}
+	// The places on the limited providers are reserved as the memory is, so
+	// no other project's poll offers the same place; a job that names one
+	// puts its run in play, and the rest are given back once the answer is
+	// handled (decision 2026-11-25-provider-places in the app repository).
+	if p.Turns != nil && (req.Idle || req.ManagerIdle) {
+		req.ProviderPlaces = p.Turns.reserve(p.Config.ID(), p.Providers)
+		l.logFull(req.ProviderPlaces)
+	}
 	defer func() {
 		for _, i := range offered {
 			if l.running[i] == "" {
@@ -205,6 +226,9 @@ func (l *loop) poll() (wait time.Duration) {
 		}
 		if req.ManagerIdle && l.manager == "" {
 			p.release(managerSlot)
+		}
+		if req.ProviderPlaces != nil {
+			p.Turns.unreserve(p.Config.ID())
 		}
 	}()
 	var asked []string
@@ -285,13 +309,13 @@ func (l *loop) poll() (wait time.Duration) {
 				break
 			}
 			if !l.holds(jb.Issue.Ref) {
-				l.start(proj, jb, free[0])
+				l.start(proj, jb, free[0], req.ProviderPlaces)
 				free = free[1:]
 			}
 		}
 	}
 	if ans.ManagerJob != nil && req.ManagerIdle && !l.draining && l.mismatch == "" && !l.holds(ans.ManagerJob.Issue.Ref) {
-		l.start(proj, *ans.ManagerJob, managerSlot)
+		l.start(proj, *ans.ManagerJob, managerSlot, req.ProviderPlaces)
 	}
 
 	after := defaultPollAfter
@@ -439,6 +463,24 @@ func (l *loop) reserve(slot int, turn bool) bool {
 	return ok
 }
 
+// logFull logs a provider the poll reports without a free place, once
+// each time it gets there.
+func (l *loop) logFull(places []cinderline.ProviderPlace) {
+	full := map[string]bool{}
+	for _, pl := range places {
+		if pl.Free > 0 {
+			continue
+		}
+		full[pl.Provider] = true
+		if !l.full[pl.Provider] {
+			i := slices.IndexFunc(l.p.Providers, func(pr config.Provider) bool { return pr.Name == pl.Provider })
+			pr := l.p.Providers[i]
+			l.p.Log.Info("no free place on model provider: the app starts no run on it", "project", l.p.Config.Key, "provider", pr.Name, "max_agents", pr.MaxAgents, "lookahead", pr.Lookahead)
+		}
+	}
+	l.full = full
+}
+
 // release frees the slot's memory in the budget.
 func (p *Project) release(slot int) {
 	if p.Budget != nil {
@@ -447,8 +489,12 @@ func (p *Project) release(slot int) {
 }
 
 // start runs the job in its slot, in its own goroutine. The ref is running
-// at once, so no poll can miss it.
-func (l *loop) start(proj cinderline.Project, jb cinderline.Job, slot int) {
+// at once, so no poll can miss it, and a job that names a provider of the
+// poll's places is in play on it at once.
+func (l *loop) start(proj cinderline.Project, jb cinderline.Job, slot int, places []cinderline.ProviderPlace) {
+	if slices.ContainsFunc(places, func(pl cinderline.ProviderPlace) bool { return pl.Provider == jb.Provider }) {
+		l.p.Turns.enter(l.p.slot(slot), jb.Provider)
+	}
 	ref, manager, began := jb.Issue.Ref, slot == managerSlot, time.Now()
 	if manager {
 		l.manager = ref
@@ -477,6 +523,9 @@ func (l *loop) ended(e ended) {
 	p := l.p
 	l.lastTidy = time.Time{}
 	p.release(e.slot)
+	if p.Turns != nil {
+		p.Turns.leave(p.slot(e.slot), p.Providers) // wakes every project's loop when that frees a limited place
+	}
 	h := &l.teamHold
 	if e.slot == managerSlot {
 		h = &l.managerHold

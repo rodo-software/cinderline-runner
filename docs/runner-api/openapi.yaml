@@ -288,6 +288,49 @@ components:
         idle:
           type: boolean
           description: The runner can start a run now.
+        provider_places:
+          type: array
+          maxItems: 50
+          description: >-
+            The free admission places of the runner's model providers that
+            have a limit (decision 2026-11-25-provider-places), counted over
+            every project and Cinderline instance the runner serves: one entry
+            per such provider, `free` being the runs the app may start on it
+            now (`max_agents` plus the lookahead, minus the runs in play on
+            it). A provider not listed has no limit. Left out, no provider has
+            one. It holds for this poll only and is not stored, so it is not
+            part of `report`.
+          items:
+            type: object
+            required: [provider, free]
+            properties:
+              provider:
+                type: string
+                maxLength: 50
+                pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
+                description: A name as in `report.model_providers`, at most once in the list.
+              free:
+                type: integer
+                minimum: 0
+                maximum: 200
+        waiting:
+          type: array
+          maxItems: 20
+          description: >-
+            The runs of `running` whose turn waits now for a place on a model
+            provider (decision 2026-11-25-provider-places). Left out, none
+            waits.
+          items:
+            type: object
+            required: [ref, provider]
+            properties:
+              ref:
+                type: string
+                maxLength: 50
+              provider:
+                type: string
+                maxLength: 50
+                pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
         manager_idle:
           type: boolean
           description: >-
@@ -331,7 +374,8 @@ components:
           maxLength: 100
         clients:
           type: array
-          maxItems: 50
+          maxItems: 10
+          description: The agent CLIs, each `name` once.
           items:
             type: object
             required: [name, version, state]
@@ -362,7 +406,7 @@ components:
                 items:
                   type: string
                   maxLength: 100
-                  pattern: '^[A-Za-z0-9._:/-]{1,150}$'
+                  pattern: '^[A-Za-z0-9._:/-]{1,100}$'
               models_age:
                 type: [integer, 'null']
                 minimum: 0
@@ -417,7 +461,7 @@ components:
             pattern: '^[a-z0-9][a-z0-9-]{0,49}$'
         provider_models:
           type: array
-          maxItems: 50
+          maxItems: 20
           description: The models each of the runner's model providers serves, with `openrouter` (its models that take tools) when the project's key is set (decisions 2026-11-17-provider-models, 2026-11-24-model-lists-from-runners). An OpenCode model can be picked and run only while its provider's list here is current. Left out, no provider has one.
           items:
             type: object
@@ -602,7 +646,7 @@ components:
           description: '`https://host[:port]/path` without a user name or password; the app accepts nothing else. One saved before it did may be in another form, which the runner reports as `repository_mismatch`.'
         forge:
           type: [string, 'null']
-          enum: [github, gitlab, forgejo, null]
+          enum: [github, gitlab, forgejo, bitbucket, null]
           description: Null, the runner tells the forge from the repository's host.
         base_branch:
           type: [string, 'null']
@@ -653,6 +697,16 @@ components:
             body:
               type: [string, 'null']
               description: Untrusted text, for the pull request.
+        provider:
+          type: [string, 'null']
+          description: >-
+            The provider from the poll's `provider_places` that the job takes
+            an admission place on (decision 2026-11-25-provider-places): the
+            model provider of the run's first turn when it is listed there,
+            else null. One answer, `job`, `jobs` and `manager_job` together,
+            names a provider at most as often as its `free`. The run is in play
+            on it from now until it ends. Left out, null: an app that does not
+            send it predates provider places.
         team:
           type: object
           required: [name, max_minutes, max_turns, ponytail, agents]

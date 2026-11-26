@@ -270,3 +270,49 @@ func TestProviderMaxAgents(t *testing.T) {
 	}
 	check(false, 0, "")
 }
+
+// CLR-253: --lookahead lets runs past max_agents be in play on a provider;
+// add-provider and set-provider set it, list-providers shows it, and it is
+// refused without max_agents.
+func TestProviderLookahead(t *testing.T) {
+	c, out, errb := newCLI(t, lines(""))
+	run := func(code int, args ...string) {
+		t.Helper()
+		if got := c.Run(args); got != code {
+			t.Fatalf("%v: code %d, want %d; stderr %q", args, got, code, errb.String())
+		}
+	}
+	const url = "http://localhost:8080/v1"
+	check := func(maxAgents, lookahead int, list string) {
+		t.Helper()
+		want := []config.Provider{{Name: "lan", BaseURL: url, MaxAgents: maxAgents, Lookahead: lookahead}}
+		if got := providers(t, c); !slices.Equal(got, want) {
+			t.Fatalf("providers %v, want %v", got, want)
+		}
+		out.Reset()
+		run(0, "list-providers")
+		if want := "lan\t" + url + "\tno key" + list + "\n"; out.String() != want {
+			t.Errorf("list-providers = %q, want %q", out.String(), want)
+		}
+	}
+	run(1, "add-provider", "--lookahead", "1", "lan", url)
+	run(1, "add-provider", "--max-agents", "1", "--lookahead", "-1", "lan", url)
+	run(1, "add-provider", "--max-agents", "1", "--lookahead", "101", "lan", url)
+	run(0, "add-provider", "--max-agents", "1", "--lookahead", "2", "lan", url)
+	check(1, 2, "\tmax 1 agent\tlookahead 2")
+
+	out.Reset()
+	run(0, "set-provider", "lan", "--lookahead", "1")
+	if want := "lan now has a lookahead of 1\n"; out.String() != want {
+		t.Errorf("set-provider = %q, want %q", out.String(), want)
+	}
+	check(1, 1, "\tmax 1 agent\tlookahead 1")
+	out.Reset()
+	run(0, "set-provider", "lan", "--lookahead", "1")
+	if want := "lan already has a lookahead of 1\n"; out.String() != want {
+		t.Errorf("unchanged set-provider = %q, want %q", out.String(), want)
+	}
+	run(1, "set-provider", "lan", "--max-agents", "0")
+	run(0, "set-provider", "lan", "--max-agents", "0", "--lookahead", "0")
+	check(0, 0, "")
+}
