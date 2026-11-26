@@ -73,8 +73,14 @@ func TestThePollRequest(t *testing.T) {
 	f.p.saveNote("CSR-9", Note{Dir: "/runs/CSR-9", Session: "s", Client: "claude", Origin: "kept"})
 	f.ws.Strandeds = []workspace.StrandedReply{{Clones: []workspace.Clone{{Dir: "/runs/CSR-8", Branch: "cinderline/CSR-8"}}}}
 	f.ws.Clones = []string{"/runs/CSR-8"}
+	skillTidies := 0
+	f.p.tidySkills = func(context.Context) { skillTidies++ }
 	app := &fakeApp{}
 	polls := runLoop(t, f, app, nil, nil, stopAt(2, answer(t, proj, `"held":[{"ref":"CSR-9","session":"keep"},{"ref":"CSR-8","session":"keep"}],"review":[]`)))
+	// Skill package volumes are tidied with the rest, once per tidy (CLR-257).
+	if skillTidies != 1 {
+		t.Errorf("%d skill package tidies, want 1", skillTidies)
+	}
 	first := polls[0]
 	r := first.Report
 	if r.RunnerVersion != "0.0.0-test" || len(r.Clients) != 1 || !slices.Equal(r.Environments, Environments) || r.Errors == nil || len(r.Errors) != 0 || r.RefusedConnections != 1 || !r.StrictHosts ||

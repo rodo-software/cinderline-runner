@@ -200,7 +200,7 @@ components:
       name: Cinderline-Runner-Version
       in: header
       required: true
-      description: The runner's version, e.g. `0.4.0`. A version that does not start with a digit, such as `dev`, is a local build and is accepted.
+      description: The runner's version, e.g. `0.6.0`. A version that does not start with a digit, such as `dev`, is a local build and is accepted.
       schema:
         type: string
     Ref:
@@ -442,7 +442,7 @@ components:
           description: The connections the runner's egress proxy refused.
         strict_hosts:
           type: boolean
-          description: The runner has strict host blocking on, so it ignores a step's `allow_hosts` (decision 2026-11-17-blocked-hosts). The app then names a blocked host on the issue without asking a person about it. Left out, false.
+          description: The runner has strict host blocking on, so it ignores a step's `allow_hosts` (decision 2026-11-17-blocked-hosts). The app then names a blocked host on the issue without asking a person about it; only the runner's local config opens one, with `cinderline allow-host add HOST:PORT [--project KEY]`. Left out, false.
         model_providers:
           type: array
           maxItems: 50
@@ -533,6 +533,48 @@ components:
           type: [string, 'null']
           maxLength: 4000
           description: The last lines of the check's log, where the forge's API gives them.
+
+    RefusedHost:
+      type: object
+      description: |
+        A host the step's egress proxy refused, why, and the first request it
+        refused there (decision 2026-11-25-blocked-host-urls). The proxy
+        decrypts TLS only for a connection it refuses anyway, with the
+        runner's own CA, reads that first request and answers `403`.
+      required: [host, reason]
+      properties:
+        host:
+          type: string
+          maxLength: 260
+          description: '`host:port`, the host in lower case as the allowlist writes it.'
+        reason:
+          type: string
+          maxLength: 50
+          description: |
+            Why the proxy refused the host. `not_allowed`: not on any
+            allowlist. `private_address`: allowed from Cinderline, but it
+            resolves to a private or loopback address, which only the
+            runner's local `allow-host` can open (runner decision
+            2026-11-19-app-host-addresses). `strict`: allowed from
+            Cinderline, but the runner has strict host blocking on.
+            `runner_machine`: `localhost`, `127.*`, `[::1]` or
+            `host.docker.internal`. The app reads a value it does not know as
+            `not_allowed`.
+          enum: [not_allowed, private_address, strict, runner_machine]
+        method:
+          type: [string, 'null']
+          maxLength: 20
+          description: The method of the first refused request. Left out with `url`.
+        url:
+          type: [string, 'null']
+          maxLength: 2000
+          description: |
+            The first refused request's URL as the proxy saw it,
+            `scheme://host[:port]/path`, without its query string, fragment
+            or user info, cut to 2000 characters. Left out, with `method`,
+            when the proxy could not decrypt the connection: a tool that pins
+            certificates or ignores the injected CA. The path is text the
+            agent chose: the app shows it as untrusted data.
 
     PollResponse:
       type: object
@@ -705,11 +747,30 @@ components:
             model provider of the run's first turn when it is listed there,
             else null. One answer, `job`, `jobs` and `manager_job` together,
             names a provider at most as often as its `free`. The run is in play
-            on it from now until it ends. Left out, null: an app that does not
-            send it predates provider places.
+            on it from now until it ends. Left out, null: the poll had no
+            `provider_places`, or the app predates them.
+        skills:
+          type: array
+          maxItems: 10
+          description: |
+            The skill packages attached to the issue (decision
+            2026-11-26-skill-packages), for every turn of its run, sub-issues
+            and workers included. Each is a public git repository pinned by a
+            commit the app resolved. The runner fetches it at that commit,
+            refuses any other, and mounts it read-only into the agent
+            containers, where each client loads it its own way (Claude Code
+            with `--plugin-dir`); never into the clone or the prompt. A runner
+            with strict host blocking on loads only the packages allowed
+            locally with `cinderline allow-skill`. The runner checks every
+            entry against this schema before any of it becomes a path or an
+            argument; one that fails is `failed`. It reports each entry's
+            state in the next request's `workspace.skills`. Here, on the job,
+            because a step never carries a URL. Left out or empty: none.
+          items:
+            $ref: '#/components/schemas/SkillPackage'
         team:
           type: object
-          required: [name, max_minutes, max_turns, ponytail, agents]
+          required: [name, max_minutes, max_turns, agents]
           properties:
             name:
               type: string
@@ -717,8 +778,6 @@ components:
               type: integer
             max_turns:
               type: integer
-            ponytail:
-              type: boolean
             agents:
               type: array
               minItems: 1
@@ -735,6 +794,29 @@ components:
                     type: [string, 'null']
                   effort:
                     type: [string, 'null']
+
+    SkillPackage:
+      type: object
+      required: [name, url, commit, path]
+      properties:
+        name:
+          type: string
+          maxLength: 64
+          pattern: '^[a-z0-9]+(-[a-z0-9]+)*$'
+          description: Unique in the workspace's catalog; the runner uses it in the mount's path and in `cinderline allow-skill`.
+        url:
+          type: string
+          maxLength: 500
+          pattern: '^https://[^/?#@\s]+(/[^?#\s]*)?$'
+          description: The public repository, `https://host[:port]/path` without user info, query or fragment.
+        commit:
+          type: string
+          pattern: '^[0-9a-f]{40}$'
+          description: The commit the app resolved from the tag or branch an admin typed. The runner refuses any other.
+        path:
+          type: [string, 'null']
+          maxLength: 200
+          description: The package's root inside the repository, relative and without `..`, e.g. `plugin`; null, the repository's root.
 
     NextRequest:
       type: object
@@ -818,6 +900,27 @@ components:
               items:
                 type: string
                 maxLength: 1000
+            skills:
+              type: array
+              maxItems: 10
+              description: |
+                One entry per skill package the job named in `skills`
+                (decision 2026-11-26-skill-packages): whether the runner
+                loaded it for the run's turns. Facts only; the app writes what
+                a person reads. The app reads this leniently: an entry with an
+                unknown `name` or `state` is ignored and never refuses the
+                request. Left out or empty: the job named none.
+              items:
+                type: object
+                required: [name, state]
+                properties:
+                  name:
+                    type: string
+                    maxLength: 64
+                  state:
+                    type: string
+                    enum: [loaded, refused_strict, failed]
+                    description: '`loaded`: fetched at its commit and mounted. `refused_strict`: the runner has strict host blocking on and no local `cinderline allow-skill` for it. `failed`: it failed the runner''s check of its fields, or its fetch, or its commit was not the one named.'
 
     LastStep:
       type: object
@@ -943,20 +1046,22 @@ components:
           type: [string, 'null']
           maxLength: 2000
           description: With `published`, why the pull request could not be merged, as a Review fact's `reason`. The app sends the issue back to To do with it instead of moving it to Review (decision 2026-11-25-merge-failures-go-back-to-the-agent).
-        refused_hosts:
+        refused:
           type: [array, 'null']
           maxItems: 20
           description: |
-            With `run`, `resolve` and `check`: the `host:port` pairs the step's
-            egress proxy refused, each once, the host in lower case as the
-            allowlist writes it (decision 2026-11-17-blocked-hosts). The app
+            With `run`, `resolve` and `check`: the hosts the step's egress
+            proxy refused, one entry per `host:port` (decisions
+            2026-11-17-blocked-hosts, 2026-11-25-blocked-host-urls). The app
             names the ones new to the issue in a comment and, unless the
             report said `strict_hosts`, asks a person whether the agent may
-            reach them, which moves the issue to Blocked. An entry that is not
-            a `host:port` is ignored. Left out or empty, none.
+            reach them, which moves the issue to Blocked. Nothing in the app
+            opens a host for every run: only the runner's local config does,
+            with `cinderline allow-host add HOST:PORT [--project KEY]`. An
+            entry whose `host` is not a `host:port` is ignored. Left out or
+            empty, none. Replaces `refused_hosts`.
           items:
-            type: string
-            maxLength: 260
+            $ref: '#/components/schemas/RefusedHost'
 
     Usage:
       type: object
@@ -1169,7 +1274,10 @@ components:
         answering "Yes, this run" (decision 2026-11-17-blocked-hosts), sub-issues
         included. The runner adds them to this step's proxy allowlist, unless
         it has strict host blocking on, and never opens `localhost`, a loopback
-        address or `host.docker.internal` through them. Left out, none.
+        address or `host.docker.internal` through them. They never open a
+        host for every run: only the runner's local config does, with
+        `cinderline allow-host add HOST:PORT [--project KEY]`, which without
+        `--project` applies to all current and future projects. Left out, none.
       items:
         type: string
 

@@ -158,6 +158,13 @@ func TestValidate(t *testing.T) {
 		{"max_parallel_runs negative", []Project{with(func(p *Project) { p.MaxParallelRuns = -1 })}, "project 1 (WEB): max_parallel_runs"},
 		{"memory fraction", []Project{with(func(p *Project) { p.Memory = "1.5g" })}, "project 1 (WEB): memory"},
 		{"memory overflow", []Project{with(func(p *Project) { p.Memory = "99999999999999g" })}, "project 1 (WEB): memory"},
+		// CLR-257: a skill package allowed on a strict runner, by name and URL.
+		{"allow skill", []Project{with(func(p *Project) { p.AllowSkills = []AllowedSkill{{"ponytail", "https://github.com/o/ponytail"}} })}, ""},
+		{"allow skill bad name", []Project{with(func(p *Project) { p.AllowSkills = []AllowedSkill{{"Pony--tail", "https://github.com/o/ponytail"}} })}, "project 1 (WEB): allow_skills name"},
+		{"allow skill bad url", []Project{with(func(p *Project) { p.AllowSkills = []AllowedSkill{{"ponytail", "https://u:p@github.com/o/ponytail"}} })}, "project 1 (WEB): allow_skills ponytail"},
+		{"allow skill twice", []Project{with(func(p *Project) {
+			p.AllowSkills = []AllowedSkill{{"ponytail", "https://github.com/o/ponytail"}, {"ponytail", "https://github.com/x/ponytail"}}
+		})}, "project 1 (WEB): allow_skills names ponytail twice"},
 	}
 	for _, tt := range tests {
 		err := (&Config{Version: 1, Projects: tt.projects}).Validate()
@@ -167,6 +174,36 @@ func TestValidate(t *testing.T) {
 		case tt.wantErr != "" && (err == nil || !strings.HasPrefix(err.Error(), tt.wantErr)):
 			t.Errorf("%s: err %v, want prefix %q", tt.name, err, tt.wantErr)
 		}
+	}
+}
+
+// CLR-257: a skill package's name and URL as the app's contract has them.
+func TestSkillNameAndURL(t *testing.T) {
+	for _, n := range []string{"a", "impeccable", "pony-tail-2", strings.Repeat("a", 64)} {
+		if !ValidSkillName(n) {
+			t.Errorf("%q refused", n)
+		}
+	}
+	for _, n := range []string{"", "-a", "a-", "a--b", "A", "a_b", "a.b", "../a", "a/b", strings.Repeat("a", 65)} {
+		if ValidSkillName(n) {
+			t.Errorf("%q allowed", n)
+		}
+	}
+	if err := CheckSkillURL("https://github.com:8443/o/impeccable"); err != nil {
+		t.Error(err)
+	}
+	for _, u := range []string{"http://github.com/o/r", "https://u@github.com/o/r", "https://github.com/o/r?x=1", "https://github.com/o/r#x", "https://github.com/o/r?", "https://github.com/o/r#", "https://github.com/o r", "https://github.com/o/r\n", "file:///etc", "-https://x/y", "https://github.com/" + strings.Repeat("a", 500)} {
+		if CheckSkillURL(u) == nil {
+			t.Errorf("%q allowed", u)
+		}
+	}
+}
+
+// CLR-257: runner-wide allow_skills are checked as a project's are.
+func TestValidateRunnerAllowSkills(t *testing.T) {
+	c := &Config{Version: 1, AllowSkills: []AllowedSkill{{"ok", "ssh://x/y"}}}
+	if err := c.Validate(); err == nil || !strings.HasPrefix(err.Error(), "allow_skills ok: ") {
+		t.Errorf("err %v", err)
 	}
 }
 

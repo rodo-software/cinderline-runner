@@ -121,3 +121,35 @@ func withToken(ctx context.Context, x Exec, log *slog.Logger, project string, la
 	_, err := retryNetwork(ctx, log, project, func() (string, error) { return x(ctx, []string{"GIT_TOKEN=" + token}, argv...) })
 	return err
 }
+
+// SkillRepo is the folder of a skill package's repository in its volume,
+// next to the volume's complete marker, which a file of the repository's
+// own could otherwise be.
+const SkillRepo = "repo"
+
+// fetchSkillScript fills the volume at /t with commit $2 of the public
+// repository at URL $1 and refuses any other commit. A token is never asked
+// for: askpass fails. The URL is given to fetch, never stored, and .git
+// goes. The complete marker comes last, so an interrupted fill is redone.
+const fetchSkillScript = `set -e
+rm -rf /t/` + SkillRepo + ` /t/complete
+git init --quiet /t/` + SkillRepo + `
+git -C /t/` + SkillRepo + ` fetch --quiet --depth 1 --no-tags "$1" "$2"
+git -C /t/` + SkillRepo + ` checkout --quiet --detach FETCH_HEAD
+head=$(git -C /t/` + SkillRepo + ` rev-parse HEAD)
+[ "$head" = "$2" ] || { echo "fetched commit $head, not $2: refused" >&2; exit 1; }
+rm -rf /t/` + SkillRepo + `/.git
+touch /t/complete`
+
+// FetchSkill fetches commit of the public repository at url into volume,
+// in a throwaway git container on the runner's network that gets no token,
+// and refuses any other commit; volume is complete when it succeeds. The
+// caller checks url and commit first. A transient network error is
+// retried, logged to log.
+func FetchSkill(ctx context.Context, x Exec, log *slog.Logger, project, volume, url, commit string) error {
+	argv := append([]string{"docker", "run", "--rm"}, Labels(project, "")...)
+	argv = append(argv, "-e", "GIT_TERMINAL_PROMPT=0", "-e", "GIT_ASKPASS=/bin/false", "-v", volume+":/t")
+	argv = append(argv, "--entrypoint", "sh", GitImage, "-c", fetchSkillScript, "sh", url, commit)
+	_, err := retryNetwork(ctx, log, project, func() (string, error) { return x(ctx, nil, argv...) })
+	return err
+}

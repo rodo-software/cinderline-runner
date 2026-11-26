@@ -96,8 +96,9 @@ func (c *CLI) uninstall(args []string) int {
 }
 
 // unlabelledVolume matches the runner's volumes that removeLabelled misses:
-// the tools volumes and the projects' state volumes, per client or not.
-var unlabelledVolume = regexp.MustCompile("^" + name.Name + `-(tools-.+|.+-state(-[a-z]+)?)$`)
+// the tools volumes, the skill packages' volumes, which every project shares
+// (CLR-257), and the projects' state volumes, per client or not.
+var unlabelledVolume = regexp.MustCompile("^" + name.Name + `-(tools-.+|skill-.+|.+-state(-[a-z]+)?)$`)
 
 // removeLabelled removes the containers, networks and volumes with label,
 // which names one project or, without a value, all of them.

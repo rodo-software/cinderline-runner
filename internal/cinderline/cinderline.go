@@ -276,6 +276,10 @@ func redacted(r NextRequest) NextRequest {
 	for _, l := range first(r.Workspace.LinkedProjects, maxWorkspaceList) {
 		w.LinkedProjects = append(w.LinkedProjects, WorkspaceLink{Key: clip(l.Key, maxKey), Paths: clipAll(l.Paths, maxWorkspaceList, maxPath)})
 	}
+	w.Skills = nil
+	for _, s := range first(r.Workspace.Skills, maxSkills) {
+		w.Skills = append(w.Skills, SkillState{Name: clip(s.Name, maxSkillName), State: s.State})
+	}
 	r.Workspace = w
 	return r
 }

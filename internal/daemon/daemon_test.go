@@ -525,3 +525,29 @@ func TestRunnerAllowHostsReachEveryProject(t *testing.T) {
 		t.Errorf("project B allow = %q, want global only", allowB)
 	}
 }
+
+// CLR-257: runner-wide allow_skills reach every project's runs, alongside
+// that project's own.
+func TestAllowSkillsReachEveryProject(t *testing.T) {
+	keyring.MockInit()
+	f := useFakeLoops(t)
+	p := paths(t)
+	global := config.AllowedSkill{Name: "ponytail", URL: "https://github.com/o/ponytail"}
+	own := config.AllowedSkill{Name: "impeccable", URL: "https://github.com/o/impeccable"}
+	pa := project("https://a.example.com", "A")
+	pa.AllowSkills = []config.AllowedSkill{own}
+	pb := project("https://b.example.com", "B")
+	setToken(t, p, pa)
+	setToken(t, p, pb)
+	if err := (&config.Config{AllowSkills: []config.AllowedSkill{global}, Projects: []config.Project{pa, pb}}).Save(p.File); err != nil {
+		t.Fatal(err)
+	}
+	start(t, p)
+	waitFor(t, "A and B to start", func() bool { return len(f.of("A")) == 1 && len(f.of("B")) == 1 })
+	f.mu.Lock()
+	a, b := f.skills["A"], f.skills["B"]
+	f.mu.Unlock()
+	if !slices.Equal(a, []config.AllowedSkill{global, own}) || !slices.Equal(b, []config.AllowedSkill{global}) {
+		t.Errorf("A allows %v, B %v", a, b)
+	}
+}

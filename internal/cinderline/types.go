@@ -185,6 +185,19 @@ type Job struct {
 	// place on from now until it ends; "": none, or an app before provider
 	// places (decision 2026-11-25-provider-places in the app repository).
 	Provider string `json:"provider"`
+	// Skills are the skill packages attached to the issue, for every turn of
+	// the run (decision 2026-11-26-skill-packages in the app repository).
+	// Untrusted: each is checked before any of it is used (run.checkSkill).
+	Skills []Skill `json:"skills"`
+}
+
+// Skill is a skill package a job names: a public git repository, the commit
+// the app resolved, and the package's root in it ("": the repository's root).
+type Skill struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Commit string `json:"commit"`
+	Path   string `json:"path"` // the app's null decodes as ""
 }
 
 // JobIssue is the offered issue. Body is untrusted text.
@@ -251,7 +264,26 @@ type RunWorkspace struct {
 	ExtraRepositories []WorkspaceRepository `json:"extra_repositories"`
 	LinkedProjects    []WorkspaceLink       `json:"linked_projects"`
 	Notes             []string              `json:"notes"`
+	// Skills are the state of each skill package the job named; left out
+	// when it named none.
+	Skills []SkillState `json:"skills,omitempty"`
 }
+
+// SkillState is whether the run loaded a skill package the job named: one of
+// SkillLoaded, SkillRefusedStrict or SkillFailed.
+type SkillState struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// The states of a skill package (decision 2026-11-26-skill-packages in the
+// app repository): loaded, refused by a strict runner without a local
+// allowance, or failed its check, its fetch or its commit check.
+const (
+	SkillLoaded        = "loaded"
+	SkillRefusedStrict = "refused_strict"
+	SkillFailed        = "failed"
+)
 
 // WorkspaceRepository is an extra repository the run fetched; URL has no user info.
 type WorkspaceRepository struct {

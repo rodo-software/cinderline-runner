@@ -88,7 +88,7 @@ func TestUninstallDockerByLabel(t *testing.T) {
 		"docker ps --all --quiet --filter " + label:   "c1\nc2\n",
 		"docker network ls --quiet --filter " + label: "n1\n",
 		"docker volume ls --quiet --filter " + label:  "v1\nv2\n",
-		volumes: name.Name + "-tools-abc\n" + name.Name + "-WEB-state\n" + name.Name + "-acme-WEB-state-claude\n" + name.Name + "-runner_data\nmy-" + name.Name + "-WEB-state\n",
+		volumes: name.Name + "-tools-abc\n" + name.Name + "-skill-abc\n" + name.Name + "-WEB-state\n" + name.Name + "-acme-WEB-state-claude\n" + name.Name + "-runner_data\nmy-" + name.Name + "-WEB-state\n",
 		images:  "i2\ni1\ni2\n",
 	}
 	if code := c.Run([]string{"uninstall", "--yes"}); code != 0 {
@@ -102,7 +102,7 @@ func TestUninstallDockerByLabel(t *testing.T) {
 		{"docker", "volume", "ls", "--quiet", "--filter", label},
 		{"docker", "volume", "rm", "--force", "v1", "v2"},
 		strings.Fields(volumes),
-		{"docker", "volume", "rm", "--force", name.Name + "-WEB-state", name.Name + "-acme-WEB-state-claude", name.Name + "-tools-abc"},
+		{"docker", "volume", "rm", "--force", name.Name + "-WEB-state", name.Name + "-acme-WEB-state-claude", name.Name + "-skill-abc", name.Name + "-tools-abc"},
 		strings.Fields(images),
 		{"docker", "image", "rm", "--force", "i1", "i2"},
 	}

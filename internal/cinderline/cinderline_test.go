@@ -189,6 +189,42 @@ func TestNextRefusedHostsFit(t *testing.T) {
 	}
 }
 
+// CLR-257: the skill packages' states are cut to the app's limits, the
+// first 10 with names of at most 64 characters; none leaves the key out.
+func TestNextSkillsFit(t *testing.T) {
+	s := &server{status: []int{200, 200}, body: `{"state":"x","step":{"kind":"done"}}`}
+	c := s.client(t)
+	skills := []SkillState{{Name: strings.Repeat("a", 70), State: SkillFailed}}
+	for i := range 12 {
+		skills = append(skills, SkillState{Name: fmt.Sprintf("p%d", i), State: SkillLoaded})
+	}
+	for _, ws := range []RunWorkspace{{Skills: skills}, {}} {
+		if _, err := c.Next(context.Background(), "CSR-1", NextRequest{ID: "id", Workspace: ws}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var next NextRequest
+	_ = json.Unmarshal([]byte(s.bodies[0]), &next)
+	if got := next.Workspace.Skills; len(got) != maxSkills || got[0].Name != strings.Repeat("a", 64) || got[9] != (SkillState{Name: "p8", State: SkillLoaded}) {
+		t.Errorf("sent %v", got)
+	}
+	if strings.Contains(s.bodies[1], `"skills"`) {
+		t.Errorf("sent %s, want no skills", s.bodies[1])
+	}
+}
+
+// A job's skill packages decode, a null path as the repository's root.
+func TestJobSkillsDecode(t *testing.T) {
+	var j Job
+	body := `{"issue":{"ref":"CSR-1"},"skills":[{"name":"impeccable","url":"https://github.com/o/impeccable","commit":"` + strings.Repeat("a", 40) + `","path":"plugin"},{"name":"p","url":"https://git.example/p","commit":"` + strings.Repeat("b", 40) + `","path":null}]}`
+	if err := json.Unmarshal([]byte(body), &j); err != nil {
+		t.Fatal(err)
+	}
+	if len(j.Skills) != 2 || j.Skills[0].Path != "plugin" || j.Skills[1].Path != "" || j.Skills[1].URL != "https://git.example/p" {
+		t.Errorf("skills %+v", j.Skills)
+	}
+}
+
 // CLR-221: the tool calls are cut to the app's limits: the first 200 whose
 // name has 1 to 100 characters, each at most 1,000,000 calls. A name that
 // holds a secret is left out, not redacted, as is one too long: either would

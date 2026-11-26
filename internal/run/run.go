@@ -43,6 +43,7 @@ type job struct {
 	idle             time.Duration   // the project's idle limit for a turn
 	fg               forge.Forge
 	ws               cinderline.RunWorkspace
+	skills           []Skill // the skill packages loaded; not mounted into turns before CLR-258
 	// manager is a run in the Project Manager slot: it reads a fresh clone
 	// of the base, never commits or pushes, and refuses a check, publish or
 	// resolve step (CLR-194).

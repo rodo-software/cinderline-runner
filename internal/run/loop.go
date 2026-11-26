@@ -287,6 +287,9 @@ func (l *loop) poll() (wait time.Duration) {
 		if len(asked) > 0 {
 			p.tidy(l.ctx, asked, ans.Held, stranded)
 		}
+		if p.tidySkills != nil {
+			p.tidySkills(l.ctx)
+		}
 		l.lastTidy = time.Now()
 	}
 	if review {

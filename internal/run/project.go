@@ -75,8 +75,11 @@ type Project struct {
 	// Config's own wins over (decision 2026-11-25-parallel-runs-default).
 	MaxParallelRuns int
 
-	// StrictHosts is config's strict_hosts: a step's allow_hosts are ignored.
+	// StrictHosts is config's strict_hosts: a step's allow_hosts are ignored,
+	// and so are a job's skill packages that AllowSkills leaves out.
 	StrictHosts bool
+	// AllowSkills are config's runner-wide and the project's allow_skills.
+	AllowSkills []config.AllowedSkill
 
 	// Budget is the runner's memory budget, which every project's runs
 	// share (decision 2026-11-24-agent-memory-limit); nil: none.
@@ -89,6 +92,8 @@ type Project struct {
 	deleteSession func(ctx context.Context, ref, session string) error                                      // a session's files on the state volume
 	prepare       func(ctx context.Context, proj cinderline.Project, base string) (memory int64, err error) // the environment and the tools mount; memory as environment.Docker.AgentImage
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
+	fillSkill     func(ctx context.Context, url, commit, path string) (volume string, err error) // a skill package's shared volume, as tools.Skills.Fill
+	tidySkills    func(ctx context.Context)                                                      // removes the skill package volumes unused for long, as tools.Skills.Tidy
 	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
 	listModels    func(ctx context.Context, clients []string) map[string][]string // each client's models; none for one that failed
 	image         string                                                          // the agent image the tools mount was filled for; only runs' prepares touch it, one at a time (prepMu)
@@ -204,6 +209,8 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 	p.fetchExtras = func(ctx context.Context, path string, repos []workspace.Extra) map[string]error {
 		return workspace.FetchExtras(ctx, exec, log, cfg.ID(), path, repos)
 	}
+	skills := &tools.Skills{State: state, Exec: exec, Log: log, Project: cfg.ID()}
+	p.fillSkill, p.tidySkills = skills.Fill, skills.Tidy
 	p.deleteSession = func(ctx context.Context, ref, session string) error {
 		return client.DeleteSession(ctx, exec, cfg.ID(), ref, session)
 	}

@@ -89,3 +89,28 @@ func TestExtraMountIsReadOnly(t *testing.T) {
 		t.Errorf("ExtraMount = %q", got)
 	}
 }
+
+// CLR-257: a skill package is fetched by its commit in a container that gets
+// no token and no environment of the runner's, with the URL and commit as
+// arguments, never in the script.
+func TestFetchSkill(t *testing.T) {
+	var calls []execCall
+	x := func(_ context.Context, env []string, argv ...string) (string, error) {
+		calls = append(calls, execCall{env, argv})
+		return "", nil
+	}
+	commit := strings.Repeat("a", 40)
+	if err := FetchSkill(context.Background(), x, slog.New(slog.DiscardHandler), "CSR", "cinderline-skill-x", "https://git.example.com/o/p", commit); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || len(calls[0].Env) != 0 {
+		t.Fatalf("calls %q", calls)
+	}
+	argv := calls[0].Argv
+	if !slices.Equal(argv[len(argv)-2:], []string{"https://git.example.com/o/p", commit}) || !slices.Contains(argv, "cinderline-skill-x:/t") || slices.Contains(argv, "GIT_TOKEN") {
+		t.Errorf("argv %q", argv)
+	}
+	if script := argv[len(argv)-4]; strings.Contains(script, "git.example.com") || !strings.Contains(script, `[ "$head" = "$2" ]`) {
+		t.Errorf("script %s", script)
+	}
+}

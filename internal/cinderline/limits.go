@@ -45,6 +45,8 @@ const (
 	maxTools         = 200   // last.usage.tools
 	maxToolCalls     = 1e6   // one tool's calls in last.usage.tools
 	maxReason        = 2000  // last.reason and a review fact's reason
+	maxSkills        = 10    // workspace.skills
+	maxSkillName     = 64    // a skill package's name in workspace.skills
 )
 
 // MaxChecks is the most failed checks of a review fact or a step.

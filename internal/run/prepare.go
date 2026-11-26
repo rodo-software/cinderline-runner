@@ -138,8 +138,8 @@ func (p *Project) linkedProjects(ctx context.Context, ref string, linked []cinde
 }
 
 // runWorkspace is the facts of the run's clone and mounts for next.
-func runWorkspace(branch, base string, extras []config.ExtraRepository, links []Linked, notes []string) cinderline.RunWorkspace {
-	w := cinderline.RunWorkspace{Branch: branch, Base: base, ExtraRepositories: []cinderline.WorkspaceRepository{}, LinkedProjects: []cinderline.WorkspaceLink{}, Notes: append([]string{}, notes...)}
+func runWorkspace(branch, base string, extras []config.ExtraRepository, links []Linked, notes []string, skills []cinderline.SkillState) cinderline.RunWorkspace {
+	w := cinderline.RunWorkspace{Branch: branch, Base: base, ExtraRepositories: []cinderline.WorkspaceRepository{}, LinkedProjects: []cinderline.WorkspaceLink{}, Notes: append([]string{}, notes...), Skills: skills}
 	for _, r := range extras {
 		w.ExtraRepositories = append(w.ExtraRepositories, cinderline.WorkspaceRepository{Path: workspace.ExtraPath + "/" + r.Name(), URL: stripURL(r.URL)})
 	}
@@ -194,6 +194,8 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 	// Fetched on every run, so a resume and a follow-up read fresh code too.
 	links, more := p.linkedProjects(ctx, ref, proj.LinkedProjects)
 	notes = append(notes, more...)
+	var skills []cinderline.SkillState
+	j.skills, skills = p.skillPackages(ctx, ref, jb.Skills)
 	h := &held{reports: map[string]string{}, agents: map[string]string{}}
 	h.lead = session{issue: ref, agent: lead.Name}
 	if manager {
@@ -210,7 +212,7 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 		}
 		// Noted at once, so tidying never pushes the clone, even after a crash.
 		p.saveNote(ref, p.note(j, h, cmp.Or(h.lead.origin, "paused")))
-		j.ws = runWorkspace(j.branch, base, extras, links, notes)
+		j.ws = runWorkspace(j.branch, base, extras, links, notes, skills)
 		return j, nil, h, nil
 	}
 	n, resumed, more := p.resume(ctx, j, lead.Client)
@@ -226,7 +228,7 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 	} else if j.dir, err = p.Workspace.Prepare(ctx, j.branch, base); err != nil {
 		return nil, nil, nil, err
 	}
-	j.ws = runWorkspace(j.branch, base, extras, links, notes)
+	j.ws = runWorkspace(j.branch, base, extras, links, notes, skills)
 	// Also on a fresh clone, where the merge changes nothing, as Prepare
 	// does not say whether it continued the remote branch.
 	return j, p.catchUp(ctx, j), h, nil

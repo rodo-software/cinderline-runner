@@ -50,6 +50,9 @@ type Config struct {
 	// AllowHosts are extra host:port pairs runs of every current and future
 	// project on this runner may reach (CLR-212).
 	AllowHosts []string `json:"allow_hosts,omitempty"`
+	// AllowSkills are the skill packages runs of every current and future
+	// project may load on a runner with strict_hosts on (CLR-257).
+	AllowSkills []AllowedSkill `json:"allow_skills,omitempty"`
 	// MaxParallelRuns is every project's max_parallel_runs unless it sets
 	// its own, 1 to MaxParallel; 0 is 1 (decision 2026-11-25-parallel-runs-default).
 	MaxParallelRuns int       `json:"max_parallel_runs,omitempty"`
@@ -187,6 +190,9 @@ type Project struct {
 	// Only local config opens a host for every run; Cinderline opens one
 	// for an issue's runs (decision 2026-11-17-hosts-from-cinderline).
 	AllowHosts []string `json:"allow_hosts,omitempty"`
+	// AllowSkills are the skill packages this project's runs may load on a
+	// runner with strict_hosts on (CLR-257).
+	AllowSkills []AllowedSkill `json:"allow_skills,omitempty"`
 	// Memory is the memory limit of the project's agent containers, also
 	// their swap limit, such as "8g" or "512m"; empty is DefaultMemory. A
 	// mem_limit on the agent service of its compose file wins (decision
@@ -490,6 +496,9 @@ func (c *Config) Validate() error {
 	if problem := checkParallel(c.MaxParallelRuns); problem != "" {
 		return errors.New(problem)
 	}
+	if problem := checkAllowSkills(c.AllowSkills); problem != "" {
+		return errors.New(problem)
+	}
 	type id struct{ url, workspace, key string }
 	seen := map[id]bool{}
 	for i, p := range c.Projects {
@@ -512,6 +521,8 @@ func (c *Config) Validate() error {
 			problem = err.Error()
 		} else if errMsg := checkParallel(p.MaxParallelRuns); errMsg != "" {
 			problem = errMsg
+		} else if errMsg := checkAllowSkills(p.AllowSkills); errMsg != "" {
+			problem = errMsg
 		} else {
 			problem = checkExtraRepositories(p.ExtraRepositories)
 		}
@@ -530,6 +541,50 @@ func checkAllowHosts(allowHosts []string) string {
 	}
 	if i := slices.IndexFunc(allowHosts, func(hp string) bool { return !ValidHostPort(hp) }); i >= 0 {
 		return fmt.Sprintf("allow_hosts entry %q must be host:port, without wildcards", allowHosts[i])
+	}
+	return ""
+}
+
+// AllowedSkill is a skill package a runner with strict_hosts on may load:
+// by its name and its repository's URL, so a catalog entry that later points
+// elsewhere is refused again (decision 2026-11-26-skill-packages).
+type AllowedSkill struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// skillName is a skill package's name as the app's catalog has it: lower-case
+// letters and digits in groups joined by single hyphens.
+var skillName = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// ValidSkillName says s can be a skill package's name, at most 64 characters.
+func ValidSkillName(s string) bool { return len(s) <= 64 && skillName.MatchString(s) }
+
+// CheckSkillURL allows a skill package's repository: an https URL as
+// CheckRepositoryURL allows it, of at most 500 characters. Its error leaves
+// the URL out, which may hold a password.
+func CheckSkillURL(s string) error {
+	if len(s) <= 500 && CheckRepositoryURL(s) == nil {
+		return nil
+	}
+	return errors.New("a skill package's URL must be https://host/path of a public repository, without user info, query or fragment, at most 500 characters")
+}
+
+// checkAllowSkills reports the first invalid allow_skills entry or a name
+// listed twice; "" means none.
+func checkAllowSkills(skills []AllowedSkill) string {
+	names := map[string]bool{}
+	for _, s := range skills {
+		if !ValidSkillName(s.Name) {
+			return fmt.Sprintf("allow_skills name %q must be lower-case letters and digits with single hyphens, at most 64 characters", s.Name)
+		}
+		if err := CheckSkillURL(s.URL); err != nil {
+			return "allow_skills " + s.Name + ": " + err.Error()
+		}
+		if names[s.Name] {
+			return "allow_skills names " + s.Name + " twice"
+		}
+		names[s.Name] = true
 	}
 	return ""
 }

@@ -282,6 +282,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 	}
 	proj.KeepFor, proj.MinFree, proj.Others, proj.Models, proj.StrictHosts, proj.Budget, proj.Turns = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, d.models, cfg.StrictHosts, d.budget, d.turns
 	proj.MaxParallelRuns = cfg.MaxParallelRuns
+	proj.AllowSkills = slices.Concat(cfg.AllowSkills, p.AllowSkills)
 	s := &slot{id: p.ID(), proj: proj, drain: make(chan struct{})}
 	d.mu.Lock()
 	d.slots[s.id] = s
