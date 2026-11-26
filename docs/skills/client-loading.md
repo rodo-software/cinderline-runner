@@ -4,7 +4,7 @@ CLR-256, 2026-11-26. This covers the versions pinned in `internal/tools/pins.go`
 
 ## Open points
 
-These need a person or a real model turn. `scripts/skills-spike.sh` runs the real-model checks with Docker and real keys, one command per check.
+These need a person or a real model turn. `scripts/skills-spike.sh` runs the real-model checks with Docker and real keys, one command per check. `scripts/smoke-clients.sh` (CLR-261) checks that a plain skill package loads on each client through the runner's own mounts.
 
 1. **Real-model behaviour.** A fake model checked what each CLI sends and runs, but no real model was asked to use a skill or to act on a hook's context. Run `scripts/skills-spike.sh all`.
 2. **Codex full packages need a decision.** Codex runs a package's hooks only as an installed plugin with `features.plugins=true`. That route has three costs:
@@ -84,6 +84,14 @@ These need a person or a real model turn. `scripts/skills-spike.sh` runs the rea
 |---|---|
 | Plain skills | Read-only mount of the package anywhere, plus `--plugin-dir <mount>` per package. A manifest is not needed. |
 | Full package with hooks | The same. Hooks run in the agent image and need their interpreter there (open point 3). Never pass `--bare`. |
+
+### If `--bare` becomes the default for `-p` (CLR-261)
+
+Claude Code's docs say `--bare` will become the default for `-p`. Under bare mode no plugin loads, so a run's skill packages would be gone, and a `setup-token` credential would no longer be read.
+
+- **No setting keeps today's loading in 2.1.316, so none is added.** The binary was read again on 2026-11-26. Bare mode is `CLAUDE_CODE_SIMPLE` read as true (`1`, `true`, `yes` or `on`) or `--bare` in argv, and nothing else. The binary's one `no-bare` string is the markdown lint rule `no-bare-urls`, not a flag. Anthropic's docs page on the change was not read: `code.claude.com` is refused in the agent's container.
+- **What will catch it.** `scripts/smoke-clients.sh` runs a Claude Code turn with a mounted probe package. Its `skill` check fails when plugins stop loading, and its `turn` check fails for a `setup-token` credential that bare mode no longer reads.
+- **What to look for at that bump.** Look for the opt-out in the new version's `--help`, and check whether it reads `CLAUDE_CODE_SIMPLE=0` as an explicit "off". 2.1.316 has a helper that tells an explicit false (`0`, `false`, `no`, `off`) from unset, but does not use it for bare mode. Add the opt-out to `claudeArgs` or `claudeEnv` in `internal/client/claude.go`, and run the smoke check again.
 
 ## Seen on the way, not about packages
 

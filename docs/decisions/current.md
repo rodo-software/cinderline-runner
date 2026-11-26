@@ -142,6 +142,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - Forgejo skips the Linux checks on tag pushes and mirrors only its own ref; a newer CI run cancels an older one on the same branch. Draft workflows live in `docs/ci/`. (2026-11-12-ci-speedups)
 - Tests that need Docker, network git or a forge run in CI on a `linux-host` Forgejo runner, which exists. (2026-11-06-integration-ci-host-runner; Willem 2026-11-17, answer 18)
 - `.forgejo/workflows/integration.yml` runs the integration tests on that runner on pull requests and pushes to main. (Willem 2026-11-17, answer 18)
+- A bump of an agent CLI pin is done only when `scripts/smoke-clients.sh` passed on Willem's machine. It runs real turns per client through the runner's own Client and Environment, behind the `smoke` build tag, and never runs in CI or in an agent's container. (2026-11-26-client-smoke-check)
 
 ## To do and to build
 

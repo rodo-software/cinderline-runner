@@ -33,6 +33,7 @@ Apply **KISS first, then DRY, then SOLID where it pays off**. When they conflict
 
 - Every behaviour gets a Go test **before** its real implementation, against the fakes and an `httptest` app.
 - Tests that need Docker, git on the network or a forge run in CI on Linux, not in an agent's run: the container you run in has no Docker.
+- **A bump of an agent CLI pin in `internal/tools/pins.go` is done only when `scripts/smoke-clients.sh` passed on Willem's machine** (decision 2026-11-26-client-smoke-check). It runs real turns per client and cannot run in an agent's container (no Docker) or in CI (no model keys), so the report of a bump issue asks Willem to run it and to send back its PASS and FAIL lines.
 - **An issue is done only when `gofmt -l .` prints nothing and `go vet`, `staticcheck`, `go test -race ./...` and `govulncheck ./...` pass.** CI runs them on Linux and macOS (Windows is off for now).
 
 ## Working rules
