@@ -3,6 +3,7 @@
 package cli
 
 import (
+	"os/exec"
 	"syscall"
 	"unsafe"
 )
@@ -25,4 +26,9 @@ func windowsBuild() uint32 {
 		return 0
 	}
 	return v.dwBuildNumber
+}
+
+// browser opens url in the default browser.
+func browser(url string) *exec.Cmd {
+	return exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 }

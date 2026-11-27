@@ -25,7 +25,7 @@ func Token(stateDir string) (string, error) {
 	path := filepath.Join(stateDir, tokenFile)
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		if err := makeToken(stateDir); err != nil {
+		if err := makeToken(stateDir, false); err != nil {
 			return "", fmt.Errorf("make the web token: %w", err)
 		}
 		b, err = os.ReadFile(path)
@@ -41,9 +41,16 @@ func Token(stateDir string) (string, error) {
 	return tok, nil
 }
 
-// makeToken writes a new token to stateDir's web-token unless one is there:
-// linked, not renamed, so two at once never replace each other's.
-func makeToken(stateDir string) error {
+// NewToken replaces stateDir's web-token with a new one; pages opened with
+// the old token are let in no more.
+func NewToken(stateDir string) error {
+	return makeToken(stateDir, true)
+}
+
+// makeToken writes a new token to stateDir's web-token: renamed over it when
+// replace, else linked, not renamed, so two at once never replace each
+// other's and one that is there is kept.
+func makeToken(stateDir string, replace bool) error {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return err
 	}
@@ -58,7 +65,11 @@ func makeToken(stateDir string) error {
 	if err = errors.Join(err, f.Close()); err != nil {
 		return err
 	}
-	if err := os.Link(f.Name(), filepath.Join(stateDir, tokenFile)); err != nil && !errors.Is(err, fs.ErrExist) {
+	path := filepath.Join(stateDir, tokenFile)
+	if replace {
+		return os.Rename(f.Name(), path)
+	}
+	if err := os.Link(f.Name(), path); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	return nil
