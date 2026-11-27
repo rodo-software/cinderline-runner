@@ -14,3 +14,4 @@ A record is folded and archived once it is built: each binding point goes into c
 
 - [2026-11-16-runner-protocol-v2](2026-11-16-runner-protocol-v2.md): the runner API contract, the same record in both repositories, with [`docs/runner-api/openapi.yaml`](../runner-api/openapi.yaml). Kept for its detail.
 - [2026-11-17-push-scan](2026-11-17-push-scan.md): the push scan, and the contract change the app makes first. Kept until the app has made that change and the contract is copied here.
+- [2026-11-26-local-web-page](2026-11-26-local-web-page.md): the runner's local web page. Kept until the last `Web NN` issue has built it.

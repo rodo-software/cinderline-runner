@@ -11,7 +11,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - The app writes every prompt: the agent's own instructions first, then the rules, then the issue text last, marked as data. The runner passes it on unchanged. (2026-11-06-prompts; 2026-11-16-runner-protocol-v2)
 - Issues are the only workflow state (app decision 0091). The runner keeps only caches it may lose: session notes, the outbox, clones. (2026-11-05-runner-state-location; 2026-11-16-runner-protocol-v2)
 - There are no writer teams and no writer run. (2026-11-06-no-writer-teams)
-- The runner serves no local web page; runners are shown read-only in the hosted app. Controlling a runner from the app needs Willem's decision first, because it would move secrets through the server. (2026-11-11-runners-in-the-app)
+- The runner serves a web page on the user's own machine (2026-11-26-local-web-page); runners are shown read-only in the hosted app. Controlling a runner from the app needs Willem's decision first, because it would move secrets through the server. (2026-11-11-runners-in-the-app)
 - The runner runs no model itself: no model backends, no downloads, no GPU work. Running models is the customer's own matter. (2026-11-11-no-local-model-work; 2026-11-17-local-model-providers)
 
 ## Licence, repositories and releases
