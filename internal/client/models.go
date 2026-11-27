@@ -113,7 +113,7 @@ func (c *CLI) list(ctx context.Context, image string, argv []string, req string)
 	if err := PrepareState(ctx, c.Exec, c.Project, c.Name); err != nil {
 		return "", err
 	}
-	mount := c.mount()
+	mount := c.Tools
 	env := slices.Concat(mount.Env, mount.OpenCodeEnv, k.env(c, Turn{}))
 	if req != "" {
 		env = append(env, "REQ="+req)

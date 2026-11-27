@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
@@ -15,7 +16,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
-var clientNames = []string{"claude", "codex", "gemini", "opencode"}
+var clientNames = tools.Clients
 
 var versionPat = regexp.MustCompile(`[0-9]+\.[0-9]+(?:\.[0-9]+)+`)
 
@@ -178,4 +179,41 @@ func checkHTTP(ctx context.Context, exec workspace.Exec, mount tools.Mount, imag
 		log.Warn("key check failed", "client", name, "err", err)
 	}
 	return "ready"
+}
+
+// checkTools is the clients whose CLI in mount fails the check before it
+// goes live (CLR-317): its --version prints no version, or, for a client
+// in listed, the CLI lists no models with the project's credential.
+func checkTools(ctx context.Context, exec workspace.Exec, image string, mount tools.Mount, listed []string, list func(names []string) map[string][]string) []string {
+	var failed []string
+	for _, name := range clientNames {
+		if v, _ := checkBinary(ctx, exec, mount, image, name); v == nil {
+			failed = append(failed, name)
+		}
+	}
+	got := list(listed)
+	for _, name := range listed {
+		if got[name] == nil && !slices.Contains(failed, name) {
+			failed = append(failed, name)
+		}
+	}
+	return failed
+}
+
+// CheckTools is the clients whose CLI of v fails its check with this
+// project's credentials. The model listing is tried for the clients whose
+// live CLI listed well; an error means it could not check.
+func (p *Project) CheckTools(ctx context.Context, v tools.Versions) ([]string, error) {
+	if p.checkTools == nil {
+		return nil, nil
+	}
+	p.mu.Lock()
+	var listed []string
+	for _, c := range p.clients {
+		if c.State == "ready" && p.models[c.Name].ids != nil {
+			listed = append(listed, c.Name)
+		}
+	}
+	p.mu.Unlock()
+	return p.checkTools(ctx, v, listed)
 }

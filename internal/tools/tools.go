@@ -1,7 +1,8 @@
-// Package tools fills and mounts the tools volume: the pinned agent CLIs (Claude
-// Code, OpenCode, Codex) and ripgrep, downloaded on the user's machine from
-// their official sources and checked by hash (EMBER-57), in a read-only volume
-// per pinned set that every agent container mounts. No image of ours carries them, so Claude
+// Package tools fills and mounts the tools volume: the agent CLIs (Claude
+// Code, OpenCode, Codex, Gemini CLI), Node and ripgrep, downloaded on the
+// user's machine from their official sources and checked by hash (EMBER-57),
+// in a read-only volume per set that every agent container mounts. The CLIs
+// follow the vendors' releases (CLR-317, versions.go). No image of ours carries them, so Claude
 // Code is never redistributed (2026-11-04-licences-before-publishing).
 package tools
 
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -69,11 +71,14 @@ type Tools struct {
 	// first-time step; nil: none.
 	OnFill func()
 
-	pins func(arch string, musl bool) (set, error) // nil means pinned; tests swap it
+	// Versions are the agent CLIs to mount; nil: the live ones (Current).
+	Versions *Versions
+
+	pins func(arch string, musl bool) (set, error) // nil: Versions' set; tests swap it
 }
 
-// Mount detects image's libc, fills the volume of the matching pinned set
-// if it isn't complete yet, and says how to mount it.
+// Mount detects image's libc, fills the volume of the matching set if it
+// isn't complete yet, and says how to mount it.
 func (t *Tools) Mount(ctx context.Context, image string) (Mount, error) {
 	x := t.Exec
 	// The engine's arch, not the runner's: an amd64 runner can drive an
@@ -88,7 +93,12 @@ func (t *Tools) Mount(ctx context.Context, image string) (Mount, error) {
 	}
 	pins := t.pins
 	if pins == nil {
-		pins = pinned
+		v := t.Versions
+		if v == nil {
+			cur := Current(t.State)
+			v = &cur
+		}
+		pins = v.set
 	}
 	s, err := pins(strings.TrimSpace(arch), musl)
 	if err != nil {
@@ -112,11 +122,17 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	unlock, err := lock(filepath.Join(dir, vol+".lock"))
+	unlock, err := lock(toolsLock(t.State, vol))
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	// Under the lock, so Updater.prune never removes a volume between this
+	// mount and its record.
+	now := time.Now()
+	if err := os.Chtimes(toolsLock(t.State, vol), now, now); err != nil {
+		return err
+	}
 	// A failed check means not filled (or not completely): fill it anew.
 	if _, err := x(ctx, nil, "docker", "run", "--rm", "--network", "none", "-v", vol+":/t:ro", "--entrypoint", "test", workspace.GitImage, "-f", "/t/complete"); err == nil {
 		return nil
@@ -203,7 +219,7 @@ func (t *Tools) fill(ctx context.Context, x workspace.Exec, s set) error {
 	return nil
 }
 
-// set is the pinned tools for one platform; its hash names its volume.
+// set is the tools for one platform; its hash names its volume.
 type set struct {
 	Arch, Platform                                 string
 	Musl                                           bool
@@ -217,33 +233,34 @@ type set struct {
 	LibsImage                                      string
 }
 
-// pinned is the set for a Docker engine arch (amd64 or arm64) and libc.
-func pinned(arch string, musl bool) (set, error) {
+// set is v's set for a Docker engine arch (amd64 or arm64) and libc, with
+// Node and ripgrep from pins.go.
+func (v Versions) set(arch string, musl bool) (set, error) {
 	a := map[string]string{"amd64": "x64", "arm64": "arm64"}[arch]
 	if a == "" {
-		return set{}, fmt.Errorf("no pinned tools for arch %q", arch)
+		return set{}, fmt.Errorf("no tools for arch %q", arch)
 	}
 	p := "linux-" + a
 	if musl {
 		p += "-musl"
 	}
-	target := map[string]string{"amd64": "x86_64-unknown-linux-musl", "arm64": "aarch64-unknown-linux-musl"}[arch]
+	target := codexTargets[arch]
 	cb := "codex-" + target
 	chb := "codex-code-mode-host-" + target
 	s := set{
 		Arch: arch, Platform: p, Musl: musl,
-		ClaudeURL:       "https://downloads.claude.ai/claude-code-releases/" + ClaudeVersion + "/" + p + "/claude",
-		ClaudeSHA256:    claudeSHA256[p],
-		OpenCodeURL:     "https://registry.npmjs.org/opencode-" + p + "/-/opencode-" + p + "-" + OpenCodeVersion + ".tgz",
-		OpenCodeSRI:     openCodeSRI[p],
-		CodexURL:        "https://github.com/openai/codex/releases/download/rust-v" + CodexVersion + "/" + cb + ".tar.gz",
-		CodexSHA256:     codexSHA256[arch],
+		ClaudeURL:       "https://downloads.claude.ai/claude-code-releases/" + v.Claude + "/" + p + "/claude",
+		ClaudeSHA256:    v.ClaudeSHA256[p],
+		OpenCodeURL:     "https://registry.npmjs.org/opencode-" + p + "/-/opencode-" + p + "-" + v.OpenCode + ".tgz",
+		OpenCodeSRI:     v.OpenCodeSRI[p],
+		CodexURL:        "https://github.com/openai/codex/releases/download/rust-v" + v.Codex + "/" + cb + ".tar.gz",
+		CodexSHA256:     v.CodexSHA256[arch],
 		CodexBinary:     cb,
-		CodexHostURL:    "https://github.com/openai/codex/releases/download/rust-v" + CodexVersion + "/" + chb + ".tar.gz",
-		CodexHostSHA256: codexHostSHA256[arch],
+		CodexHostURL:    "https://github.com/openai/codex/releases/download/rust-v" + v.Codex + "/" + chb + ".tar.gz",
+		CodexHostSHA256: v.CodexHostSHA256[arch],
 		CodexHostBinary: chb,
-		GeminiURL:       "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-" + GeminiVersion + ".tgz",
-		GeminiSRI:       geminiSRI,
+		GeminiURL:       "https://registry.npmjs.org/@google/gemini-cli/-/gemini-cli-" + v.Gemini + ".tgz",
+		GeminiSRI:       v.GeminiSRI,
 		LibsImage:       muslLibsImage,
 	}
 	if !musl {

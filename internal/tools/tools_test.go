@@ -120,7 +120,7 @@ func TestExtractOpenCode(t *testing.T) {
 func TestPinsCoverEveryPlatform(t *testing.T) {
 	for _, arch := range []string{"amd64", "arm64"} {
 		for _, musl := range []bool{false, true} {
-			s, err := pinned(arch, musl)
+			s, err := Pinned().set(arch, musl)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -141,16 +141,16 @@ func TestPinsCoverEveryPlatform(t *testing.T) {
 			}
 		}
 	}
-	if _, err := pinned("riscv64", false); err == nil {
+	if _, err := Pinned().set("riscv64", false); err == nil {
 		t.Fatal("unknown arch accepted")
 	}
 }
 
 func TestVolumeNaming(t *testing.T) {
-	g, _ := pinned("amd64", false)
-	m, _ := pinned("amd64", true)
-	a, _ := pinned("arm64", false)
-	again, _ := pinned("amd64", false)
+	g, _ := Pinned().set("amd64", false)
+	m, _ := Pinned().set("amd64", true)
+	a, _ := Pinned().set("arm64", false)
+	again, _ := Pinned().set("amd64", false)
 	if g.volume() != again.volume() || !strings.HasPrefix(g.volume(), "cinderline-tools-") {
 		t.Fatalf("volume %q", g.volume())
 	}
@@ -227,7 +227,7 @@ func TestLockExcludes(t *testing.T) {
 // tarballs and the gemini tarball of the musl arm64 set, which takes node
 // from the musl libraries image instead of a download.
 func pinsServer(t *testing.T, claude, oc []byte) (string, set) {
-	s, _ := pinned("arm64", true)
+	s, _ := Pinned().set("arm64", true)
 	codex := tgz(t, map[string]string{s.CodexBinary: "CODEX"})
 	host := tgz(t, map[string]string{s.CodexHostBinary: "HOST"})
 	gemini := tgz(t, map[string]string{"package/bundle/gemini.js": "GEMINI"})
@@ -249,7 +249,7 @@ func TestGeminiPins(t *testing.T) {
 	for _, arch := range []string{"amd64", "arm64"} {
 		a := map[string]string{"amd64": "x64", "arm64": "arm64"}[arch]
 		for _, musl := range []bool{false, true} {
-			s, err := pinned(arch, musl)
+			s, err := Pinned().set(arch, musl)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -285,7 +285,7 @@ func TestRipgrepPins(t *testing.T) {
 		{"arm64", false, "aarch64-unknown-linux-gnu"},
 		{"arm64", true, ""},
 	} {
-		s, err := pinned(tc.arch, tc.musl)
+		s, err := Pinned().set(tc.arch, tc.musl)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -481,7 +481,7 @@ func TestMountFillsMissingVolume(t *testing.T) {
 }
 
 func TestMountSkipsCompleteVolume(t *testing.T) {
-	s, _ := pinned("amd64", false)
+	s, _ := Pinned().set("amd64", false)
 	f := &fakeDocker{answers: map[string]string{"docker version --format": "amd64\n", "docker run --rm": "glibc\n"}}
 	tl := &Tools{State: t.TempDir(), Exec: f.exec}
 	m, err := tl.Mount(context.Background(), "img")

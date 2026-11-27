@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 
 	"golang.org/x/term"
@@ -77,6 +79,7 @@ type daemon struct {
 	cfg        *config.Config
 	models     *run.Models        // one fetch of the providers' models for this config's projects
 	stopModels context.CancelFunc // ends the fetch for the config before
+	stopTools  context.CancelFunc // ends the agent CLI updates for the config before
 	ended      chan *slot         // a slot's loop has ended
 	budget     *run.Budget        // the memory every project's runs share, one for the process
 	turns      *run.ProviderTurns // the turns in flight on each provider, over every project and config, one for the process
@@ -102,8 +105,8 @@ func Run(ctx context.Context, o Options) error {
 	defer lf.Close()
 	f, isFile := o.Verbose.(*os.File)
 	log := logger(lf, o.Verbose, isFile && term.IsTerminal(int(f.Fd())))
-	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}, budget: run.NewBudget(dockerMemory), turns: &run.ProviderTurns{}}
-	defer func() { d.stopModels() }()
+	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}, stopTools: func() {}, budget: run.NewBudget(dockerMemory), turns: &run.ProviderTurns{}}
+	defer func() { d.stopModels(); d.stopTools() }()
 
 	reloads := make(chan chan error)
 	drain := make(chan struct{})
@@ -219,6 +222,17 @@ func (d *daemon) apply(cfg *config.Config) {
 		go d.models.Watch(ctx, cfg.Providers, openRouter, sec, d.log)
 	} else {
 		d.stopModels = func() {}
+	}
+	// The agent CLIs follow their vendors' releases, checked by the
+	// projects that run (CLR-317), with this config's pins.
+	d.stopTools()
+	d.stopTools = func() {}
+	if len(cfg.Projects) > 0 {
+		var ctx context.Context
+		ctx, d.stopTools = context.WithCancel(d.ctx)
+		u := &tools.Updater{State: d.o.Paths.State, Exec: workspace.RunCommand, HTTP: &http.Client{Timeout: time.Minute},
+			Pins: cfg.Pinned, Check: d.checkTools, Switched: d.toolsSwitched, Log: d.log}
+		go u.Run(ctx)
 	}
 	d.cfg = cfg
 	projects := make([]localapi.ProjectStatus, len(cfg.Projects))
@@ -378,4 +392,42 @@ func (d *daemon) status() []localapi.ProjectStatus {
 	}
 	slices.SortFunc(gone, func(a, b localapi.ProjectStatus) int { return strings.Compare(a.Project, b.Project) })
 	return append(out, gone...)
+}
+
+// running is the projects whose loops run under the current config.
+func (d *daemon) running() []*run.Project {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.DeleteFunc(slices.Clone(d.live), func(p *run.Project) bool { return p == nil })
+}
+
+// checkTools checks new agent CLIs with every running project's
+// credentials: a client fails when it fails for any of them.
+func (d *daemon) checkTools(ctx context.Context, v tools.Versions) ([]string, error) {
+	projs := d.running()
+	if len(projs) == 0 {
+		return nil, errors.New("no project runs to check them with")
+	}
+	var failed []string
+	for _, p := range projs {
+		f, err := p.CheckTools(ctx, v)
+		if err != nil {
+			return nil, fmt.Errorf("project %s: %w", p.Config.Key, err)
+		}
+		for _, c := range f {
+			if !slices.Contains(failed, c) {
+				failed = append(failed, c)
+			}
+		}
+	}
+	return failed, nil
+}
+
+// toolsSwitched redetects every running project's clients and lists their
+// models, so the next poll reports the new versions and what they list.
+func (d *daemon) toolsSwitched(ctx context.Context) {
+	for _, p := range d.running() {
+		p.Detect(ctx)
+		p.ListModels(ctx)
+	}
 }

@@ -1,8 +1,9 @@
 package tools
 
-// The pinned agent CLIs and their hashes (EMBER-57), the same versions as
-// today's runner image. Bump them on purpose, all in this file: a new set
-// gets a new volume.
+// The agent CLIs and their hashes a runner uses until it has resolved and
+// checked newer ones from the vendors (EMBER-57; CLR-317, Versions), and
+// Node and ripgrep, which stay pinned. Bump them on purpose, all in this
+// file: a new set gets a new volume.
 const (
 	ClaudeVersion = "2.1.316"
 	// OpenCodeVersion is the version of the npm platform packages
@@ -20,6 +21,17 @@ const (
 	// from muslLibsImage, the same version.
 	NodeVersion = "22.23.4"
 )
+
+// Pinned is the agent CLIs of this file, the fallback until the runner has
+// made newer ones live.
+func Pinned() Versions {
+	return Versions{
+		Claude: ClaudeVersion, ClaudeSHA256: claudeSHA256,
+		OpenCode: OpenCodeVersion, OpenCodeSRI: openCodeSRI,
+		Codex: CodexVersion, CodexSHA256: codexSHA256, CodexHostSHA256: codexHostSHA256,
+		Gemini: GeminiVersion, GeminiSRI: geminiSRI,
+	}
+}
 
 // claudeSHA256 is per platform, copied from
 // downloads.claude.ai/claude-code-releases/<ClaudeVersion>/manifest.json.

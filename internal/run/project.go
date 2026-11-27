@@ -89,14 +89,14 @@ type Project struct {
 	Turns *ProviderTurns
 
 	// Set only by NewProject; nil in tests.
-	deleteSession func(ctx context.Context, ref, session string) error                                      // a session's files on the state volume
-	prepare       func(ctx context.Context, proj cinderline.Project, base string) (memory int64, err error) // the environment and the tools mount; memory as environment.Docker.AgentImage
+	deleteSession func(ctx context.Context, ref, session string) error                                                         // a session's files on the state volume
+	prepare       func(ctx context.Context, proj cinderline.Project, base string) (memory int64, mount tools.Mount, err error) // the environment and the run's tools mount; memory as environment.Docker.AgentImage
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
 	fillSkill     func(ctx context.Context, url, commit, path string) (volume string, contents tools.SkillContents, err error) // a skill package's shared volume, as tools.Skills.Fill
 	tidySkills    func(ctx context.Context)                                                                                    // removes the skill package volumes unused for long, as tools.Skills.Tidy
 	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
-	listModels    func(ctx context.Context, clients []string) map[string][]string // each client's models; none for one that failed
-	image         string                                                          // the agent image the tools mount was filled for; only runs' prepares touch it, one at a time (prepMu)
+	listModels    func(ctx context.Context, clients []string) map[string][]string                // each client's models; none for one that failed
+	checkTools    func(ctx context.Context, v tools.Versions, listed []string) ([]string, error) // as checkTools, in the default image
 	// reviewChecks are, by Review issue ref, the failed checks of its pull
 	// request's head, read once per head; only upkeep passes touch it, one at a time.
 	reviewChecks map[string]headChecks
@@ -147,7 +147,7 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 	if err != nil {
 		return nil, err
 	}
-	var clis []*client.CLI // the real clients, which get the tools mount
+	var clis []*client.CLI // the real clients
 	for name, kind := range keys {
 		cred, _, err := sec.Get(cfg, kind)
 		// Without a keychain key, Claude Code, Codex and Gemini CLI use the
@@ -165,13 +165,13 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 	p.Forge = func(kind string) (forge.Forge, error) {
 		return forge.New(kind, cfg.Repository, gitToken)
 	}
-	p.prepare = func(ctx context.Context, proj cinderline.Project, base string) (int64, error) {
+	p.prepare = func(ctx context.Context, proj cinderline.Project, base string) (int64, tools.Mount, error) {
 		var compose *environment.Compose
 		// Any environment other than docker is the default one.
 		if proj.Environment == "docker" {
 			// The file is read from the repo volume's base branch: fetch it first.
 			if err := ws.Fetch(ctx); err != nil {
-				return 0, err
+				return 0, tools.Mount{}, err
 			}
 			compose = &environment.Compose{
 				Base:    base,
@@ -182,14 +182,12 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 		env.SetCompose(compose)
 		image, memory, err := env.AgentImage(ctx)
 		if err != nil {
-			return 0, err
+			return 0, tools.Mount{}, err
 		}
-		if image == p.image {
-			return memory, nil
-		}
+		// Every run, as new agent CLIs may have gone live since the last (CLR-317).
 		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
 		if err != nil {
-			return 0, err
+			return 0, tools.Mount{}, err
 		}
 		// Every agent container gets the tools mount's flags; the extra and
 		// linked repositories ride along. Links can change between runs, so
@@ -200,11 +198,7 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 		mount.Args = append(mount.Args, workspace.ExtraMount(cfg.ID(), workspace.LinkedPath)...)
 		// Attachments are a bind per run, added by the client when a turn has
 		// them: the runner downloads to the host.
-		for _, c := range clis {
-			c.SetTools(mount)
-		}
-		p.image = image
-		return memory, nil
+		return memory, mount, nil
 	}
 	p.fetchExtras = func(ctx context.Context, path string, repos []workspace.Extra) map[string]error {
 		return workspace.FetchExtras(ctx, exec, log, cfg.ID(), path, repos)
@@ -214,32 +208,29 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 	p.deleteSession = func(ctx context.Context, ref, session string) error {
 		return client.DeleteSession(ctx, exec, cfg.ID(), ref, session)
 	}
-	// toolsMount is the default image and its tools mount, which detection and listing use.
-	toolsMount := func(ctx context.Context) (string, tools.Mount, error) {
+	// toolsMount is the default image and its tools mount, which detection
+	// and listing use, of v; nil: the live versions.
+	toolsMount := func(ctx context.Context, v *tools.Versions) (string, tools.Mount, error) {
 		image, err := env.Image(ctx)
 		if err != nil {
 			return "", tools.Mount{}, fmt.Errorf("no image: %w", err)
 		}
-		mount, err := (&tools.Tools{State: state, Exec: exec}).Mount(ctx, image)
+		mount, err := (&tools.Tools{State: state, Exec: exec, Versions: v}).Mount(ctx, image)
 		if err != nil {
 			return "", tools.Mount{}, fmt.Errorf("no tools mount: %w", err)
 		}
 		return image, mount, nil
 	}
 	p.detect = func(ctx context.Context) ([]cinderline.ReportClient, bool) {
-		image, mount, err := toolsMount(ctx)
+		image, mount, err := toolsMount(ctx, nil)
 		if err != nil {
 			p.Log.Warn("detection failed", "project", cfg.Key, "err", err)
 			return allMissingBinary(), false
 		}
 		return detectClients(ctx, exec, cfg, len(providers) > 0, sec, image, mount, p.Log)
 	}
-	p.listModels = func(ctx context.Context, names []string) map[string][]string {
-		image, mount, err := toolsMount(ctx)
-		if err != nil {
-			p.Log.Warn("models of the clients not listed", "project", cfg.Key, "err", err)
-			return nil
-		}
+	// list asks the named clients of clis for their models with mount.
+	list := func(ctx context.Context, image string, mount tools.Mount, names []string) map[string][]string {
 		got := map[string][]string{}
 		var mu sync.Mutex
 		var wg sync.WaitGroup
@@ -247,7 +238,7 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 			if !slices.Contains(names, cl.Name) {
 				continue
 			}
-			// A new CLI, not a copy: a run's prepare writes the shared one's Tools.
+			// A new CLI with the mount, not a copy: a CLI holds locks.
 			c := client.CLI{Name: cl.Name, Project: cl.Project, Env: cl.Env, Exec: cl.Exec, Credential: cl.Credential, BaseURL: cl.BaseURL, Vertex: cl.Vertex, Tools: mount}
 			wg.Go(func() {
 				ids, err := c.Models(ctx, image)
@@ -264,6 +255,23 @@ func NewProject(cfg config.Project, providers []config.Provider, sec *secrets.Se
 		}
 		wg.Wait()
 		return got
+	}
+	p.listModels = func(ctx context.Context, names []string) map[string][]string {
+		image, mount, err := toolsMount(ctx, nil)
+		if err != nil {
+			p.Log.Warn("models of the clients not listed", "project", cfg.Key, "err", err)
+			return nil
+		}
+		return list(ctx, image, mount, names)
+	}
+	p.checkTools = func(ctx context.Context, v tools.Versions, listed []string) ([]string, error) {
+		image, mount, err := toolsMount(ctx, &v)
+		if err != nil {
+			return nil, err
+		}
+		return checkTools(ctx, exec, image, mount, listed, func(names []string) map[string][]string {
+			return list(ctx, image, mount, names)
+		}), nil
 	}
 	return p, nil
 }

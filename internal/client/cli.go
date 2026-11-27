@@ -32,11 +32,9 @@ type CLI struct {
 	BaseURL    string                  // Codex: an OpenAI-compatible base URL; empty: OpenAI's API
 	Vertex     bool                    // Gemini: Credential is a Vertex AI express-mode key; false: the Gemini API
 	MCPURL     string                  // Cinderline's MCP endpoint, as the agent container reaches it
-	// Tools is from tools.Tools.Mount for the Environment's image. Set it
-	// here before the CLI is shared, later only with SetTools: a run's
-	// prepare changes it while another lane's turn runs (CLR-228).
-	Tools   tools.Mount
-	toolsMu sync.Mutex // guards Tools
+	// Tools is from tools.Tools.Mount for the Environment's image, for a
+	// turn without its own; never changed once the CLI is shared.
+	Tools tools.Mount
 	// Providers are the runner's model providers by name, for OpenCode
 	// (decision 2026-11-17-local-model-providers).
 	Providers map[string]Provider
@@ -85,21 +83,6 @@ type kind struct {
 
 var kinds = map[string]kind{"claude": claude, "codex": codex, "opencode": opencode, "gemini": gemini}
 
-// SetTools replaces the tools mount for the turns that start after it.
-func (c *CLI) SetTools(m tools.Mount) {
-	c.toolsMu.Lock()
-	defer c.toolsMu.Unlock()
-	c.Tools = m
-}
-
-// mount is the current tools mount. A turn reads it once, so it uses one
-// whole mount; nobody writes a Mount's slices after SetTools.
-func (c *CLI) mount() tools.Mount {
-	c.toolsMu.Lock()
-	defer c.toolsMu.Unlock()
-	return c.Tools
-}
-
 // Run runs one turn. The turn limit is an error with HitTurnLimit set. A
 // turn that printed no session keeps the one it resumed, never the ID the
 // runner picked for a fresh one: a turn that failed before the CLI printed
@@ -114,7 +97,10 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 			return Result{}, fmt.Errorf("%w: %w", ErrNotStarted, err)
 		}
 	}
-	mount := c.mount()
+	mount := c.Tools
+	if t.Tools != nil {
+		mount = *t.Tools
+	}
 	mounts, err := agentMounts(c.Project, c.Name, t.Dir, mount)
 	if err != nil {
 		return Result{}, err

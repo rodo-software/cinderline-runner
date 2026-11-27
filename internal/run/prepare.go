@@ -15,6 +15,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -177,18 +178,20 @@ func (p *Project) prepareRun(ctx context.Context, proj cinderline.Project, jb ci
 	}
 	p.prepMu.Lock()
 	defer p.prepMu.Unlock()
+	var mount *tools.Mount
 	if p.prepare != nil {
-		memory, err := p.prepare(ctx, proj, base)
+		memory, m, err := p.prepare(ctx, proj, base)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("the run's environment could not be prepared: %w", err)
 		}
 		if err := p.fit(ctx, slot, memory); err != nil {
 			return nil, nil, nil, err
 		}
+		mount = &m
 	}
 	j := &job{
 		ref: ref, title: jb.Issue.Title, body: jb.Issue.Body, slot: p.slot(slot), branch: name.Name + "/" + ref, base: base,
-		team: team, check: proj.CheckCommand, idle: time.Duration(max(proj.IdleMinutes, 0)) * time.Minute, fg: fg, manager: manager,
+		team: team, check: proj.CheckCommand, idle: time.Duration(max(proj.IdleMinutes, 0)) * time.Minute, fg: fg, manager: manager, tools: mount,
 	}
 	extras, notes := p.extraRepositories(ctx, ref)
 	// Fetched on every run, so a resume and a follow-up read fresh code too.

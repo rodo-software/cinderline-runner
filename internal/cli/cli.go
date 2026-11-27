@@ -69,6 +69,7 @@ func commands() []command {
 		{"set-provider", setProviderUsage, "mark a model provider free or not, or set the most agent turns on it at once (0: no limit) or its lookahead, keeping its key", (*CLI).setProvider},
 		{"list-providers", "", "list the runner's model providers, whether each has a key, which are free, and their agent limits and lookaheads", (*CLI).listProviders},
 		{"remove-provider", "NAME", "remove a model provider and its key", (*CLI).removeProvider},
+		{"pin", pinUsage, "hold an agent CLI (claude, codex, gemini, opencode) at a version for every project, for when its vendor ships a broken release, or let it follow the vendor's latest release again; without arguments, show each one's version and pin", (*CLI).pin},
 		{"strict-hosts", "[on|off]", "turn strict host blocking on or off for every project, or show it: when on, a person's answer in Cinderline cannot open a host the egress proxy refused, only allow_hosts in config.json can, which allow-host sets", (*CLI).strictHosts},
 		{"rotate-ca", "", "replace the runner's own CA, which the egress proxy signs certificates with for the hosts it refuses, so Cinderline can show the URL an agent tried; agent containers started afterwards trust the new one", (*CLI).rotateCA},
 		{"version", "", "print the version", (*CLI).version},

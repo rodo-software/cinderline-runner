@@ -50,6 +50,9 @@ type Turn struct {
 	// Attachments is the host folder of the run's attachments, mounted
 	// read-only at workspace.AttachmentsPath; "": the run has none.
 	Attachments string
+	// Tools is the run's tools mount, taken when it started, so a run keeps
+	// its CLIs while new ones go live (CLR-317); nil: the CLI's.
+	Tools *tools.Mount
 }
 
 // SkillMount is a skill package a run loaded: its name, its read-only volume

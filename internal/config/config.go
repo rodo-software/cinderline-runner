@@ -55,8 +55,12 @@ type Config struct {
 	AllowSkills []AllowedSkill `json:"allow_skills,omitempty"`
 	// MaxParallelRuns is every project's max_parallel_runs unless it sets
 	// its own, 1 to MaxParallel; 0 is 1 (decision 2026-11-25-parallel-runs-default).
-	MaxParallelRuns int       `json:"max_parallel_runs,omitempty"`
-	Projects        []Project `json:"projects"`
+	MaxParallelRuns int `json:"max_parallel_runs,omitempty"`
+	// Pinned holds agent CLIs at a version, by client, for a vendor's
+	// broken release; a client left out follows its vendor's latest (CLR-317).
+	// The runner checks each pin when it resolves it.
+	Pinned   map[string]string `json:"pinned,omitempty"`
+	Projects []Project         `json:"projects"`
 	// Dropped names the fields an older runner wrote that Load dropped, for
 	// a warning; the next Save leaves them out (CLR-191).
 	Dropped []string `json:"-"`

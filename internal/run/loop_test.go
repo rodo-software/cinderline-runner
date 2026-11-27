@@ -17,6 +17,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -246,7 +247,9 @@ func TestANotStartedReportCarriesGitsReason(t *testing.T) {
 			}
 			return "", nil
 		}}
-	f.p.prepare = func(ctx context.Context, _ cinderline.Project, _ string) (int64, error) { return 0, ws.Fetch(ctx) }
+	f.p.prepare = func(ctx context.Context, _ cinderline.Project, _ string) (int64, tools.Mount, error) {
+		return 0, tools.Mount{}, ws.Fetch(ctx)
+	}
 	polls := runLoop(t, f, &fakeApp{}, nil, nil, stopAt(2, answer(t, proj, jobJSON)))
 	errs := polls[2].Report.Errors
 	want := "the run's environment could not be prepared: git fetch: exit status 128\n" + fatal

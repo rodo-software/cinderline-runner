@@ -16,3 +16,4 @@ A record is folded and archived once it is built: each binding point goes into c
 - [2026-11-17-push-scan](2026-11-17-push-scan.md): the push scan, and the contract change the app makes first. Kept until the app has made that change and the contract is copied here.
 - [2026-11-26-local-web-page](2026-11-26-local-web-page.md): the runner's local web page. Kept until the last `Web NN` issue has built it.
 - [2026-11-27-web-look](2026-11-27-web-look.md): the look of that page, which amends its "follows Syncthing" line. Kept with it.
+- [2026-11-27-agent-cli-updates](2026-11-27-agent-cli-updates.md): the agent CLIs follow their vendors' releases (CLR-317). Folded into current.md; archived once CLR-317 is merged.

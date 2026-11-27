@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/tools"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -302,7 +303,9 @@ func TestOversizedRunStartsAlone(t *testing.T) {
 func TestRunThatGrewPastTheBudgetDropsItsJob(t *testing.T) {
 	b := budgetOf(6 << 30)
 	f := budgetProject(t, "CSR", b)
-	f.p.prepare = func(context.Context, cinderline.Project, string) (int64, error) { return 5 << 30, nil }
+	f.p.prepare = func(context.Context, cinderline.Project, string) (int64, tools.Mount, error) {
+		return 5 << 30, tools.Mount{}, nil
+	}
 	if ok, _ := b.reserve(context.Background(), "other", 2<<30); !ok {
 		t.Fatal("other not reserved")
 	}

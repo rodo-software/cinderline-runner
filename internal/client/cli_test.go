@@ -70,39 +70,26 @@ func TestUnknownClient(t *testing.T) {
 	}
 }
 
-// SetTools while another lane's turn runs on the same CLI (CLR-228): no data
-// race, and a turn uses one whole mount, the old one or the new one.
-func TestSetToolsDuringRun(t *testing.T) {
-	old := tools.Mount{Args: []string{"-v", "old:/opt/cinderline:ro"}, Env: []string{"OLD=1"}}
-	fresh := tools.Mount{Args: []string{"-v", "new:/opt/cinderline:ro"}, Env: []string{"NEW=1"}}
-	const turns = 50
-	env := &environment.Fake{Runs: make([]environment.RunReply, turns)}
+// A turn with its run's tools mount uses it, not the CLI's: a run keeps
+// its CLIs while new ones go live (CLR-317).
+func TestTurnTools(t *testing.T) {
+	cli := tools.Mount{Args: []string{"-v", "old:/opt/cinderline:ro"}, Env: []string{"OLD=1"}}
+	run := tools.Mount{Args: []string{"-v", "new:/opt/cinderline:ro"}, Env: []string{"NEW=1"}}
+	env := &environment.Fake{Runs: make([]environment.RunReply, 2)}
 	c := &CLI{
-		Name: "claude", Project: "CSR", Env: env, Tools: old,
+		Name: "claude", Project: "CSR", Env: env, Tools: cli,
 		Exec: func(context.Context, []string, ...string) (string, error) { return "", nil },
 	}
-	var wg sync.WaitGroup
-	wg.Go(func() {
-		for i := range turns {
-			if i%2 == 0 {
-				c.SetTools(fresh)
-			} else {
-				c.SetTools(old)
-			}
-		}
-	})
-	wg.Go(func() {
-		for range turns {
-			_, _ = c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"})
-		}
-	})
-	wg.Wait()
-	for _, call := range env.Calls() {
-		s := call.Args[0].(environment.Spec)
-		oldOK := slices.Contains(s.Mounts, "old:/opt/cinderline:ro") && slices.Contains(s.Env, "OLD=1")
-		newOK := slices.Contains(s.Mounts, "new:/opt/cinderline:ro") && slices.Contains(s.Env, "NEW=1")
-		if oldOK == newOK {
-			t.Fatalf("a turn mixed the mounts: %q %q", s.Mounts, s.Env)
+	_, _ = c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", Tools: &run})
+	_, _ = c.Run(context.Background(), Turn{Dir: "/runs/CSR-7"})
+	calls := env.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("%d turns", len(calls))
+	}
+	for i, want := range []string{"new", "old"} {
+		s := calls[i].Args[0].(environment.Spec)
+		if !slices.Contains(s.Mounts, want+":/opt/cinderline:ro") || !slices.Contains(s.Env, strings.ToUpper(want)+"=1") {
+			t.Fatalf("turn %d: mounts %q env %q, want %s", i, s.Mounts, s.Env, want)
 		}
 	}
 }
