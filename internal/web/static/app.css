@@ -1,0 +1,326 @@
+/* The one stylesheet of the local web page (decision 2026-11-26-local-web-page).
+   Calm panels, a top bar and clear status, after Syncthing's page. Light and
+   dark follow the system. No web fonts: the system's own. */
+
+:root {
+  color-scheme: light dark;
+  --page: #f3f3f1;
+  --panel: #ffffff;
+  --panel-head: #f8f8f6;
+  --line: #dcdbd5;
+  --text: #1b1b1a;
+  --muted: #5d5c57;
+  --accent: #1f63b8;
+  --accent-soft: #dce8f7;
+  --code-bg: #f1f1ee;
+  --bar: #23272e;
+  --bar-text: #f2f2ef;
+  /* Status: each is always shown with its label, never by colour alone. */
+  --ok: #1b7a1b;
+  --ok-soft: #e1f2e1;
+  --run: #1f63b8;
+  --run-soft: #dce8f7;
+  --err: #b8232b;
+  --err-soft: #fbe3e4;
+  --drain: #8a5a00;
+  --drain-soft: #fbefd6;
+  --idle: #5d5c57;
+  --idle-soft: #ebebe7;
+  --radius: 6px;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #121211;
+    --panel: #1c1c1b;
+    --panel-head: #222220;
+    --line: #363632;
+    --text: #ecebe7;
+    --muted: #aaa99f;
+    --accent: #6aa8f0;
+    --accent-soft: #1c3049;
+    --code-bg: #262624;
+    --bar: #0b0b0a;
+    --bar-text: #ecebe7;
+    --ok: #4cc24c;
+    --ok-soft: #173117;
+    --run: #6aa8f0;
+    --run-soft: #1c3049;
+    --err: #f27070;
+    --err-soft: #3d1a1b;
+    --drain: #f0b43c;
+    --drain-soft: #3a2d10;
+    --idle: #aaa99f;
+    --idle-soft: #2a2a28;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+a { color: var(--accent); }
+code, pre, kbd { font-family: var(--mono); font-size: 0.9em; }
+code { background: var(--code-bg); padding: 0 0.25em; border-radius: 3px; overflow-wrap: anywhere; }
+pre {
+  background: var(--code-bg);
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+h1, h2, h3 { line-height: 1.25; }
+h1 { font-size: 1.35rem; margin: 0 0 1rem; }
+h2 { font-size: 1rem; margin: 0; }
+h3 { font-size: 0.95rem; margin: 1rem 0 0.4rem; }
+h2.section { margin: 0.5rem 0 0.75rem; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.skip, .sr { position: absolute; left: -999px; }
+.skip:focus { left: 0.5rem; top: 0.5rem; z-index: 2; background: var(--panel); padding: 0.4rem 0.6rem; }
+
+/* Top bar */
+
+.topbar {
+  background: var(--bar);
+  color: var(--bar-text);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1.25rem;
+  padding: 0.5rem 1rem;
+}
+.brand { font-weight: 600; font-size: 1.05rem; color: inherit; text-decoration: none; }
+.topbar nav ul { display: flex; flex-wrap: wrap; gap: 0.15rem; list-style: none; margin: 0; padding: 0; }
+.topbar nav a {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--radius);
+  opacity: 0.8;
+}
+.topbar nav a:hover { opacity: 1; background: rgb(255 255 255 / 0.08); }
+.topbar nav a[aria-current="page"] { opacity: 1; background: rgb(255 255 255 / 0.14); }
+.topbar .state { margin-left: auto; }
+
+main { max-width: 68rem; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); gap: 1rem; align-items: start; }
+.grid.tight { gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); }
+
+/* Panels */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+.panel > header, .panel > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--panel-head);
+  border-bottom: 1px solid var(--line);
+}
+.panel > header > :last-child:not(:first-child),
+.panel > summary > :last-child:not(:first-child) { margin-left: auto; }
+.panel > summary { cursor: pointer; list-style: none; }
+.panel > summary::-webkit-details-marker { display: none; }
+.panel > summary::before { content: "▸"; color: var(--muted); }
+.panel[open] > summary::before { content: "▾"; }
+.panel:not([open]) > summary { border-bottom: 0; }
+.panel .body { padding: 0.75rem 0.9rem; }
+.panel .body > :first-child { margin-top: 0; }
+.panel .body > :last-child { margin-bottom: 0; }
+.panel > footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 0.6rem 0.9rem;
+  border-top: 1px solid var(--line);
+}
+.panel.is-error { border-color: var(--err); }
+.panel > summary:focus-visible { outline-offset: -2px; }
+.panel > header h2, .panel > header h3, .panel > summary h2, .panel > summary h3 { margin: 0; font-size: 1rem; }
+.sep { border-top: 1px solid var(--line); }
+
+.muted { color: var(--muted); }
+.small { font-size: 0.85rem; }
+.note { font-size: 0.85rem; color: var(--muted); margin: 0.4rem 0 0; }
+
+/* Tables */
+
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.9rem; border-top: 1px solid var(--line); }
+thead th { border-top: 0; font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+tbody tr:first-child > * { border-top: 0; }
+thead + tbody tr:first-child > * { border-top: 1px solid var(--line); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* A key and value list: the label on the left, the value on the right,
+   as Syncthing's folder and device panels. */
+table.kv th { font-weight: normal; color: var(--muted); width: 40%; }
+table.kv td { text-align: right; overflow-wrap: anywhere; }
+
+/* Status */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--idle);
+}
+.status::before { content: ""; width: 0.6em; height: 0.6em; border-radius: 50%; background: currentColor; }
+.status.connected { color: var(--ok); }
+.status.running { color: var(--run); }
+.status.error { color: var(--err); }
+.status.draining { color: var(--drain); }
+.status.running::before { animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .status.running::before { animation: none; } }
+
+.badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--idle-soft);
+  color: var(--idle);
+  white-space: nowrap;
+}
+.badge.connected, .badge.done { background: var(--ok-soft); color: var(--ok); }
+.badge.running { background: var(--run-soft); color: var(--run); }
+.badge.error, .badge.failed { background: var(--err-soft); color: var(--err); }
+.badge.draining { background: var(--drain-soft); color: var(--drain); }
+
+.alert {
+  border-left: 4px solid var(--err);
+  background: var(--err-soft);
+  padding: 0.6rem 0.8rem;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 0 0 0.75rem;
+}
+.alert.draining { border-color: var(--drain); background: var(--drain-soft); }
+
+/* A meter, such as the memory budget: the track is a lighter step of the fill. */
+.meter { height: 0.6rem; border-radius: 999px; background: var(--accent-soft); overflow: hidden; margin: 0.35rem 0 0.2rem; }
+.meter > span { display: block; height: 100%; border-radius: 999px; background: var(--accent); }
+
+/* Runs in flight: one line of what each does now. */
+.runs { list-style: none; margin: 0; padding: 0; }
+.runs li { display: grid; grid-template-columns: auto 1fr; gap: 0 0.6rem; padding: 0.5rem 0.9rem; border-top: 1px solid var(--line); }
+.runs li:first-child { border-top: 0; }
+.runs .now { grid-column: 2; color: var(--muted); font-size: 0.9rem; overflow-wrap: anywhere; }
+
+/* Buttons and forms */
+
+.btn, button {
+  font: inherit;
+  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.35rem 0.8rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn:hover, button:hover { background: var(--panel-head); }
+.btn.primary, button.primary { background: var(--accent); border-color: var(--accent); color: var(--panel); }
+.btn.danger, button.danger { color: var(--err); border-color: var(--err); }
+.btn.danger:hover, button.danger:hover { background: var(--err-soft); }
+button:disabled, form.confirm:has(:invalid) button[type="submit"] { opacity: 0.5; cursor: not-allowed; }
+
+form.row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin: 0.6rem 0 0; }
+form.row.body { margin: 0; }
+label { display: grid; gap: 0.2rem; font-size: 0.85rem; color: var(--muted); }
+input, select {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  min-width: 0;
+}
+input[type="number"] { width: 6rem; }
+input:user-invalid { border-color: var(--err); }
+
+/* Collapsed blocks: the prompt, a tool call's input and result. */
+details.fold > summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; }
+details.fold[open] > summary { margin-bottom: 0.3rem; }
+
+/* A switch, a checkbox drawn as one: plain HTML, it still works by keyboard. */
+.switch { display: inline-flex; flex-direction: row; align-items: center; gap: 0.5rem; color: var(--text); cursor: pointer; }
+.switch input { appearance: none; width: 2.2rem; height: 1.25rem; border-radius: 999px; background: var(--line); position: relative; margin: 0; padding: 0; cursor: pointer; }
+.switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: calc(1.25rem - 6px); height: calc(1.25rem - 6px); border-radius: 50%; background: var(--panel); transition: left 0.15s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { left: calc(100% - 1.25rem + 4px); }
+
+/* Steps of a run, in order. */
+.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+.steps li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 0.6rem; padding: 0.5rem 0.9rem; border-top: 1px solid var(--line); }
+.steps li:first-child { border-top: 0; }
+.steps li::before { counter-increment: step; content: counter(step); color: var(--muted); font-variant-numeric: tabular-nums; width: 1.2rem; }
+.steps .name { font-weight: 600; font-family: var(--mono); }
+.steps li > :last-child { margin-left: auto; }
+.steps li[aria-current="step"] { background: var(--run-soft); }
+
+/* The timeline of an agent turn. */
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline > li { padding: 0.6rem 0.9rem; border-top: 1px solid var(--line); }
+.timeline > li:first-child { border-top: 0; }
+.timeline .who { font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-right: 0.4rem; }
+.timeline .tool .who { color: var(--accent); }
+.timeline .time { float: right; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.timeline p { margin: 0.2rem 0; }
+.timeline .raw { display: none; }
+.timeline .raw pre { margin: 0; }
+.timeline .unknown pre { border-left: 3px solid var(--line); }
+
+/* The raw-lines switch: with it on, the timeline shows each line as the client wrote it. */
+.panel:has(.raw-switch:checked) .timeline .parsed { display: none; }
+.panel:has(.raw-switch:checked) .timeline .raw { display: block; }
+
+/* Small graphs, inline SVG: a 2px line, the latest value as a dot. */
+.spark { display: block; width: 100%; height: 3rem; margin-top: 0.3rem; }
+.spark .grid-line { stroke: var(--line); stroke-width: 1; }
+.spark .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark .area { fill: var(--accent-soft); }
+.stat { font-size: 1.4rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.hosts { list-style: none; margin: 0; padding: 0; }
+.hosts li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.2rem 0.75rem; padding: 0.4rem 0.9rem; border-top: 1px solid var(--line); }
+.hosts li:first-child { border-top: 0; }
+
+@media (max-width: 30rem) {
+  main { padding: 1rem 0.6rem 2rem; }
+  .topbar { padding: 0.5rem 0.6rem; }
+  .topbar .state { margin-left: 0; }
+  th, td, .panel .body, .panel > header, .panel > summary, .runs li, .steps li, .timeline > li, .hosts li { padding-left: 0.6rem; padding-right: 0.6rem; }
+  table.kv th { width: auto; }
+}

@@ -1,0 +1,148 @@
+<!doctype html>
+<!-- Mock for the look (CLR-268): made-up data, no code behind it. The forms
+     post nowhere; the typed-key check of the remove form is plain HTML. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLR · Projects · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="mock-overview.html">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="mock-overview.html">Overview</a></li>
+      <li><a href="mock-run.html">Runs</a></li>
+      <li><a href="mock-project.html" aria-current="page">Projects</a></li>
+      <li><a href="#">Providers</a></li>
+      <li><a href="#">Settings</a></li>
+      <li><a href="#">Log</a></li>
+    </ul>
+  </nav>
+  <span class="state status connected">Running</span>
+</header>
+
+<main id="main">
+<p class="small muted"><a href="#">Projects</a></p>
+<h1>CLR <span class="status running">Connected · 2 runs</span></h1>
+
+<div class="grid">
+<section class="panel" aria-labelledby="project">
+  <header><h2 id="project">Project</h2><a href="#">Open in Cinderline</a></header>
+  <table class="kv">
+    <tr><th scope="row">Key</th><td>CLR</td></tr>
+    <tr><th scope="row">Cinderline</th><td>https://cinderline.example.com</td></tr>
+    <tr><th scope="row">Workspace</th><td>default</td></tr>
+    <tr><th scope="row">Runs in flight</th><td><a href="mock-run.html">CLR-271</a>, <a href="mock-run.html">CLR-272</a></td></tr>
+  </table>
+</section>
+
+<section class="panel" aria-labelledby="secrets">
+  <header><h2 id="secrets">Secrets</h2><span class="muted small">write-only: a value is never shown</span></header>
+  <div class="scroll" role="region" aria-label="Secrets" tabindex="0">
+  <table>
+    <thead><tr><th scope="col">Secret</th><th scope="col">State</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+    <tbody>
+      <tr><td>Runner token</td><td><span class="status connected">Set</span> <span class="muted small">keychain</span></td><td class="num"><button type="button">Replace</button> <button type="button" class="danger">Delete</button></td></tr>
+      <tr><td>Git token</td><td><span class="status connected">Set</span> <span class="muted small">keychain</span></td><td class="num"><button type="button">Replace</button> <button type="button" class="danger">Delete</button></td></tr>
+      <tr><td>Claude</td><td><span class="status connected">Set</span> <span class="muted small">keychain</span></td><td class="num"><button type="button">Replace</button> <button type="button" class="danger">Delete</button></td></tr>
+      <tr><td>Codex</td><td><span class="status">Not set</span></td><td class="num"><button type="button">Set</button></td></tr>
+      <tr><td>OpenCode</td><td><span class="status">Not set</span></td><td class="num"><button type="button">Set</button></td></tr>
+      <tr><td>Gemini</td><td><span class="status">Not set</span></td><td class="num"><button type="button">Set</button></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="body sep">
+    <form class="row" action="#">
+      <label>Claude key or <code>claude setup-token</code> token
+        <input type="password" name="value" autocomplete="off" required></label>
+      <button type="submit" class="primary">Save</button>
+      <button type="button">Cancel</button>
+    </form>
+    <p class="note">A client's own sign-in is a command to type: <code>cinderline login codex --project CLR</code></p>
+  </div>
+</section>
+</div>
+
+<section class="panel" aria-labelledby="repos">
+  <header><h2 id="repos">Repositories</h2></header>
+  <div class="scroll" role="region" aria-label="Repositories" tabindex="0">
+  <table>
+    <thead><tr><th scope="col">Repository</th><th scope="col">Ref</th><th scope="col">Access</th><th scope="col"><span class="sr">Actions</span></th></tr></thead>
+    <tbody>
+      <tr><td>https://git.example.com/team/runner.git</td><td class="muted">default</td><td>read and write <span class="muted small">the project's own</span></td><td></td></tr>
+      <tr><td>https://git.example.com/team/cinderline.git</td><td><code>main</code></td><td>read-only · <span class="status connected">token set</span></td><td class="num"><button type="button" class="danger">Remove</button></td></tr>
+      <tr><td>https://git.example.com/team/design.git</td><td><code>v2</code></td><td>read-only · <span class="status">no token</span></td><td class="num"><button type="button" class="danger">Remove</button></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <form class="row body sep" action="#">
+    <label>URL <input type="url" name="url" placeholder="https://git.example.com/team/repo.git" required></label>
+    <label>Ref <input type="text" name="ref" placeholder="default branch" size="12"></label>
+    <label>Git token <input type="password" name="token" autocomplete="off"></label>
+    <button type="submit">Add repository</button>
+  </form>
+</section>
+
+<div class="grid">
+<section class="panel" id="hosts" aria-labelledby="hosts-h">
+  <header><h2 id="hosts-h">Hosts</h2><span class="muted small">its runs may reach</span></header>
+  <ul class="hosts">
+    <li><code>registry.npmjs.org:443</code><button type="button" class="danger">Remove</button></li>
+    <li><code>api.stripe.com:443</code><button type="button" class="danger">Remove</button></li>
+    <li><code>proxy.golang.org:443</code><span class="muted small">every project, on Settings</span></li>
+  </ul>
+  <form class="row body sep" action="#">
+    <label>Host and port <input type="text" name="host" placeholder="example.com:443" pattern="[^\s:]+:[0-9]{1,5}" required></label>
+    <button type="submit">Add host</button>
+  </form>
+</section>
+
+<section class="panel" aria-labelledby="skills">
+  <header><h2 id="skills">Skills</h2><span class="muted small">loaded with strict hosts on</span></header>
+  <ul class="hosts">
+    <li><span><strong>ponytail</strong> <span class="muted small">https://git.example.com/team/ponytail.git</span></span><button type="button" class="danger">Remove</button></li>
+    <li><span><strong>review</strong> <span class="muted small">https://git.example.com/team/review-skill.git</span></span><span class="muted small">every project</span></li>
+  </ul>
+  <form class="row body sep" action="#">
+    <label>Name <input type="text" name="name" size="12" required></label>
+    <label>Repository URL <input type="url" name="url" required></label>
+    <button type="submit">Add skill</button>
+  </form>
+</section>
+</div>
+
+<section class="panel" aria-labelledby="limits">
+  <header><h2 id="limits">Limits</h2></header>
+  <table class="kv">
+    <tr><th scope="row">Memory per agent container</th><td>8g <span class="muted small">(default 4g; a mem_limit in the compose file wins)</span></td></tr>
+    <tr><th scope="row">Parallel runs</th><td>2 <span class="muted small">(runner-wide 1), and the Project Manager</span></td></tr>
+    <tr><th scope="row">Transcript days</th><td>14 <span class="muted small">(the runner-wide value)</span></td></tr>
+  </table>
+  <form class="row body sep" action="#">
+    <label>Memory <input type="text" name="memory" value="8g" size="6" pattern="[0-9]+[mgMG]" required></label>
+    <label>Parallel runs <input type="number" name="parallel" value="2" min="1" max="10"></label>
+    <label>Transcript days <input type="number" name="days" placeholder="14" min="0" max="365"></label>
+    <button type="submit" class="primary">Save</button>
+  </form>
+  <p class="note body">An empty field uses the runner-wide value. A change of parallel runs counts once the runs in flight have finished.</p>
+</section>
+
+<details class="panel is-error">
+  <summary><h2>Remove this project</h2></summary>
+  <div class="body">
+    <p>Removes CLR from this runner: its config, its secrets, its Docker containers, networks and volumes, and its paused session notes. Nothing changes in Cinderline. Its runs in flight end.</p>
+    <form class="row confirm" action="#">
+      <label>Type <strong>CLR</strong> to confirm
+        <input type="text" name="confirm" pattern="CLR" required autocomplete="off" aria-describedby="confirm-hint"></label>
+      <button type="submit" class="danger">Remove CLR</button>
+    </form>
+    <p class="note" id="confirm-hint">The button works once the key is typed exactly.</p>
+  </div>
+</details>
+</main>
+</body>
+</html>
