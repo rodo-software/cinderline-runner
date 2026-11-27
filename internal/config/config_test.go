@@ -782,3 +782,43 @@ func TestValidateRunnerParallel(t *testing.T) {
 		t.Fatalf("Load: %+v, %v", got, err)
 	}
 }
+
+// CLR-269, decision 2026-11-26-local-web-page: web is "on", "off" or unset,
+// web_port 1024 to 65535 or unset, both runner-wide.
+func TestValidateWeb(t *testing.T) {
+	for _, tt := range []struct {
+		web  string
+		port int
+		ok   bool
+	}{
+		{"", 0, true}, {"on", 0, true}, {"off", 8080, true}, {"", 1024, true}, {"", 65535, true},
+		{"yes", 0, false}, {"On", 0, false}, {"", 1023, false}, {"", 65536, false}, {"", -1, false},
+	} {
+		err := (&Config{Web: tt.web, WebPort: tt.port}).Validate()
+		if tt.ok != (err == nil) {
+			t.Errorf("web %q, web_port %d: err %v", tt.web, tt.port, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := (&Config{Web: "on", WebPort: 8080}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := Load(path); err != nil || got.Web != "on" || got.WebPort != 8080 {
+		t.Fatalf("Load: %+v, %v", got, err)
+	}
+}
+
+// CLR-269: the page follows web, else webDefaultOn, on 127.0.0.1 at web_port or 7420.
+func TestWebOnAndAddr(t *testing.T) {
+	for web, want := range map[string]bool{"": webDefaultOn, "on": true, "off": false} {
+		if got := (&Config{Web: web}).WebOn(); got != want {
+			t.Errorf("web %q: WebOn %v, want %v", web, got, want)
+		}
+	}
+	if got := (&Config{}).WebAddr(); got != "127.0.0.1:7420" {
+		t.Errorf("WebAddr = %q, want 127.0.0.1:7420", got)
+	}
+	if got := (&Config{WebPort: 8080}).WebAddr(); got != "127.0.0.1:8080" {
+		t.Errorf("WebAddr = %q, want 127.0.0.1:8080", got)
+	}
+}

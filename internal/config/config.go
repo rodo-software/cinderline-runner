@@ -59,8 +59,13 @@ type Config struct {
 	// Pinned holds agent CLIs at a version, by client, for a vendor's
 	// broken release; a client left out follows its vendor's latest (CLR-317).
 	// The runner checks each pin when it resolves it.
-	Pinned   map[string]string `json:"pinned,omitempty"`
-	Projects []Project         `json:"projects"`
+	Pinned map[string]string `json:"pinned,omitempty"`
+	// Web turns the daemon's local web page on or off: "on", "off" or ""
+	// for webDefaultOn; WebPort is its port on 127.0.0.1, 0 for
+	// DefaultWebPort (decision 2026-11-26-local-web-page).
+	Web      string    `json:"web,omitempty"`
+	WebPort  int       `json:"web_port,omitempty"`
+	Projects []Project `json:"projects"`
 	// Dropped names the fields an older runner wrote that Load dropped, for
 	// a warning; the next Save leaves them out (CLR-191).
 	Dropped []string `json:"-"`
@@ -71,6 +76,26 @@ const (
 	DefaultKeepSessionsFor = "7d"
 	DefaultMinFreeDisk     = "10GB"
 )
+
+// webDefaultOn is whether the page is on when web is unset: off until the
+// last issue of the web page work turns it on (decision 2026-11-26-local-web-page).
+const webDefaultOn = false
+
+// DefaultWebPort is the page's port when web_port is unset.
+const DefaultWebPort = 7420
+
+// WebOn says whether the daemon serves the local web page.
+func (c *Config) WebOn() bool {
+	if c.Web == "" {
+		return webDefaultOn
+	}
+	return c.Web == "on"
+}
+
+// WebAddr is the address the page listens on: loopback only.
+func (c *Config) WebAddr() string {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(cmp.Or(c.WebPort, DefaultWebPort)))
+}
 
 // KeepSessions is how long kept sessions live after their last run; 0 is off.
 // Validate has checked the value.
@@ -502,6 +527,12 @@ func (c *Config) Validate() error {
 	}
 	if problem := checkAllowSkills(c.AllowSkills); problem != "" {
 		return errors.New(problem)
+	}
+	if c.Web != "" && c.Web != "on" && c.Web != "off" {
+		return fmt.Errorf("web %q must be on or off", c.Web)
+	}
+	if c.WebPort != 0 && (c.WebPort < 1024 || c.WebPort > 65535) {
+		return fmt.Errorf("web_port %d must be 1024 to 65535", c.WebPort)
 	}
 	type id struct{ url, workspace, key string }
 	seen := map[id]bool{}

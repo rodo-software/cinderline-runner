@@ -71,6 +71,7 @@ func commands() []command {
 		{"remove-provider", "NAME", "remove a model provider and its key", (*CLI).removeProvider},
 		{"pin", pinUsage, "hold an agent CLI (claude, codex, gemini, opencode) at a version for every project, for when its vendor ships a broken release, or let it follow the vendor's latest release again; without arguments, show each one's version and pin", (*CLI).pin},
 		{"strict-hosts", "[on|off]", "turn strict host blocking on or off for every project, or show it: when on, a person's answer in Cinderline cannot open a host the egress proxy refused, only allow_hosts in config.json can, which allow-host sets", (*CLI).strictHosts},
+		{"web", "[on|off|port N]", "turn the local web page on 127.0.0.1 on or off for this " + name.Name + ", or set its port (1024 to 65535, default 7420), or show whether it is on and its address", (*CLI).web},
 		{"rotate-ca", "", "replace the runner's own CA, which the egress proxy signs certificates with for the hosts it refuses, so Cinderline can show the URL an agent tried; agent containers started afterwards trust the new one", (*CLI).rotateCA},
 		{"version", "", "print the version", (*CLI).version},
 	}
