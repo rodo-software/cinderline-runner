@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-26
 - **Source:** Willem, the spec on CLR-266; copied here by CLR-267 (Web 01).
+- **Amended by:** 2026-11-27-web-look (the look: calm and mostly unboxed instead of Syncthing's panels).
 
 ## What and why
 
