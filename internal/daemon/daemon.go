@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/web"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 
 	"golang.org/x/term"
@@ -83,6 +85,8 @@ type daemon struct {
 	ended      chan *slot         // a slot's loop has ended
 	budget     *run.Budget        // the memory every project's runs share, one for the process
 	turns      *run.ProviderTurns // the turns in flight on each provider, over every project and config, one for the process
+	web        *http.Server       // serves the local web page; nil while it does not
+	webAddr    string             // the address the config asks the page on, "" for off
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -106,7 +110,13 @@ func Run(ctx context.Context, o Options) error {
 	f, isFile := o.Verbose.(*os.File)
 	log := logger(lf, o.Verbose, isFile && term.IsTerminal(int(f.Fd())))
 	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}, stopTools: func() {}, budget: run.NewBudget(dockerMemory), turns: &run.ProviderTurns{}}
-	defer func() { d.stopModels(); d.stopTools() }()
+	defer func() {
+		d.stopModels()
+		d.stopTools()
+		if d.web != nil {
+			d.web.Close()
+		}
+	}()
 
 	reloads := make(chan chan error)
 	drain := make(chan struct{})
@@ -234,6 +244,7 @@ func (d *daemon) apply(cfg *config.Config) {
 			Pins: cfg.Pinned, Check: d.checkTools, Switched: d.toolsSwitched, Log: d.log}
 		go u.Run(ctx)
 	}
+	d.serveWeb(cfg)
 	d.cfg = cfg
 	projects := make([]localapi.ProjectStatus, len(cfg.Projects))
 	ids := make([]string, len(cfg.Projects))
@@ -254,6 +265,35 @@ func (d *daemon) apply(cfg *config.Config) {
 	d.projects, d.ids, d.live = projects, ids, make([]*run.Project, len(projects))
 	d.mu.Unlock()
 	d.fill()
+}
+
+// serveWeb serves the local web page where cfg asks, moving it when that
+// changed. A taken port is logged and the daemon runs on without the page
+// (decision 2026-11-26-local-web-page).
+func (d *daemon) serveWeb(cfg *config.Config) {
+	addr := ""
+	if cfg.WebOn() {
+		addr = cfg.WebAddr()
+	}
+	if addr == d.webAddr {
+		return
+	}
+	d.webAddr = addr
+	if d.web != nil {
+		d.web.Close()
+		d.web = nil
+	}
+	if addr == "" {
+		return
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		d.log.Error("web page not served", "addr", addr, "err", err)
+		return
+	}
+	d.web = &http.Server{Handler: web.Handler()}
+	go d.web.Serve(ln)
+	d.log.Info("web page served", "url", "http://"+addr+"/")
 }
 
 // fill starts every project of the config that does not run yet, has no
