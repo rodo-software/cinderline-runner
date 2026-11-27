@@ -291,7 +291,7 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 		d.log.Error("web page not served", "addr", addr, "err", err)
 		return
 	}
-	d.web = &http.Server{Handler: web.Handler()}
+	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port)}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
 }

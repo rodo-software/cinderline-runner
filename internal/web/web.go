@@ -4,7 +4,8 @@ package web
 
 import "net/http"
 
-// Handler serves the page's files.
-func Handler() http.Handler {
-	return http.FileServerFS(static)
+// Handler serves the page's files on 127.0.0.1:port, to the browser that
+// holds the token of stateDir.
+func Handler(stateDir string, port int) http.Handler {
+	return guard(stateDir, port, http.FileServerFS(static))
 }

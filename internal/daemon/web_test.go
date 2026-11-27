@@ -31,14 +31,14 @@ func writeWeb(t *testing.T, p config.Paths, web string, port int) {
 	}
 }
 
-// serves says whether the page answers / on port.
+// serves says whether the page answers / on port: 401, as the request has no cookie.
 func serves(port int) bool {
 	resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(port) + "/")
 	if err != nil {
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	return resp.StatusCode == http.StatusUnauthorized
 }
 
 func TestWebOnServesThePage(t *testing.T) {
