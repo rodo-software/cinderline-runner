@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -225,5 +226,26 @@ func TestStepEndOfALongStep(t *testing.T) {
 	got := s.Steps("CLR", "CLR-1", "20261128T080507Z")
 	if len(got) != 1 || got[0].Model != "opus" || !got[0].Ended || got[0].Outcome != "failed" || len(got[0].Error) != 10000 {
 		t.Fatalf("Steps = %+v", got)
+	}
+}
+
+func TestTail(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	r := s.Begin("CLR", "CLR-291", start)
+	st := r.Step("run", Start{Client: "claude"})
+	for i := range 100 {
+		st.Out(fmt.Sprintf("line %03d %s", i, strings.Repeat("x", 100)))
+	}
+	run := start.UTC().Format(RunID)
+	all := s.Tail("CLR", "CLR-291", run, 1, 1<<20)
+	if n := bytes.Count(all, []byte("\n")); n != 101 || !bytes.HasPrefix(all, []byte(`{"t":`)) {
+		t.Fatalf("whole file: %d lines, starts %.20q", n, all)
+	}
+	part := s.Tail("CLR", "CLR-291", run, 1, 1000)
+	if len(part) > 1000 || !bytes.HasPrefix(part, []byte(`{"t":`)) || !bytes.HasSuffix(part, []byte("line 099 "+strings.Repeat("x", 100)+"\"}\n")) {
+		t.Errorf("tail of 1000 bytes is not whole lines up to the last: %q", part)
+	}
+	if got := s.Tail("CLR", "CLR-291", run, 2, 1000); got != nil {
+		t.Errorf("a step that is not there: %q", got)
 	}
 }

@@ -103,10 +103,15 @@ func runRoutes(mux *http.ServeMux, h *Handlers) {
 				break
 			}
 			if project == "" || ri.Project == project {
+				var now string // left out of a finished run, which does nothing now
+				if !ri.Ended {
+					now = activity(h.Transcripts, ri.Project, ri.Issue, ri.Run)
+				}
 				out = append(out, struct {
 					runJSON
-					Steps int `json:"steps"`
-				}{toRun(ri, cfg), ri.Steps})
+					Steps    int    `json:"steps"`
+					Activity string `json:"activity,omitempty"`
+				}{toRun(ri, cfg), ri.Steps, now})
 			}
 		}
 		writeJSON(w, out)

@@ -338,12 +338,40 @@ func lastLine(f *os.File, size int64) []byte {
 
 // Open opens step n of a run.
 func (s *Store) Open(project, issue, run string, n int) (io.ReadCloser, error) {
+	return s.open(project, issue, run, n)
+}
+
+func (s *Store) open(project, issue, run string, n int) (*os.File, error) {
 	for _, st := range s.Steps(project, issue, run) {
 		if st.N == n {
 			return os.Open(filepath.Join(s.Dir, project, issue, run, fmt.Sprintf("%02d-%s.ndjson", n, st.Kind)))
 		}
 	}
 	return nil, fmt.Errorf("transcript %s/%s/%s step %d: %w", project, issue, run, n, fs.ErrNotExist)
+}
+
+// Tail returns the whole lines in the last max bytes of step n of a run, each
+// with its newline; nil when the step cannot be read. Like lastLine, it reads
+// only the tail, so a long step costs no more than a short one.
+func (s *Store) Tail(project, issue, run string, n int, max int64) []byte {
+	f, err := s.open(project, issue, run, n)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	size := fi.Size()
+	buf := make([]byte, min(size, max))
+	if _, err := f.ReadAt(buf, size-int64(len(buf))); err != nil && err != io.EOF {
+		return nil
+	}
+	if int64(len(buf)) < size { // it starts inside a line
+		_, buf, _ = bytes.Cut(buf, []byte("\n"))
+	}
+	return buf[:bytes.LastIndexByte(buf, '\n')+1] // a line being written has no newline yet
 }
 
 // Discard removes the run's folder, for a project that keeps no transcript

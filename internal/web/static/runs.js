@@ -1,5 +1,6 @@
 // The Runs: the list of /api/runs (newest first), the runs in flight above the
-// finished ones, read again every 5 s while the page is visible.
+// finished ones, each with what it does now, read again every 5 s while the
+// page is visible.
 (() => {
   const $ = (id) => document.getElementById(id);
   const select = $("project");
@@ -17,6 +18,8 @@
       issue.append(" ", c);
     }
     if (r.manager) issue.append(" ", el("span", "badge", "Project Manager"));
+    const now = el("div", "small muted"); // what a live run does now, set by row
+    issue.append(now);
     const start = el("td");
     const dur = el("td", "num");
     const tr = el("tr", "", issue, el("td", "", r.project), start, dur, el("td", "num", String(r.steps)),
@@ -26,18 +29,22 @@
       start.replaceChildren(when(r.start));
       dur.textContent = took(new Date(r.end || Date.now()) - new Date(r.start));
     };
-    return { tr, tick };
+    return { tr, tick, now };
   };
 
   // A run's row, kept while the run does not change, so a focused link keeps
-  // its focus across refreshes.
+  // its focus across refreshes; its activity changes all the time and is
+  // only its text.
   const rows = new Map();
   const key = (r) => r.project + "/" + r.issue + "/" + r.run;
   const row = (r) => {
-    const json = JSON.stringify(r);
+    const { activity, ...rest } = r;
+    const json = JSON.stringify(rest);
     let x = rows.get(key(r));
     if (!x || x.json !== json) rows.set(key(r), x = { json, ...build(r) });
     x.tick();
+    x.now.textContent = activity || "";
+    x.now.hidden = !activity;
     return x.tr;
   };
 

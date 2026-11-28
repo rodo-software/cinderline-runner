@@ -1,5 +1,6 @@
 // The Overview: draws the daemon's status from /api/status/stream (the JSON of
-// localapi.Status) into index.html.
+// localapi.Status) into index.html, each run in flight with what it does now
+// from /api/runs.
 (() => {
   const $ = (id) => document.getElementById(id);
   const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
@@ -26,6 +27,9 @@
 
   // A project's fold, kept across updates so it stays open and focused.
   const folds = new Map();
+  // A run in flight's line, kept across updates so its link stays focused;
+  // only its activity's text changes.
+  const items = new Map();
 
   const project = (key, p) => {
     let d = folds.get(key);
@@ -63,13 +67,28 @@
       ...(p.issues || []).map((ref) => [ref, p.project, ""]),
       ...p.manager ? [[p.manager, p.project, " · Project Manager"]] : [],
     ]);
-    $("runs").replaceChildren(...runs.map(([ref, key, what]) => {
+    const ids = new Set();
+    const lis = runs.map(([ref, key, what]) => {
       const r = live.get(key + "\n" + ref);
-      const a = r ? el("a", "", ref) : ref; // no link until its transcript is there
-      if (r) a.href = runHref(r);
-      return el("li", "", el("span", "badge running", "run"), el("span", "title", a, what), el("span", "meta", key));
-    }));
-    $("runs").hidden = !runs.length;
+      const id = [key, ref, what, r ? runHref(r) : ""].join("\n");
+      let x = items.get(id);
+      if (!x) {
+        const a = r ? el("a", "", ref) : ref; // no link until its transcript is there
+        if (r) a.href = runHref(r);
+        const now = el("span", "now small muted");
+        x = { now, li: el("li", "", el("span", "badge running", "run"), el("span", "title", a, what), now, el("span", "meta", key)) };
+        items.set(id, x);
+      }
+      x.now.textContent = r?.activity || "";
+      x.now.hidden = !r?.activity;
+      ids.add(id);
+      return x.li;
+    });
+    for (const id of items.keys()) if (!ids.has(id)) items.delete(id);
+    const ul = $("runs");
+    lis.forEach((li, i) => { if (ul.children[i] !== li) ul.insertBefore(li, ul.children[i] || null); }); // moving only when needed keeps focus
+    while (ul.children.length > lis.length) ul.lastElementChild.remove();
+    ul.hidden = !runs.length;
     $("no-runs").hidden = !!runs.length;
 
     $("lead").replaceChildren(
@@ -105,7 +124,8 @@
   };
 
   // live is the newest live run of each project and issue in /api/runs, for
-  // the links of the runs in flight; fetched again with each status.
+  // the links and the activity of the runs in flight; fetched again with each
+  // status, and every 3 s while a run is in flight and the page is visible.
   let live = new Map();
   const findRuns = () => fetch("/api/runs?limit=500").then((r) => r.ok ? r.json() : null).then((runs) => {
     if (!runs) return;
@@ -119,4 +139,8 @@
   let last;
   listen("/api/status/stream", (st) => { last = st; findRuns().then(() => render(last)); });
   setInterval(() => last && render(last), 30000); // "3 minutes ago" moves on between events
+  const inFlight = () => (last?.projects || []).some((p) => (p.issues || []).length || p.manager);
+  setInterval(() => {
+    if (document.visibilityState === "visible" && inFlight()) findRuns().then(() => render(last));
+  }, 3000);
 })();
