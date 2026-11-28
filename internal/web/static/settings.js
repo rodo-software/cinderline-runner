@@ -75,7 +75,10 @@
   const load = () => Promise.all([getJSON("/api/config"), name ? null : getJSON("/api/name")]).then(([c, n]) => {
     reachable(true);
     cfg = c;
-    if (n) name = n.name;
+    if (n) {
+      name = n.name;
+      terminal();
+    }
     render();
   }, () => reachable(false));
 
@@ -139,8 +142,72 @@
     $("is-off").hidden = false;
   });
 
+  // The Runner panel: the version and the state of the daemon's own actions,
+  // from the status stream. from is the version this browser updated from,
+  // kept over the reload after the runner restarts with the new one.
+  let from = null, seen, draining = false, said = "";
+  try { from = sessionStorage.getItem("update-from"); } catch { /* storage off: kept for this page only */ }
+  seen = !!from; // a page loaded after the update began has its outcome in its first status
+  const keep = (v) => {
+    from = v;
+    try { if (v) sessionStorage.setItem("update-from", v); else sessionStorage.removeItem("update-from"); } catch { /* as above */ }
+  };
+  let st;
+  const runnerNow = () => {
+    if (!st) return;
+    const f = $("runner").elements;
+    const u = st.update || "";
+    $("version").textContent = "Version " + st.version;
+    f.update.disabled = u === "running";
+    if (u === "running") seen = true;
+    else if (from && st.version !== from) {
+      said = "Updated to " + st.version + ".";
+      keep(null);
+    } else if (from && seen) {
+      said = "Already at the latest release.";
+      keep(null);
+    }
+    const runs = (st.projects || []).flatMap((p) => [...p.issues || [], ...p.manager ? [p.manager] : []]);
+    const [text, cls] = u === "running" ? ["Updating… The runner restarts with the new version once its runs in flight have finished.", ""]
+      : u.startsWith("failed:") ? ["The update failed:" + u.slice("failed:".length), "field-error"]
+        : draining ? ["Draining: the runner stops once its runs in flight have finished" + (runs.length ? ": " + runs.join(", ") + "." : "."), ""]
+          : [said, ""];
+    $("runner-now").textContent = text;
+    $("runner-now").className = cls;
+  };
+
+  // Each action of the Runner panel: a plain confirmation, then the POST.
+  const action = (button, question, yes, url, then) => $("runner").elements[button].addEventListener("click", async (e) => {
+    const b = e.currentTarget;
+    if (await confirmed(question, yes) && await send(b, "POST", url)) then();
+  });
+  action("update", "Update the runner to the latest release? Runs in flight finish first; then the runner restarts with the new version.",
+    "Update", "/api/daemon/update", () => {
+      seen = false; // a status sent before the update began says nothing of it
+      said = "";
+      keep(st.version);
+    });
+  action("drain", "Stop the runner once its runs in flight have finished? Until then it takes no new work.",
+    "Stop after the runs", "/api/daemon/drain", () => { draining = true; runnerNow(); });
+  action("stop", "Stop the runner now? Runs in flight are cut off.",
+    "Stop now", "/api/daemon/stop", () => { said = "Stopping…"; runnerNow(); });
+  action("rotate-ca", "Replace the runner's own CA? The egress proxy signs certificates with it for the hosts it refuses, "
+    + "so Cinderline can show the URL an agent tried. Agent containers started from now on trust the new one; those running keep the old one.",
+  "Replace the CA", "/api/daemon/rotate-ca", () => {
+    said = "Replaced the CA. Agent containers started from now on trust the new one; those running keep the old one.";
+    runnerNow();
+  });
+
+  // In the terminal: what the page does not offer, each command with why.
+  const terminal = () => $("terminal").replaceChildren(...[
+    [["service install", "service uninstall"], "Starts the runner at login, or no longer: the service runs the runner, so the runner does not install it."],
+    [["uninstall"], "Removes everything: the service, containers, volumes, images, config and secrets."],
+    [["login CLIENT --project KEY"], "Signs a client CLI in with its own login, which needs a terminal to answer it."],
+    [["run"], "Starts the runner: this page is the runner's, so it cannot."],
+  ].flatMap(([cmds, why]) => [...cmds.map((c) => copyable(name + " " + c)), el("p", "hint", why)]));
+
   const visible = () => document.visibilityState === "visible";
   load();
-  setInterval(() => visible() && getJSON("/api/status").then(() => reachable(true), () => reachable(false)), 5000);
+  listen("/api/status/stream", (s) => { st = s; runnerNow(); });
   document.addEventListener("visibilitychange", () => visible() && load());
 })();

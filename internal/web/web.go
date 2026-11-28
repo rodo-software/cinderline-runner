@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"runtime"
 	"strconv"
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/transcript"
@@ -40,6 +42,8 @@ type Handlers struct {
 	Exec    workspace.Exec
 	Log     *slog.Logger
 	Version string // the build's, sent when a runner token is checked
+	// ServiceInstalled is manage.ServiceInstalled; nil: no service.
+	ServiceInstalled func() (bool, error)
 
 	// Stop and Drain are the local API's (localapi.Handlers.Stop, Drain).
 	Stop  func()
@@ -78,9 +82,17 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(h.status())
 	})
-	// The command's name, for the commands the page shows to type.
+	// The command's name, for the commands the page shows to type, and the
+	// command that starts the installed service, "" when there is none:
+	// asked now, as nothing can be asked once the runner has stopped.
 	mux.HandleFunc("GET /api/name", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]string{"name": name.Name})
+		start := ""
+		if h.ServiceInstalled != nil {
+			if installed, _ := h.ServiceInstalled(); installed { // a failed service is installed too
+				start = manage.ServiceStart(runtime.GOOS)
+			}
+		}
+		writeJSON(w, map[string]string{"name": name.Name, "service": start})
 	})
 	mux.HandleFunc("GET /api/status/stream", func(w http.ResponseWriter, r *http.Request) {
 		s := newSSE(w)

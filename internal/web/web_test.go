@@ -1,13 +1,17 @@
 package web
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
@@ -158,8 +162,32 @@ func TestHandlerServesTheProjectPages(t *testing.T) {
 		}
 	}
 	w := do(t, dir, "GET", "/api/name", tok, nil)
-	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"name":"`+name.Name+`"}` {
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"name":"`+name.Name+`","service":""}` {
 		t.Errorf("GET /api/name = %d %s", w.Code, w.Body)
+	}
+}
+
+// CLR-310: /api/name names the command that starts the installed service,
+// for the page's stopped panel; a service in a failed state is installed.
+func TestNameService(t *testing.T) {
+	dir := t.TempDir()
+	tok := token(t, dir)
+	for _, c := range []struct {
+		installed bool
+		err       error
+		want      string
+	}{
+		{false, nil, ""},
+		{true, nil, manage.ServiceStart(runtime.GOOS)},
+		{true, errors.New("service in failed state"), manage.ServiceStart(runtime.GOOS)},
+		{false, errors.New("no service system"), ""},
+	} {
+		h := Handler(dir, port, Handlers{ServiceInstalled: func() (bool, error) { return c.installed, c.err }})
+		var got struct{ Name, Service string }
+		w := doTo(t, h, "GET", "/api/name", tok, nil)
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Name != name.Name || got.Service != c.want {
+			t.Errorf("installed %v, %v: GET /api/name = %d %s, want service %q", c.installed, c.err, w.Code, w.Body, c.want)
+		}
 	}
 }
 

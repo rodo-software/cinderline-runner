@@ -3,10 +3,10 @@
 package cli
 
 import (
-	"errors"
 	"os"
 
 	"github.com/kardianos/service"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 )
 
 // nopService satisfies service.Interface; the unit runs the ordinary cinderline run.
@@ -37,14 +37,11 @@ func uninstallService(exe string) error {
 
 // startService starts the installed service; installed is false, and nothing is done, when there is none.
 func startService(exe string) (installed bool, err error) {
+	if installed, err := manage.ServiceInstalled(); !installed || err != nil {
+		return installed, err
+	}
 	s, err := service.New(nopService{}, serviceConfig(exe, os.Getenv("PATH")))
 	if err != nil {
-		return false, err
-	}
-	if _, err := s.Status(); err != nil {
-		if errors.Is(err, service.ErrNotInstalled) {
-			return false, nil
-		}
 		return true, err
 	}
 	return true, s.Start()

@@ -10,10 +10,21 @@ const el = (tag, cls, ...kids) => {
   return n;
 };
 
+// startCommand is the command that starts the runner, from /api/name: its
+// service's when one is installed, else "<name> run". Asked once the page is
+// parsed, for the stopped panel: once the runner is gone nothing can ask.
+let startCommand;
+
 // reachable shows whether the daemon answered: the top bar's state and, while
-// it does not, a bar that says so. Call it once the page is parsed.
-let lostBar;
+// it does not, a bar that says so. Once it has not answered for 5 s, a panel
+// says the runner is not running and how to start it, and the page asks every
+// 2 s until it answers, then loads again. Call it once the page is parsed.
+let lostBar, downTimer, stoppedPanel;
 const reachable = (ok) => {
+  if (stoppedPanel) {
+    if (ok) location.reload();
+    return;
+  }
   if (!lostBar) {
     lostBar = el("p", "attention warn", "Connection lost, retrying…");
     lostBar.setAttribute("role", "status");
@@ -23,6 +34,25 @@ const reachable = (ok) => {
   const state = document.querySelector("[data-runner-state]");
   state.textContent = ok ? "Running" : "Not reachable";
   state.className = "status " + (ok ? "ok" : "error");
+  if (ok) {
+    clearTimeout(downTimer);
+    downTimer = undefined;
+  } else if (!downTimer) {
+    downTimer = setTimeout(stopped, 5000);
+  }
+};
+
+// stopped puts the stopped panel in place of the lost bar.
+const stopped = () => {
+  const start = startCommand ? [el("p", "", "Start it with:"), copyable(startCommand)]
+    : [el("p", "", "Start it again in a terminal.")];
+  stoppedPanel = el("div", "attention", el("p", "what", "The runner is not running."), ...start,
+    el("p", "muted", "This page loads again once it runs."));
+  stoppedPanel.setAttribute("role", "status");
+  lostBar.replaceWith(stoppedPanel);
+  document.querySelector("[data-runner-state]").textContent = "Not running";
+  // Any answer, a 401 too, means the runner is back.
+  setInterval(() => fetch("/api/name").then(() => location.reload(), () => {}), 2000);
 };
 
 // listen calls onData with each event of the stream at url, parsed as JSON,
@@ -284,6 +314,8 @@ const copyable = (text) => {
   };
 
   document.addEventListener("DOMContentLoaded", () => {
+    getJSON("/api/name").then((n) => { startCommand = n.service || n.name + " run"; }, () => {});
+
     document.querySelectorAll(".topbar nav a").forEach((a) => {
       if (a.pathname === location.pathname) a.setAttribute("aria-current", "page");
     });

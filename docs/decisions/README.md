@@ -20,3 +20,4 @@ A record is folded and archived once it is built: each binding point goes into c
 - [2026-11-28-skill-downloads](2026-11-28-skill-downloads.md): a skill package's downloads (CLR-318). Kept until the app has added `downloads` to its contract and it is copied here.
 - [2026-11-28-web-remove-project](2026-11-28-web-remove-project.md): removing and renaming a project from the page (CLR-302). Kept with 2026-11-26-local-web-page.
 - [2026-11-28-update-restart](2026-11-28-update-restart.md): the daemon re-execs itself after an update from the page (CLR-303). Kept with 2026-11-26-local-web-page.
+- [2026-11-28-stopped-page-service](2026-11-28-stopped-page-service.md): the stopped panel names the command that starts the installed service (CLR-310). Kept with 2026-11-26-local-web-page.

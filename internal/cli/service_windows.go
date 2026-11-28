@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
@@ -46,7 +47,7 @@ func uninstallService(exe string) error {
 
 // startService starts the installed service; installed is false, and nothing is done, when there is none.
 func startService(exe string) (installed bool, err error) {
-	if err := schtasks("/query", "/tn", name.Name); err != nil {
+	if installed, _ := manage.ServiceInstalled(); !installed {
 		return false, nil
 	}
 	return true, schtasks(schtasksArgs("run", "")...)

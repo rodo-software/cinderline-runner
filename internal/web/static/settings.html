@@ -37,6 +37,18 @@
 </header>
 
 <div id="panels" hidden>
+<section aria-labelledby="h-runner">
+  <h2 id="h-runner">Runner</h2>
+  <p id="version"></p>
+  <form class="row" id="runner">
+    <button type="button" name="update">Update</button>
+    <button type="button" name="drain">Stop after the runs</button>
+    <button type="button" name="stop" class="danger">Stop now</button>
+    <button type="button" name="rotate-ca">Replace the CA</button>
+  </form>
+  <p id="runner-now" role="status"></p>
+</section>
+
 <section aria-labelledby="h-strict">
   <h2 id="h-strict">Strict host blocking</h2>
   <p class="muted" id="strict-hint">When on, a person's answer in Cinderline cannot open a host the egress proxy refused: only the hosts allowed here, for all projects, or on a project's page can. When off, a person can open a host for one issue's runs in Cinderline.</p>
@@ -117,6 +129,11 @@
   <h2 id="h-fixed">Set in config.json</h2>
   <p class="muted">These have no command: they are set in the runner's config.json.</p>
   <div id="fixed"></div>
+</section>
+<section aria-labelledby="h-terminal">
+  <h2 id="h-terminal">In the terminal</h2>
+  <p class="muted">What this page does not offer: type these in a terminal.</p>
+  <div id="terminal"></div>
 </section>
 </div>
 </main>
