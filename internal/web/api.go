@@ -78,6 +78,20 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 	writeRoute(mux, "DELETE /api/hosts", h, func(_ *http.Request, b hostBody) error {
 		return manage.RemoveHost(h.Paths, b.Project, b.Host)
 	})
+	// project is the project's ID, or "" for runner-wide allow_skills.
+	type skillBody struct {
+		Project string `json:"project"`
+		Name    string `json:"name"`
+	}
+	writeRoute(mux, "POST /api/skills", h, func(_ *http.Request, b struct {
+		skillBody
+		URL string `json:"url"`
+	}) error {
+		return manage.AddSkill(h.Paths, b.Project, b.Name, b.URL)
+	})
+	writeRoute(mux, "DELETE /api/skills", h, func(_ *http.Request, b skillBody) error {
+		return manage.RemoveSkill(h.Paths, b.Project, b.Name)
+	})
 	writeRoute(mux, "POST /api/providers", h, func(_ *http.Request, b struct {
 		config.Provider
 		Key string `json:"key"`

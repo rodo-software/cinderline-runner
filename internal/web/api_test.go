@@ -771,3 +771,57 @@ func TestAPIHostsRefuse(t *testing.T) {
 		t.Errorf("config %+v, %v, %d reloads; want it unchanged", cfg, err, *reloads)
 	}
 }
+
+// CLR-296: POST /api/skills adds an allow_skills entry, runner-wide for an
+// empty project, and DELETE removes it; each reloads.
+func TestAPISkills(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	for _, c := range []struct{ method, body string }{
+		{"POST", `{"project": "", "name": "pony", "url": "https://github.com/o/pony"}`},
+		{"POST", `{"project": "WEB", "name": "imp", "url": "https://github.com/o/imp"}`},
+		{"POST", `{"project": "WEB", "name": "pony", "url": "https://github.com/o/pony"}`},
+		{"POST", `{"project": "WEB", "name": "imp", "url": "https://github.com/fork/imp"}`},
+		{"DELETE", `{"project": "WEB", "name": "pony"}`},
+	} {
+		if w := send(t, h, c.method, tok, "/api/skills", c.body); w.Code != http.StatusNoContent {
+			t.Fatalf("%s %s = %d %s, want 204", c.method, c.body, w.Code, w.Body)
+		}
+	}
+	cfg, err := config.Load(paths.File)
+	if err != nil || !slices.Equal(cfg.AllowSkills, []config.AllowedSkill{{Name: "pony", URL: "https://github.com/o/pony"}}) ||
+		!slices.Equal(cfg.Projects[0].AllowSkills, []config.AllowedSkill{{Name: "imp", URL: "https://github.com/fork/imp"}}) {
+		t.Errorf("config %+v, %v", cfg, err)
+	}
+	if *reloads != 5 {
+		t.Errorf("%d reloads, want 5", *reloads)
+	}
+}
+
+// A refused skill package or project is a 400 with the command's text that
+// changes and reloads nothing.
+func TestAPISkillsRefuse(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	if w := send(t, h, "POST", tok, "/api/skills", `{"project": "WEB", "name": "pony", "url": "https://github.com/o/pony"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d %s", w.Code, w.Body)
+	}
+	*reloads = 0
+	for what, c := range map[string]struct{ method, body, want string }{
+		"bad name":        {"POST", `{"project": "WEB", "name": "Pony", "url": "https://github.com/o/p"}`, `"Pony" is not a skill package's name`},
+		"bad URL":         {"POST", `{"project": "", "name": "p", "url": "http://github.com/o/p"}`, "skill package p: a skill package's URL must be https://host/path"},
+		"duplicate":       {"POST", `{"project": "WEB", "name": "pony", "url": "https://github.com/o/pony"}`, "the allow_skills of WEB already allows pony from https://github.com/o/pony"},
+		"unknown project": {"POST", `{"project": "NOPE", "name": "p", "url": "https://github.com/o/p"}`, "no project NOPE"},
+		"remove missing":  {"DELETE", `{"project": "WEB", "name": "nope"}`, "the allow_skills of WEB has no entry nope; its entries: pony"},
+		"remove unknown":  {"DELETE", `{"project": "NOPE", "name": "pony"}`, "no project NOPE"},
+		"url on remove":   {"DELETE", `{"project": "WEB", "name": "pony", "url": "https://github.com/o/pony"}`, "unknown field"},
+	} {
+		w := send(t, h, c.method, tok, "/api/skills", c.body)
+		var e struct{ Error string }
+		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != http.StatusBadRequest || !strings.Contains(e.Error, c.want) {
+			t.Errorf("%s: %d %s, want 400 containing %q", what, w.Code, w.Body, c.want)
+		}
+	}
+	cfg, err := config.Load(paths.File)
+	if err != nil || len(cfg.AllowSkills) != 0 || len(cfg.Projects[0].AllowSkills) != 1 || *reloads != 0 {
+		t.Errorf("config %+v, %v, %d reloads; want it unchanged", cfg, err, *reloads)
+	}
+}
