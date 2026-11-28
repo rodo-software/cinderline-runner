@@ -157,6 +157,47 @@ Claude Code subscription limits are reported as `usage_limit` when its result ha
 
 `cinderline uninstall` asks for confirmation (`-yes` skips it), then removes the service, the runner's containers, networks, volumes and images (the default image, built or pulled, the proxy's and those built for a project's agent service), the config and state folders and every project's secrets. It lists each project's Cinderline URL and key: revoke that runner token in Cinderline yourself. It leaves the binary and prints its path for you to delete.
 
+## The web page
+
+The runner serves a web page on your own machine (decision 2026-11-26-local-web-page). It shows what the runner does in more detail than Cinderline does, and it changes the runner's local config. The page has these parts:
+
+- **Overview:** the runner, its memory budget, each project's connection to Cinderline and the runs in flight. Under "Needs you" it shows each project's last error.
+- **Runs:** the runs in flight and the finished ones. Each run opens its own page with its steps in order (`run`, `resolve`, `check`, `publish`, `stop`), each with its outcome, the hosts the egress proxy refused and a link to the issue in Cinderline. An agent turn shows the prompt Cinderline sent (folded), then a live timeline of the agent's text and tool calls with their results, tokens and cost where the client reports them. Claude Code's and Codex's output is parsed into that timeline; other clients, and lines the parser does not know, are shown as raw lines. A switch shows the raw lines of any turn. While the page shows a run in flight, it also shows the live CPU and memory of the agent's container and of each compose service.
+- **Projects:** one page per project, with its repositories, hosts, skill packages, memory, parallel runs, transcript days and secrets, and forms to add a project, rename one or remove one.
+- **Providers:** the model providers (see "Local models").
+- **Settings:** strict host blocking, the hosts and skill packages for all projects, parallel runs, transcripts and the page itself. It also has buttons to update the runner, stop it, stop it once its runs have finished, and replace its CA.
+- **Log:** the runner's log, followed as it grows.
+
+The page can do everything the `cinderline` commands can, except `login`, `uninstall`, `service` and `run`, which need a terminal, and `pin`. For the first four it shows the command to type. It never stops, retries or skips a single run: that is Cinderline's decision. Removing or renaming a project asks you to type its key. Update, stop and replacing the CA ask you to confirm.
+
+The page is served by the running runner itself, so there is no page while it is stopped. It is off by default:
+
+- `cinderline web on` turns it on and `cinderline web off` turns it off, and a running runner takes the change at once.
+- `cinderline web port N` moves it to port N (1024 to 65535, default 7420).
+- `cinderline web` prints the page's address with its token, `http://127.0.0.1:7420/?token=…`, and opens it in your browser. `cinderline web --no-open` only prints it.
+- The token signs your browser in. After that, the browser uses a cookie that lasts until you close it; then run `cinderline web` again. Treat the URL with the token like a password.
+- `cinderline web --new-token` replaces the token, after which every open page must be opened again with `cinderline web`.
+
+If the port is taken, the log says so once and the runner goes on without the page.
+
+The page listens on `127.0.0.1` only, so it can be reached only from the machine the runner runs on. There is no setting to open it to the network. To use it from another computer, forward the port over SSH. On that computer, run this, where `host` is the machine the runner runs on:
+
+```
+ssh -L 7420:127.0.0.1:7420 host
+```
+
+Then run `cinderline web --no-open` on `host`, in that SSH session, and open the URL it prints in the other computer's browser. The token is still needed. Keep the same port on both ends: the page answers only to `127.0.0.1:<its port>` and `localhost:<its port>`, so a forward to another local port is refused. How the page is protected is in [docs/security.md](docs/security.md).
+
+The page shows a run after it has ended, and after a restart, from its transcript: the runner keeps each run on disk under `transcripts/` in the state folder (see "Configuration"), redacted like the log. Old runs are removed at start and every hour:
+
+- `cinderline transcripts` shows how long runs are kept and how much disk they may take, runner-wide and per project.
+- `cinderline transcripts DAYS` sets how many days runs are kept, 0 to 365, 14 by default. With `--project KEY` it sets that project's own number, which wins.
+- `cinderline transcripts clear` goes back to the default (or, with `--project KEY`, to the runner-wide number).
+- `cinderline transcripts --max-size SIZE` sets the most disk all transcripts take together, such as `512m` or `2g`, at least `100m`, 1 GB by default. Over that, the oldest runs are removed first.
+- With 0 days a run is kept only while it runs: you can follow it live, but it is removed when it ends and cannot be opened afterwards.
+
+The agent's output, and the check command's, is in the page and no longer in the runner's log: `cinderline logs` and `cinderline run -v` show the runner's own events, not what the agent prints.
+
 ## Configuration
 
 `config.json` lives in the `cinderline` folder of the OS's user config folder (`~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%` on Windows), with the log and other state in its `state` subfolder. It holds no secrets. Besides what `add` writes, you can set:
@@ -170,9 +211,10 @@ Claude Code subscription limits are reported as `usage_limit` when its result ha
 - `max_parallel_runs`: the most team runs of each project at once, 1 to 10, `1` by default, unless a project sets its own (below). `cinderline parallel set N` sets it, `cinderline parallel clear` returns to `1`, and `cinderline parallel show` shows it with each project's value and whether that project overrides it; add `--project KEY` to set, clear or show that project's own value instead. A project takes a change once its runs in flight have finished.
 - `transcript_days`: how many days each run is kept on disk for the local web page, 0 to 365, `14` by default; `0` keeps a run only while it runs. `cinderline transcripts DAYS` sets it, `cinderline transcripts clear` returns to `14`, and `cinderline transcripts` shows it with `transcript_max_size` and each project's own value; add `--project KEY` to set, clear or show that project's own value, which wins, instead.
 - `transcript_max_size`: the most disk all kept runs take, runner-wide only, written like `memory` (`m` or `g`, 1024-based), at least `100m`, `1g` by default, which `cinderline transcripts --max-size SIZE` sets.
+- `web`: `"on"` or `"off"`, whether the runner serves its web page (see "The web page"), off when absent, which `cinderline web on|off` sets; `web_port`: its port on `127.0.0.1`, 1024 to 65535, `7420` by default, which `cinderline web port N` sets. A provider on the runner's own machine may not use that port.
 - Per project: `allow_hosts`, extra `host:port` entries that project's agents may reach (see "Network"), which `allow-host --project KEY` writes, never `localhost`, a loopback address or `host.docker.internal`; `allow_skills`, the skill packages that project's runs may load with `strict_hosts` on, which `allow-skill --project KEY` writes; `memory`, the memory limit of its agent containers (see "Environments"), which `memory set|clear --project KEY` writes; `max_parallel_runs`, the most of its team runs at once, 1 to 10, which overrides the runner-wide `max_parallel_runs` and which `parallel set|clear --project KEY` writes: with more than 1, Cinderline offers one issue per lane and each runs in its own slot, worktree and branch, each slot taking its own share of the memory budget, while the Project Manager keeps its own slot next to them (needs a Cinderline with lanes; an older one still gets one run at a time); `transcript_days`, its own, which `transcripts --project KEY DAYS|clear` writes; `openai_base_url`, an OpenAI-compatible base URL for Codex; `gemini_vertex`, `true` when the Gemini key is a Vertex AI express-mode key; `extra_repositories`, which `add-repo` writes (see "Extra repositories").
 
-Unknown fields are refused, except those an older runner wrote (`names_by_key`, `allow_existing`, `merge_poll_seconds`, `build_image`): they are ignored with a warning and left out the next time the file is written. `add`, `rename`, `key set`, `key delete` (also of a provider's key), `login`, `add-repo`, `remove-repo`, `allow-host add|remove`, `allow-skill add|remove`, `memory set|clear`, `parallel set|clear`, `transcripts` when it changes a value, `add-provider`, `set-provider`, `remove-provider` and `strict-hosts on|off` make a running runner reload the file; `remove` reloads it too. A reload cuts no run: each project takes the change once its own runs have finished, taking no new work meanwhile, and the command returns at once, naming the issues that still run on the old config; `cinderline status` shows those projects until they have. Only `remove` and `rename` wait, for their own project's runs, before they remove its Docker volumes. Press `s` while they wait, and confirm with `y`, to stop the runner at once instead, after which the service starts again: at the next poll Cinderline moves the issues of the runs it cut to Blocked with a note naming the branch, and a person moves them back to To do to run them again. Ctrl-C ends the wait and keeps the project's volumes. After a hand edit, restart the runner.
+Unknown fields are refused, except those an older runner wrote (`names_by_key`, `allow_existing`, `merge_poll_seconds`, `build_image`): they are ignored with a warning and left out the next time the file is written. `add`, `rename`, `key set`, `key delete` (also of a provider's key), `login`, `add-repo`, `remove-repo`, `allow-host add|remove`, `allow-skill add|remove`, `memory set|clear`, `parallel set|clear`, `transcripts` when it changes a value, `web on|off|port N`, `add-provider`, `set-provider`, `remove-provider` and `strict-hosts on|off` make a running runner reload the file; `remove` reloads it too. A reload cuts no run: each project takes the change once its own runs have finished, taking no new work meanwhile, and the command returns at once, naming the issues that still run on the old config; `cinderline status` shows those projects until they have. Only `remove` and `rename` wait, for their own project's runs, before they remove its Docker volumes. Press `s` while they wait, and confirm with `y`, to stop the runner at once instead, after which the service starts again: at the next poll Cinderline moves the issues of the runs it cut to Blocked with a note naming the branch, and a person moves them back to To do to run them again. Ctrl-C ends the wait and keeps the project's volumes. After a hand edit, restart the runner.
 
 ## Network
 

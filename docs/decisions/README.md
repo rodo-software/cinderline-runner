@@ -14,8 +14,8 @@ A record is folded and archived once it is built: each binding point goes into c
 
 - [2026-11-16-runner-protocol-v2](2026-11-16-runner-protocol-v2.md): the runner API contract, the same record in both repositories, with [`docs/runner-api/openapi.yaml`](../runner-api/openapi.yaml). Kept for its detail.
 - [2026-11-17-push-scan](2026-11-17-push-scan.md): the push scan, and the contract change the app makes first. Kept until the app has made that change and the contract is copied here.
-- [2026-11-26-local-web-page](2026-11-26-local-web-page.md): the runner's local web page. Kept until the last `Web NN` issue has built it.
-- [2026-11-27-web-look](2026-11-27-web-look.md): the look of that page, which amends its "follows Syncthing" line. Kept with it.
+- [2026-11-26-local-web-page](2026-11-26-local-web-page.md): the runner's local web page. Folded into current.md; archived once CLR-312, the last `Web NN` issue, is merged.
+- [2026-11-27-web-look](2026-11-27-web-look.md): the look of that page, which amends its "follows Syncthing" line. Folded into current.md; archived with it.
 - [2026-11-27-agent-cli-updates](2026-11-27-agent-cli-updates.md): the agent CLIs follow their vendors' releases (CLR-317). Folded into current.md; archived once CLR-317 is merged.
 - [2026-11-28-skill-downloads](2026-11-28-skill-downloads.md): a skill package's downloads (CLR-318). Kept until the app has added `downloads` to its contract and it is copied here.
 - [2026-11-28-web-remove-project](2026-11-28-web-remove-project.md): removing and renaming a project from the page (CLR-302). Kept with 2026-11-26-local-web-page.

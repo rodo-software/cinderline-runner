@@ -12,6 +12,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - Issues are the only workflow state (app decision 0091). The runner keeps only caches it may lose: session notes, the outbox, clones. (2026-11-05-runner-state-location; 2026-11-16-runner-protocol-v2)
 - There are no writer teams and no writer run. (2026-11-06-no-writer-teams)
 - The runner serves a web page on the user's own machine (2026-11-26-local-web-page); runners are shown read-only in the hosted app. Controlling a runner from the app needs Willem's decision first, because it would move secrets through the server. (2026-11-11-runners-in-the-app)
+- The local web page only watches runs: no control stops, retries or skips a single run, because that is the app's policy. Nothing about the page goes to the app: no poll field, no contract change. (2026-11-26-local-web-page)
 - The runner runs no model itself: no model backends, no downloads, no GPU work. Running models is the customer's own matter. (2026-11-11-no-local-model-work; 2026-11-17-local-model-providers)
 
 ## Licence, repositories and releases
@@ -33,6 +34,8 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
   - `go.yaml.in/yaml/v3`: parses a compose file's YAML, with aliases and merge keys, for the compose preflight; Go's standard library has no YAML parser. (2026-11-19-compose-local-files)
 - The name `cinderline` (command, config folder, service, keychain, branch prefix, MCP server name, version header) lives in one constant. (2026-11-05-runner-rewrite-details)
 - The runner shells out to the `docker` command, never the Docker SDK. The only interfaces are `Client`, `Forge`, `Environment` and `Workspace`. (AGENTS.md)
+- The web page is plain HTML, CSS and JavaScript in `internal/web/static/`, embedded with `go:embed`, with live data over server-sent events. No npm, bundler, framework or new Go dependency. (2026-11-26-local-web-page)
+- Every change to the config or the secrets goes through `internal/manage`, which the CLI commands and the page's handlers both call, with no new interface; the CLI keeps working with the daemon stopped. (2026-11-26-local-web-page)
 
 ## The runner API
 
@@ -60,6 +63,8 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - A turn's or a check's output keeps its first 1 MB and last 128 MB; past that the middle is replaced by one line `[N bytes of output cut]` and a warning is logged. The session ID, report, final usage and limits are still read; tool counts and OpenCode's tokens and cost miss a cut middle. A line still unfinished after 1 MB is not logged, one placeholder line stands for it. (2026-11-24-output-cap)
 - The runner verifies a resolved merge (clean tree, base and old head are ancestors, no conflict markers, no "Blocked" report) and undoes one it cannot verify. (2026-11-07-solo-team-resolves-merge-conflicts)
 - Tidying pushes stranded clones (commits no remote branch has), never forced; a failure only logs. (2026-11-07-publish-resilience; 2026-11-11-audit-fixes)
+- Each run is kept on disk for the page, `transcripts/<project>/<issue>/<run>/<NN>-<kind>.ndjson` in the state folder, one file per step, one JSON object per line: a cache the runner may lose, never a run table; a write error only logs. `transcript_days` (0 to 365, default 14, runner-wide or a project's own, which wins) is how long a run is kept; 0 removes a run when it ends. `transcript_max_size` (runner-wide, at least 100m, default 1g, written like `memory`) caps them all, oldest removed first. Old runs are removed at start and hourly. (2026-11-26-local-web-page)
+- The page shows a run as its steps in order with their outcomes and refused hosts, and an agent turn as its prompt (folded) and a timeline parsed from the client's output (Claude Code and Codex); other clients and unknown lines show as raw lines, which are always one click away. Project Manager runs are shown like team runs, marked as such. The live CPU and memory of the agent container and each compose service (not the proxy) come from `docker stats` only while a page watches that run, and are kept in memory only. (2026-11-26-local-web-page)
 
 ## Git, workspaces and branches
 
@@ -106,6 +111,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - A package's `downloads` (at most 10 of `{arch, path, url, sha256, executable}`, declared in the catalog) are checked with the package: `arch` `amd64` or `arm64`, `path` and `url` with the package's rules, `sha256` 64 lower-case hex. When its volume is filled, the runner fetches those of its engine's arch over its own network, each capped at 200 MB and 10 minutes, and refuses any that doesn't match its hash. It writes them into the package's root (755 or 644), never through a symlink, before the `complete` marker. With downloads, the root and the downloads name the volume too. A failed download fails the package. A strict runner refuses a package with downloads (`refused_strict`): `allow_skills` names the package's URL only. (2026-11-28-skill-downloads)
 - Every turn of a run, not the check, mounts each loaded package's repository read-only at `/skills/<name>` and loads it per client: Claude Code one `--plugin-dir` per package with `--strict-mcp-config` kept, never `--bare`; Gemini CLI an extension for a package with `gemini-extension.json`, else one mount per skill folder, a later package's clashing skill name left out and logged; OpenCode `skills.paths` and the package's `.opencode/{plugin,plugins}/*.{ts,js}`; Codex its `skills/` only. The client folders that get mounts are a tmpfs per turn. Only names the runner's own volume check listed (letters, digits, `. _ -`, no leading dot, no symlink) become mounts. Nothing is written into the clone and nothing is added to the allowlist; hooks need their interpreter in the image. The ponytail pin is gone. (2026-11-26-skill-package-mounts)
 - `host.docker.internal` is reachable only on the port of a model provider on the runner's own machine, for a turn that uses it, through the proxy only; a runner provider elsewhere is allowed on exactly its host and port, for such a turn only. `allow_hosts` refuses `localhost`, loopback addresses and `host.docker.internal`. (2026-11-17-local-model-providers; Willem 2026-11-17, extras)
+- Agent containers never reach the web page's port: the proxy refuses the runner's own machine, an app approval of it is dropped, and the config refuses a provider on the runner's own machine on the page's port, whether the page is on or not. (2026-11-26-local-web-page)
 
 ## Secrets and redaction
 
@@ -114,6 +120,9 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - Every secret the runner holds (runner token, git tokens, model and provider keys, scoped agent tokens) is replaced by a marker in log lines, in everything sent to the app, and in pull request titles and bodies, also base64, hex and URL-encoded. Values under 16 characters are skipped. It is a second line of defence only. (2026-11-11-secret-redaction; 2026-11-17-local-model-providers)
 - The runner never reads the sign-in files on the state volumes. (2026-11-11-secret-redaction)
 - Every push is scanned first: a value the runner holds, in any redacted form, in the header, message or added lines of a commit no other remote branch has stops the push and keeps the clone; a well-known shape of secret only warns. `publish` and `stop` report it with the outcome `secret` and the list `secrets` (kind, commit, path, never the value); the agent rewrites its unpushed commits. (2026-11-17-open-questions-answered, point 2; [2026-11-17-push-scan](2026-11-17-push-scan.md))
+- The web page's token is 32 random bytes in `web-token` in the state folder (0600), made when first needed, replaced by `web --new-token` and read on every request. `GET /?token=…` with it sets a cookie (HttpOnly, SameSite=Strict) and redirects to `/`; every other request needs the cookie, else `401` with a line naming `cinderline web`. The `Host` must be `127.0.0.1:<port>` or `localhost:<port>`, else `403` (DNS rebinding); a request other than GET or HEAD needs the page's own `Origin` or `Sec-Fetch-Site: same-origin`, else `403`. (2026-11-26-local-web-page)
+- Secrets are write-only on the page: it sets and deletes them and shows whether each is set, never a value, in no answer and no error. (2026-11-26-local-web-page)
+- Every transcript line passes `internal/redact` before it is stored or sent to the page; there is no way to see an unredacted line. (2026-11-26-local-web-page)
 
 ## Agent clients and the tools volume
 
@@ -145,6 +154,10 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 - The service is user level everywhere: a LaunchAgent, a systemd user unit, a Windows logon task from XML via `schtasks /create /xml`. (2026-11-05-runner-rewrite-details; 2026-11-07-kardianos-service)
 - The service restarts only on failure, so `cinderline stop` stops it until the next login; macOS does not restart a crash. (2026-11-07-service-restart)
 - `config.json` holds no secrets; providers are in its top-level `providers` list. (2026-11-17-local-model-providers)
+- The daemon serves the web page itself (`internal/web`), on `127.0.0.1` only, with no LAN or remote option: `web` (`"on"`, `"off"`, absent for the default, off for now) and `web_port` (1024 to 65535, default 7420), runner-wide. `cinderline web` prints the URL with the token and opens it in the browser (`--no-open`: print only); `web on|off`, `web port N` and `web --new-token` change it, and a running daemon takes the change at once. A taken port logs once at Error and the daemon runs on without the page. (2026-11-26-local-web-page)
+- The page's parts: Overview, Runs (each opens its run), Projects (one page each, with add, rename and remove), Providers, Settings, and Log (the runner log, followed). It does everything the CLI does except `login`, `uninstall`, `service` and `run`, for which it shows the command to type. Removing or renaming a project needs its key typed; rotating the CA, stop, drain and update a plain confirmation. (2026-11-26-local-web-page)
+- The page's look: a top bar, clear status colours, calm and mostly unboxed, "does anything need me?" first and the live run second, one column in the same order on every page, nothing that moves on its own. Light and dark follow the system until the top bar's switch is used, kept in that browser only. English only; current Chrome, Firefox, Safari and Edge; usable by keyboard and in a phone-width window. (2026-11-26-local-web-page; [2026-11-27-web-look](2026-11-27-web-look.md))
+- `cinderline transcripts [--project KEY] [DAYS|clear]` and `cinderline transcripts --max-size SIZE` show and set `transcript_days` and `transcript_max_size`. (2026-11-26-local-web-page)
 
 ## Logging and errors
 
@@ -174,5 +187,7 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 
 ## Known gaps between the rules and the code
 
+- The page is still off by default (`webDefaultOn` in `internal/config/config.go`), though 2026-11-26-local-web-page has the last `Web NN` issue turn it on; CLR-312, the last one, was documentation only. (2026-11-26-local-web-page)
+- `cinderline pin` (2026-11-27-agent-cli-updates, decided after the page) is not on the page, nor in its list of commands to type in a terminal. (2026-11-26-local-web-page)
 - Until the app has the push scan's contract change, it refuses a step reported with the outcome `secret` (`422`). (2026-11-17-push-scan)
 - Until the default image is pinned again, every runner builds it locally from unpinned inputs, as the pin no longer matches the Dockerfile. (2026-11-24-default-image-amd64)
