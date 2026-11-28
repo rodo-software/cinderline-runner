@@ -288,6 +288,11 @@ func (s set) volume() string {
 // Download fetches url into dst and keeps it only if it matches sum: a hex
 // SHA-256, or an npm integrity "sha512-<base64>".
 func Download(ctx context.Context, hc *http.Client, url, dst, sum string) error {
+	return download(ctx, hc, url, dst, sum, 0)
+}
+
+// download is Download that refuses a body over limit bytes; 0: no limit.
+func download(ctx context.Context, hc *http.Client, url, dst, sum string, limit int64) error {
 	var h hash.Hash
 	var encode func([]byte) string
 	if b64, ok := strings.CutPrefix(sum, "sha512-"); ok {
@@ -311,7 +316,14 @@ func Download(ctx context.Context, hc *http.Client, url, dst, sum string) error 
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(io.MultiWriter(f, h), resp.Body)
+	var body io.Reader = resp.Body
+	if limit > 0 {
+		body = io.LimitReader(resp.Body, limit+1)
+	}
+	n, err := io.Copy(io.MultiWriter(f, h), body)
+	if err == nil && limit > 0 && n > limit {
+		err = fmt.Errorf("download %s: larger than %d bytes, refused", url, limit)
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

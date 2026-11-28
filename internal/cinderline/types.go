@@ -205,6 +205,20 @@ type Skill struct {
 	URL    string `json:"url"`
 	Commit string `json:"commit"`
 	Path   string `json:"path"` // the app's null decodes as ""
+	// Downloads are files the package needs that are not in its
+	// repository, fetched into its volume once (decision 2026-11-28-skill-downloads).
+	Downloads []SkillDownload `json:"downloads"`
+}
+
+// SkillDownload is a file of a skill package for one Docker engine arch:
+// fetched from URL, kept only if it has SHA256 (hex), and written at Path,
+// relative to the package's root.
+type SkillDownload struct {
+	Arch       string `json:"arch"` // amd64 or arm64, as the engine names it
+	Path       string `json:"path"`
+	URL        string `json:"url"`
+	SHA256     string `json:"sha256"`
+	Executable bool   `json:"executable"`
 }
 
 // JobIssue is the offered issue. Body is untrusted text.

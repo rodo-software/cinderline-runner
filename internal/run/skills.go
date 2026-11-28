@@ -14,11 +14,14 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
-// maxSkills is the most skill packages a job names (the app's contract).
-const maxSkills = 10
+const (
+	maxSkills    = 10 // the most skill packages a job names (the app's contract)
+	maxDownloads = 10 // the most downloads a package names (decision 2026-11-28-skill-downloads)
+)
 
 var (
 	commitID = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	sha256ID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	// skillPathChars keeps a package's path free of what a docker --mount
 	// value or a shell would read: commas, quotes, colons, whitespace.
 	skillPathChars = regexp.MustCompile(`^[A-Za-z0-9._@+/-]+$`)
@@ -37,6 +40,20 @@ func checkSkill(s cinderline.Skill) error {
 		return errors.New("its commit is not 40 lower-case hex digits")
 	case s.Path != "" && !validSkillPath(s.Path):
 		return errors.New("its path is not a clean relative path without .., at most 200 characters")
+	case len(s.Downloads) > maxDownloads:
+		return errors.New("it names more than 10 downloads")
+	}
+	for _, d := range s.Downloads {
+		switch {
+		case d.Arch != "amd64" && d.Arch != "arm64":
+			return errors.New("a download's arch is not amd64 or arm64")
+		case !validSkillPath(d.Path):
+			return errors.New("a download's path is not a clean relative path without .., at most 200 characters")
+		case config.CheckSkillURL(d.URL) != nil:
+			return errors.New("a download's URL is not an https URL without user info, query or fragment, at most 500 characters")
+		case !sha256ID.MatchString(d.SHA256):
+			return errors.New("a download's sha256 is not 64 lower-case hex digits")
+		}
 	}
 	return nil
 }
@@ -74,12 +91,16 @@ func (p *Project) skillPackages(ctx context.Context, ref string, skills []cinder
 		case p.StrictHosts && !p.skillAllowed(s):
 			state = cinderline.SkillRefusedStrict
 			log.Info("skill package refused: strict host blocking is on and `"+name.Name+" allow-skill` does not allow it with this URL", "skill", s.Name, "url", s.URL)
+		case p.StrictHosts && len(s.Downloads) > 0:
+			// The allowance names the package's URL only, not the URLs of its downloads.
+			state = cinderline.SkillRefusedStrict
+			log.Info("skill package refused: strict host blocking is on and it has downloads, which `"+name.Name+" allow-skill` cannot allow", "skill", s.Name)
 		case p.fillSkill == nil:
 			log.Warn("skill package not loaded: this runner cannot fetch it", "skill", s.Name)
 		default:
-			vol, contents, err := p.fillSkill(ctx, s.URL, s.Commit, s.Path)
+			vol, contents, err := p.fillSkill(ctx, s.URL, s.Commit, s.Path, s.Downloads)
 			if err != nil {
-				log.Warn("skill package not loaded: it could not be fetched at its commit", "skill", s.Name, "url", s.URL, "commit", s.Commit, "err", err)
+				log.Warn("skill package not loaded: it or a download of it could not be fetched", "skill", s.Name, "url", s.URL, "commit", s.Commit, "err", err)
 				break
 			}
 			state = cinderline.SkillLoaded

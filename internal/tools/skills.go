@@ -4,15 +4,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
@@ -24,12 +28,50 @@ const SkillUnused = 30 * 24 * time.Hour
 // skillVolume matches the volumes SkillVolume names.
 var skillVolume = regexp.MustCompile("^" + name.Name + `-skill-[0-9a-f]{32}$`)
 
+// A skill package's download is refused when it is larger or slower.
+const (
+	skillDownloadMax  = 200 << 20
+	skillDownloadTime = 10 * time.Minute
+)
+
 // SkillVolume is the volume of the skill package at url and commit, which
 // every project shares, named from their hash as a tools set's volume is.
-func SkillVolume(url, commit string) string {
-	h := sha256.Sum256([]byte(url + "\n" + commit))
+// Downloads go into the package's root, so with downloads the root and the
+// downloads are in the hash too: changing them gives a new volume.
+func SkillVolume(url, commit, path string, downloads []cinderline.SkillDownload) string {
+	key := url + "\n" + commit
+	if len(downloads) > 0 {
+		b, _ := json.Marshal(downloads) // a slice of plain structs always marshals
+		key += "\n" + path + "\n" + string(b)
+	}
+	h := sha256.Sum256([]byte(key))
 	return name.Name + "-skill-" + hex.EncodeToString(h[:16])
 }
+
+// skillInstallScript writes the checked downloads /s/0, /s/1... into the
+// package's root $1 of the volume at /t, the rest of the arguments a path
+// relative to the root and a mode for each, then marks the volume complete.
+// A download's folder must not be reached through a symlink, and its path
+// must not be a symlink or a folder, so no file lands outside the root.
+const skillInstallScript = `set -e
+r=/t/` + workspace.SkillRepo + `${1:+/$1}
+shift
+if [ $# -gt 0 ]; then
+  test -d "$r" && test "$(realpath "$r")" = "$r" || { echo "the package's path is not a folder of the repository" >&2; exit 1; }
+fi
+i=0
+while [ $# -gt 0 ]; do
+  f=$r/$1
+  d=$(dirname "$f")
+  mkdir -p "$d"
+  test "$(realpath "$d")" = "$d" && test ! -L "$f" && test ! -d "$f" ||
+    { echo "download path $1 is reached through a symlink or is a folder: refused" >&2; exit 1; }
+  cp "/s/$i" "$f"
+  chmod "$2" "$f"
+  i=$((i+1))
+  shift 2
+done
+touch /t/complete`
 
 // skillCheckScript exits 3 when the volume at /t is not complete, and 4 when
 // $1 is no folder of the repository, or reaches one through a symlink. Else
@@ -82,8 +124,9 @@ func parseContents(out string) SkillContents {
 // Skills fills and tidies the volumes of skill packages (decision
 // 2026-11-26-skill-packages in the app repository).
 type Skills struct {
-	State   string         // the host state folder: a lock per volume, whose time is its last use
+	State   string         // the host state folder: a lock per volume, whose time is its last use, and the downloads
 	Exec    workspace.Exec // runs docker
+	HTTP    *http.Client   // fetches the downloads; nil means http.DefaultClient
 	Log     *slog.Logger
 	Project string // the project whose run fills, for labels and log lines
 }
@@ -96,10 +139,10 @@ func (s *Skills) lockFile(volume string) string {
 // Fill returns the volume of the package at url and commit, filled first
 // unless it is complete, behind a file lock so that projects fill it once
 // and share it, and what the package's root at path holds. It fails when
-// path is not a folder of the repository, and records the use for Tidy.
-// url, commit and path are checked by the caller.
-func (s *Skills) Fill(ctx context.Context, url, commit, path string) (string, SkillContents, error) {
-	vol := SkillVolume(url, commit)
+// path is not a folder of the repository or a download fails, and records
+// the use for Tidy. url, commit, path and downloads are checked by the caller.
+func (s *Skills) Fill(ctx context.Context, url, commit, path string, downloads []cinderline.SkillDownload) (string, SkillContents, error) {
+	vol := SkillVolume(url, commit, path, downloads)
 	if err := os.MkdirAll(filepath.Join(s.State, "skills"), 0o700); err != nil {
 		return "", SkillContents{}, err
 	}
@@ -116,12 +159,7 @@ func (s *Skills) Fill(ctx context.Context, url, commit, path string) (string, Sk
 	out, err := s.check(ctx, vol, path)
 	if exit := (interface{ ExitCode() int })(nil); errors.As(err, &exit) && exit.ExitCode() == 3 {
 		// An interrupted fill left no marker: fill it anew, in an empty volume.
-		for _, argv := range [][]string{{"docker", "volume", "rm", "--force", vol}, {"docker", "volume", "create", vol}} {
-			if _, err := s.Exec(ctx, nil, argv...); err != nil {
-				return "", SkillContents{}, err
-			}
-		}
-		if err := workspace.FetchSkill(ctx, s.Exec, s.Log, s.Project, vol, url, commit); err != nil {
+		if err := s.fill(ctx, vol, url, commit, path, downloads); err != nil {
 			return "", SkillContents{}, err
 		}
 		out, err = s.check(ctx, vol, path)
@@ -133,6 +171,62 @@ func (s *Skills) Fill(ctx context.Context, url, commit, path string) (string, Sk
 		return "", SkillContents{}, err
 	}
 	return vol, parseContents(out), nil
+}
+
+// fill fills vol anew: the package's downloads for the Docker engine's arch
+// are fetched and checked first, on the runner's own network (decision
+// 2026-11-28-skill-downloads), then the repository, then the downloads go
+// in and the complete marker last.
+func (s *Skills) fill(ctx context.Context, vol, url, commit, path string, downloads []cinderline.SkillDownload) error {
+	staging := filepath.Join(s.State, "skills", vol)
+	if err := os.RemoveAll(staging); err != nil {
+		return err
+	}
+	if err := os.Mkdir(staging, 0o700); err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+	install := []string{"docker", "run", "--rm", "--network", "none", "-v", vol + ":/t", "-v", staging + ":/s:ro",
+		"--entrypoint", "sh", workspace.GitImage, "-c", skillInstallScript, "sh", path}
+	if len(downloads) > 0 {
+		out, err := s.Exec(ctx, nil, "docker", "version", "--format", "{{.Server.Arch}}")
+		if err != nil {
+			return err
+		}
+		arch := strings.TrimSpace(out)
+		hc := s.HTTP
+		if hc == nil {
+			hc = http.DefaultClient
+		}
+		n := 0 // the files fetched: /s/0, /s/1...
+		for _, d := range downloads {
+			if d.Arch != arch {
+				continue
+			}
+			dctx, cancel := context.WithTimeout(ctx, skillDownloadTime)
+			err := download(dctx, hc, d.URL, filepath.Join(staging, strconv.Itoa(n)), d.SHA256, skillDownloadMax)
+			cancel()
+			if err != nil {
+				return err
+			}
+			mode := "644"
+			if d.Executable {
+				mode = "755"
+			}
+			install = append(install, d.Path, mode)
+			n++
+		}
+	}
+	for _, argv := range [][]string{{"docker", "volume", "rm", "--force", vol}, {"docker", "volume", "create", vol}} {
+		if _, err := s.Exec(ctx, nil, argv...); err != nil {
+			return err
+		}
+	}
+	if err := workspace.FetchSkill(ctx, s.Exec, s.Log, s.Project, vol, url, commit); err != nil {
+		return err
+	}
+	_, err := s.Exec(ctx, nil, install...)
+	return err
 }
 
 // check runs skillCheckScript on vol, read-only.

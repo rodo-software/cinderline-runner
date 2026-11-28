@@ -99,8 +99,8 @@ type Project struct {
 	deleteSession func(ctx context.Context, ref, session string) error                                                         // a session's files on the state volume
 	prepare       func(ctx context.Context, proj cinderline.Project, base string) (memory int64, mount tools.Mount, err error) // the environment and the run's tools mount; memory as environment.Docker.AgentImage
 	fetchExtras   func(ctx context.Context, path string, repos []workspace.Extra) map[string]error
-	fillSkill     func(ctx context.Context, url, commit, path string) (volume string, contents tools.SkillContents, err error) // a skill package's shared volume, as tools.Skills.Fill
-	tidySkills    func(ctx context.Context)                                                                                    // removes the skill package volumes unused for long, as tools.Skills.Tidy
+	fillSkill     func(ctx context.Context, url, commit, path string, downloads []cinderline.SkillDownload) (volume string, contents tools.SkillContents, err error) // a skill package's shared volume, as tools.Skills.Fill
+	tidySkills    func(ctx context.Context)                                                                                                                          // removes the skill package volumes unused for long, as tools.Skills.Tidy
 	detect        func(ctx context.Context) (clients []cinderline.ReportClient, openRouter bool)
 	listModels    func(ctx context.Context, clients []string) map[string][]string                // each client's models; none for one that failed
 	checkTools    func(ctx context.Context, v tools.Versions, listed []string) ([]string, error) // as checkTools, in the default image

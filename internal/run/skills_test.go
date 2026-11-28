@@ -25,16 +25,35 @@ func pkg(name, url, path string) cinderline.Skill {
 // fills records the skill package fetches of a project and answers each
 // from errs by URL (none: filled).
 type fills struct {
-	mu       sync.Mutex
-	calls    []string // url@commit:path
-	errs     map[string]error
-	contents map[string]tools.SkillContents // by URL; none: an empty package
+	mu        sync.Mutex
+	calls     []string // url@commit:path
+	errs      map[string]error
+	contents  map[string]tools.SkillContents // by URL; none: an empty package
+	downloads int                            // the downloads passed, all fills
 }
 
-func (f *fills) fill(_ context.Context, url, commit, path string) (string, tools.SkillContents, error) {
+// withDefaults is d with a valid value for each field it leaves empty.
+func withDefaults(d cinderline.SkillDownload) cinderline.SkillDownload {
+	if d.Arch == "" {
+		d.Arch = "amd64"
+	}
+	if d.Path == "" {
+		d.Path = "bin/linux-x64/e"
+	}
+	if d.URL == "" {
+		d.URL = "https://github.com/o/p/releases/download/v1/e-linux-x64"
+	}
+	if d.SHA256 == "" {
+		d.SHA256 = strings.Repeat("a", 64)
+	}
+	return d
+}
+
+func (f *fills) fill(_ context.Context, url, commit, path string, downloads []cinderline.SkillDownload) (string, tools.SkillContents, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, url+"@"+commit+":"+path)
+	f.downloads += len(downloads)
 	if err := f.errs[url]; err != nil {
 		return "", tools.SkillContents{}, err
 	}
@@ -69,6 +88,25 @@ func TestSkillChecks(t *testing.T) {
 		pkg("p", "https://github.com/o/p", "a\nb"),
 		pkg("p", "https://github.com/o/p", strings.Repeat("a", 201)),
 	}
+	for _, bad1 := range []func(*cinderline.SkillDownload){
+		func(d *cinderline.SkillDownload) { d.Arch = "x64" }, func(d *cinderline.SkillDownload) { d.Arch = "" },
+		func(d *cinderline.SkillDownload) { d.Path = "../x" }, func(d *cinderline.SkillDownload) { d.Path = "/etc/x" },
+		func(d *cinderline.SkillDownload) { d.Path = "a/../../x" }, func(d *cinderline.SkillDownload) { d.Path = "" },
+		func(d *cinderline.SkillDownload) { d.Path = "a,dst=/etc" },
+		func(d *cinderline.SkillDownload) { d.URL = "http://example.com/e" }, func(d *cinderline.SkillDownload) { d.URL = "https://u:p@example.com/e" },
+		func(d *cinderline.SkillDownload) { d.URL = "file:///etc/passwd" }, func(d *cinderline.SkillDownload) { d.URL = "" },
+		func(d *cinderline.SkillDownload) { d.SHA256 = "" }, func(d *cinderline.SkillDownload) { d.SHA256 = strings.Repeat("A", 64) },
+		func(d *cinderline.SkillDownload) { d.SHA256 = strings.Repeat("a", 63) },
+	} {
+		d := withDefaults(cinderline.SkillDownload{})
+		bad1(&d)
+		s := pkg("p", "https://github.com/o/p", "")
+		s.Downloads = []cinderline.SkillDownload{d}
+		bad = append(bad, s)
+	}
+	tooMany := pkg("p", "https://github.com/o/p", "")
+	tooMany.Downloads = slices.Repeat([]cinderline.SkillDownload{withDefaults(cinderline.SkillDownload{})}, 11)
+	bad = append(bad, tooMany)
 	for _, s := range bad {
 		if checkSkill(s) == nil {
 			t.Errorf("%+v passed the check", s)
@@ -78,6 +116,7 @@ func TestSkillChecks(t *testing.T) {
 		pkg("impeccable", "https://github.com/o/impeccable", "plugin"),
 		pkg("pony-tail-2", "https://git.example.com:8443/o/p.git", ""),
 		pkg("p", "https://github.com/o/p", ".claude-plugin/x_y"),
+		{Name: "engine", URL: "https://github.com/o/p", Commit: commit, Downloads: slices.Repeat([]cinderline.SkillDownload{withDefaults(cinderline.SkillDownload{})}, 10)},
 	}
 	for _, s := range good {
 		if err := checkSkill(s); err != nil {
@@ -90,7 +129,7 @@ func TestSkillChecks(t *testing.T) {
 	f.p.fillSkill = fl.fill
 	bad = []cinderline.Skill{bad[0], bad[4], bad[9], bad[13], bad[19]} // within the job's ten
 	loaded, states := f.p.skillPackages(context.Background(), "CSR-1", append(bad, good...))
-	if len(fl.calls) != len(good) || len(loaded) != len(good) {
+	if len(fl.calls) != len(good) || len(loaded) != len(good) || fl.downloads != 10 {
 		t.Fatalf("fetched %q, loaded %+v; want only the good ones", fl.calls, loaded)
 	}
 	if len(states) != len(bad)+len(good) {
@@ -132,24 +171,26 @@ func TestSkillFetchFailsAndLimits(t *testing.T) {
 	}
 }
 
-// A strict runner loads only the packages config allows by name and URL;
-// one allowed under another URL is refused again, and nothing refused is
-// fetched.
+// A strict runner loads only the packages config allows by name and URL,
+// and none with downloads, whose URLs that allowance does not cover; one
+// allowed under another URL is refused again, and nothing refused is fetched.
 func TestSkillStrict(t *testing.T) {
-	skills := []cinderline.Skill{pkg("ponytail", "https://github.com/o/ponytail", ""), pkg("moved", "https://github.com/evil/moved", ""), pkg("other", "https://github.com/o/other", "")}
+	engine := pkg("engine", "https://github.com/o/engine", "")
+	engine.Downloads = []cinderline.SkillDownload{withDefaults(cinderline.SkillDownload{})}
+	skills := []cinderline.Skill{pkg("ponytail", "https://github.com/o/ponytail", ""), pkg("moved", "https://github.com/evil/moved", ""), pkg("other", "https://github.com/o/other", ""), engine}
 	for _, tc := range []struct {
 		name   string
 		strict bool
 		want   []string
 	}{
-		{"strict", true, []string{"loaded", "refused_strict", "refused_strict"}},
-		{"not strict", false, []string{"loaded", "loaded", "loaded"}},
+		{"strict", true, []string{"loaded", "refused_strict", "refused_strict", "refused_strict"}},
+		{"not strict", false, []string{"loaded", "loaded", "loaded", "loaded"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
 			fl := &fills{}
 			f.p.fillSkill, f.p.StrictHosts = fl.fill, tc.strict
-			f.p.AllowSkills = []config.AllowedSkill{{Name: "ponytail", URL: "https://github.com/o/ponytail"}, {Name: "moved", URL: "https://github.com/o/moved"}}
+			f.p.AllowSkills = []config.AllowedSkill{{Name: "ponytail", URL: "https://github.com/o/ponytail"}, {Name: "moved", URL: "https://github.com/o/moved"}, {Name: "engine", URL: "https://github.com/o/engine"}}
 			_, states := f.p.skillPackages(context.Background(), "CSR-1", skills)
 			var got []string
 			for _, s := range states {
