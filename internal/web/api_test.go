@@ -946,9 +946,14 @@ func TestAPIWebMovesThePage(t *testing.T) {
 	paths := config.Paths{Dir: dir, File: filepath.Join(dir, "config.json"), State: dir}
 	var srv *httptest.Server
 	reloads := 0
+	// The handler reloads after its answer is out, and CloseClientConnections
+	// closes every connection: the next PUT waits for it, or its own
+	// connection may be the one closed (EOF, CLR-320).
+	reloaded := make(chan struct{}, 2)
 	srv = httptest.NewServer(Handler(dir, port, Handlers{Paths: paths, Reload: func() error {
 		reloads++
 		srv.CloseClientConnections() // what serveWeb's Close does to the page's connections
+		reloaded <- struct{}{}
 		return nil
 	}}))
 	t.Cleanup(srv.Close)
@@ -972,9 +977,11 @@ func TestAPIWebMovesThePage(t *testing.T) {
 	if code, body := putWeb(`{"on": true, "port": 8080}`); code != http.StatusOK || body != `{"web_addr":"127.0.0.1:8080","web_on":true}` {
 		t.Errorf("PUT on 8080 = %d %s", code, body)
 	}
+	<-reloaded
 	if code, body := putWeb(`{"on": false}`); code != http.StatusOK || body != `{"web_addr":"127.0.0.1:8080","web_on":false}` {
 		t.Errorf("PUT off = %d %s", code, body)
 	}
+	<-reloaded
 	if code, body := putWeb(`{"port": 80}`); code != http.StatusBadRequest || !strings.Contains(body, "1024 to 65535") {
 		t.Errorf("PUT port 80 = %d %s, want 400 with the range", code, body)
 	}

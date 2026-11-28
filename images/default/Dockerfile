@@ -20,8 +20,14 @@
 # new user namespaces, which the run container's seccomp profile, no
 # capabilities and no-new-privileges refuse; the container is the sandbox and
 # a renderer gets no more than the agent already has.
-# --disable-background-networking, so it asks the egress proxy for no update
-# or Google hosts. --disable-dev-shm-usage, as Docker's /dev/shm is 64 MB.
+# --disable-background-networking, for fewer update and Google requests.
+# --disable-dev-shm-usage, as Docker's /dev/shm is 64 MB. The file also adds,
+# for Chromium only, the Google service hosts it still asks for at start
+# (CLR-320) to no_proxy, so
+# they go direct and fail at DNS on the run's internal network instead of
+# reaching the egress proxy as refused hosts a person is asked about. Exact
+# hosts, not domains: a page's own fonts.googleapis.com must still reach the
+# proxy.
 FROM php:8.4-cli-bookworm
 
 COPY --from=mlocati/php-extension-installer /usr/bin/install-php-extensions /usr/local/bin/
@@ -35,7 +41,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && install-php-extensions bcmath gd intl pdo_mysql zip \
     && echo 'memory_limit = -1' > /usr/local/etc/php/conf.d/memory-limit.ini \
-    && echo 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-background-networking --disable-dev-shm-usage"' > /etc/chromium.d/no-sandbox \
+    && printf '%s\n' \
+        'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --disable-background-networking --disable-dev-shm-usage"' \
+        'export no_proxy="${no_proxy:+$no_proxy,}clients2.google.com,accounts.google.com,update.googleapis.com,redirector.gvt1.com"' \
+        > /etc/chromium.d/no-sandbox \
     && useradd --create-home --uid 1000 runner
 
 ENV CHROME_PATH=/usr/bin/chromium \
