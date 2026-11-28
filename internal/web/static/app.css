@@ -377,6 +377,10 @@ details.fold[open] > summary::before { transform: rotate(45deg); }
 details.fold > summary:hover { color: var(--text); }
 details.fold > summary .badge { margin-left: var(--s1); }
 
+/* A run's step: its prompt and its output lines, each in a box that scrolls. */
+.box { max-height: 32rem; overflow-y: auto; }
+.box:focus-visible { outline-offset: -2px; }
+
 /* Small graphs, inline SVG: a 2px line over a soft area. */
 
 .usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--s5); margin-bottom: var(--s5); }

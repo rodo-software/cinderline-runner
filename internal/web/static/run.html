@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- One run: run.js fills it from /api/runs/{project}/{issue}/{run} and its steps' events. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="run.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/runs.html" aria-current="page">Runs</a></li>
+      <li><a href="/log.html">Log</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <p class="crumbs"><a href="/runs.html">Runs</a> › <a id="project"></a></p>
+  <h1 id="issue">Run</h1>
+  <p class="lead" id="lead" hidden></p>
+  <p class="crumbs page-links" id="links" hidden><a id="cinderline" target="_blank" rel="noopener"></a></p>
+</header>
+
+<p class="muted" id="missing" hidden></p>
+
+<section aria-labelledby="steps-h" id="steps-section" hidden>
+  <h2 id="steps-h">Steps</h2>
+  <div class="folds" id="steps"></div>
+</section>
+</main>
+</body>
+</html>

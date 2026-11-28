@@ -28,13 +28,17 @@ const reachable = (ok) => {
 // listen calls onData with each event of the stream at url, parsed as JSON,
 // and onOpen, if given, each time the stream (re)connects. While the stream is
 // down a bar says so; the browser reconnects by itself, and after a refused
-// answer listen tries again every 5 s. Call it once the page is parsed.
+// answer listen tries again every 5 s. The event named done ends the stream:
+// the browser would otherwise connect again and get it all once more. listen
+// returns the function that closes the stream. Call it once the page is parsed.
 const listen = (url, onData, onOpen) => {
-  const retry = () => setTimeout(open, 5000);
+  let es, timer, closed = false;
+  const retry = () => { if (!closed) timer = setTimeout(open, 5000); };
   const open = () => {
-    const es = new EventSource(url);
+    es = new EventSource(url);
     if (onOpen) es.onopen = onOpen;
     es.onmessage = (e) => { reachable(true); onData(JSON.parse(e.data)); };
+    es.addEventListener("done", () => es.close());
     es.onerror = () => {
       reachable(false);
       if (es.readyState !== EventSource.CLOSED) return;
@@ -49,6 +53,7 @@ const listen = (url, onData, onOpen) => {
     };
   };
   open();
+  return () => { closed = true; clearTimeout(timer); es.close(); };
 };
 
 // bytes is n bytes in binary units, such as "8.5 GiB".
@@ -77,6 +82,18 @@ const when = (t) => {
   n.title = new Date(t).toLocaleString();
   return n;
 };
+
+// took is a duration of ms milliseconds, such as "9 min".
+const took = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + " s";
+  const m = Math.floor(s / 60);
+  return m < 60 ? m + " min" : Math.floor(m / 60) + " h " + (m % 60) + " min";
+};
+
+// outcome is the badge of a run's or a step's outcome, or of one in flight.
+const outcome = (word, live) => live ? el("span", "badge running", "running")
+  : el("span", "badge " + ({ ok: "ok", failed: "error", stopped: "warn" }[word] || ""), word || "none");
 
 // runHref is the page of run r, an entry of /api/runs.
 const runHref = (r) => "run.html?" + new URLSearchParams({ project: r.project, issue: r.issue, run: r.run });

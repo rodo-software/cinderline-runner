@@ -3,15 +3,6 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const select = $("project");
-  const outcomes = { ok: "ok", failed: "error", stopped: "warn" };
-
-  // took is a duration of ms milliseconds, such as "9 min".
-  const took = (ms) => {
-    const s = Math.max(0, Math.round(ms / 1000));
-    if (s < 60) return s + " s";
-    const m = Math.floor(s / 60);
-    return m < 60 ? m + " min" : Math.floor(m / 60) + " h " + (m % 60) + " min";
-  };
 
   const build = (r) => {
     const link = el("a", "", r.issue);
@@ -29,7 +20,7 @@
     const start = el("td");
     const dur = el("td", "num");
     const tr = el("tr", "", issue, el("td", "", r.project), start, dur, el("td", "num", String(r.steps)),
-      el("td", "end", r.live ? el("span", "badge running", "running") : el("span", "badge " + (outcomes[r.outcome] || ""), r.outcome || "none")));
+      el("td", "end", outcome(r.outcome, r.live)));
     // "3 minutes ago" and a live run's duration move on with each refresh.
     const tick = () => {
       start.replaceChildren(when(r.start));
