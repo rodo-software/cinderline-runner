@@ -30,8 +30,11 @@ var raw = []Event{{Kind: "raw"}}
 // parseOut is the events of an out line of a step of client. A client
 // without a parser gets raw for every line.
 func parseOut(client, line string) []Event {
-	if client == "claude" {
+	switch client {
+	case "claude":
 		return parseClaude(line)
+	case "codex":
+		return parseCodex(line)
 	}
 	return raw
 }
