@@ -1,6 +1,7 @@
 <!doctype html>
 <!-- A project: project.js fills it from /api/config, /api/status and the
-     project's keys, for the project of ?key=, &url= and &workspace=. -->
+     project's keys, for the project of ?key=, &url= and &workspace=, and
+     sends its forms. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -54,17 +55,44 @@
   <h2 id="h-hosts">Hosts</h2>
   <p class="muted">The hosts its runs may reach.</p>
   <div id="hosts"></div>
+  <form class="row" id="add-host">
+    <label>Host and port <input type="text" name="host" placeholder="example.com:443" autocomplete="off"></label>
+    <button type="submit">Add host</button>
+  </form>
 </section>
 
 <section aria-labelledby="h-skills">
   <h2 id="h-skills">Skills</h2>
   <p class="muted">The skill packages its runs may load with strict hosts on.</p>
   <div id="skills"></div>
+  <form class="row" id="add-skill">
+    <label>Name <input type="text" name="name" size="12" autocomplete="off"></label>
+    <label>Repository URL <input type="text" name="url" placeholder="https://github.com/owner/repo" autocomplete="off"></label>
+    <button type="submit">Add skill</button>
+  </form>
 </section>
 
 <section aria-labelledby="h-limits">
   <h2 id="h-limits">Limits</h2>
   <div id="limits"></div>
+  <!-- novalidate: the daemon checks the values, the browser only sends them. -->
+  <form class="row" id="memory" novalidate>
+    <label>Memory per agent container <input type="text" name="value" size="8" autocomplete="off" aria-describedby="memory-hint"></label>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" data-clear>Use the default</button>
+  </form>
+  <p class="hint" id="memory-hint">Such as 8g or 512m.</p>
+  <form class="row" id="parallel" novalidate>
+    <label>Parallel runs <input type="number" name="value" min="1" max="10"></label>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" data-clear>Use the runner's value</button>
+  </form>
+  <form class="row" id="days" novalidate>
+    <label>Transcript days <input type="number" name="value" min="0" max="365" aria-describedby="days-hint"></label>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" data-clear>Use the runner's value</button>
+  </form>
+  <p class="hint" id="days-hint">How many days a run's transcript is kept, 0 to 365. 0 keeps nothing after a run ends.</p>
 </section>
 
 <section aria-labelledby="h-secrets">

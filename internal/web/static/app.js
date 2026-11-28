@@ -152,6 +152,60 @@ const getJSON = (url) => fetch(url).then((r) => {
   return r.json();
 });
 
+// describe adds id to, or with on false removes it from, the
+// aria-describedby of n, keeping the ids it holds besides.
+const describe = (n, id, on) => {
+  const ids = (n.getAttribute("aria-describedby") || "").split(" ").filter((x) => x && x !== id);
+  if (on) ids.push(id);
+  if (ids.length) n.setAttribute("aria-describedby", ids.join(" "));
+  else n.removeAttribute("aria-describedby");
+};
+
+// send sends body as JSON with method to url, for button, which is disabled
+// while it runs. A refusal shows the answer's error under button's form, or
+// beside button when it has none, tied to its fields with aria-describedby;
+// the next answer of 2xx takes it away. It resolves to whether the answer was
+// 2xx: the page then loads its data again. The browser checks nothing
+// itself: what the daemon refuses, it says.
+const sendErrors = new WeakMap(); // a form's or a lone button's error line
+let sendIds = 0;
+const send = async (button, method, url, body) => {
+  const at = button.form || button;
+  const fields = button.form ? [...button.form.querySelectorAll("input, select, textarea")] : [button];
+  let line = sendErrors.get(at);
+  if (!line) {
+    line = el("p", "field-error");
+    line.id = "send-error-" + ++sendIds;
+    line.setAttribute("role", "alert");
+    sendErrors.set(at, line);
+  }
+  const show = (text) => {
+    line.textContent = text;
+    if (text) at.after(line);
+    else line.remove();
+    fields.forEach((f) => describe(f, line.id, !!text));
+  };
+  const focused = document.activeElement === button;
+  button.disabled = true;
+  try {
+    const r = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (r.status === 401) location.reload();
+    if (r.ok) {
+      show("");
+      return true;
+    }
+    const answer = await r.json().catch(() => ({}));
+    show(answer.error || r.status + " " + r.statusText);
+  } catch {
+    show("The runner did not answer.");
+  } finally {
+    button.disabled = false;
+    // A disabled button loses the focus; it gets it back.
+    if (focused && document.activeElement === document.body) button.focus();
+  }
+  return false;
+};
+
 // copyable is a block of the command text, to type in a terminal, with a
 // button that copies it. Where the clipboard is refused the button selects
 // the text instead, for Ctrl+C.

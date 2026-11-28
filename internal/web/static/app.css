@@ -478,6 +478,9 @@ input::placeholder { color: var(--muted); }
 input[type="number"] { width: 6.5rem; }
 input:user-invalid { border-color: var(--err); }
 .hint { font-size: var(--t-1); color: var(--muted); margin: var(--s2) 0 0; }
+/* The daemon's refusal of what a form or a button sent (send in app.js). */
+.field-error { font-size: var(--t-1); color: var(--err); margin: var(--s2) 0 0; }
+.items li > .field-error { flex-basis: 100%; margin: 0; }
 
 /* A switch, a checkbox drawn as one: plain HTML, it still works by keyboard. */
 .switch { display: inline-flex; flex-direction: row; align-items: center; gap: var(--s2); color: var(--text); cursor: pointer; font-size: var(--t-1); }

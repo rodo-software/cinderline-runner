@@ -1,7 +1,7 @@
 // A project: its panels from /api/config, its state from /api/status and its
 // secrets from /api/projects/{id}/keys, for the project of ?key=, &url= and
-// &workspace= (projectHref). Read-only: each panel shows what is set, else
-// the default that applies.
+// &workspace= (projectHref). Each panel shows what is set, else the default
+// that applies; its forms change it with send.
 (() => {
   const $ = (id) => document.getElementById(id);
   const q = new URLSearchParams(location.search);
@@ -21,19 +21,28 @@
   const table = (head, rows) => el("div", "scroll", el("table", "rows",
     el("thead", "", el("tr", "", ...head.map((h) => { const th = el("th", "", h); th.scope = "col"; return th; }))),
     el("tbody", "", ...rows.map((r) => el("tr", "", ...r.map((c) => el("td", "", c)))))));
-  // A list of the project's own items, then the runner-wide ones.
-  const items = (own, all, show) => own.length + all.length
-    ? el("ul", "items", ...own.map((x) => el("li", "", show(x))),
-      ...all.map((x) => el("li", "", show(x), el("span", "muted small", "all projects"))))
+  const button = (text, cls, label, onClick) => {
+    const b = el("button", cls, text);
+    b.type = "button";
+    b.setAttribute("aria-label", label);
+    b.addEventListener("click", () => onClick(b));
+    return b;
+  };
+  // A list of the project's own items, each with a Remove button that calls
+  // remove, then the runner-wide ones, changed on Settings.
+  const items = (own, all, show, label, remove) => own.length + all.length
+    ? el("ul", "items", ...own.map((x) => el("li", "", show(x), button("Remove", "danger", "Remove " + label(x), (b) => remove(b, x)))),
+      ...all.map((x) => {
+        const a = el("a", "", "Settings");
+        a.href = "/settings.html";
+        return el("li", "", show(x), el("span", "muted small", "all projects, on ", a));
+      }))
     : none("None.");
   // A word for a shell: quoted unless it is plainly safe as it is.
   const sh = (s) => /^[\w.:/@%+=-]+$/.test(s) ? s : "'" + s.replaceAll("'", "'\\''") + "'";
 
-  const draw = (cfg, p, s, keys, cmd) => {
-    const c = cfg.config;
-    const d = cfg.defaults;
-    document.title = p.key + " · Projects · Cinderline runner";
-    $("title").textContent = p.key;
+  // The parts that change with the status, every 5 s.
+  const drawStatus = (p, s) => {
     const runs = s ? runCount(s) : 0;
     $("lead").replaceChildren(s ? projectState(s, runs) : el("span", "status", "Not started"),
       el("span", "", runs + (runs === 1 ? " run" : " runs") + " in flight"));
@@ -48,6 +57,22 @@
       ["Runs in flight", s ? [...(s.issues || []), ...s.manager ? [s.manager + " (Project Manager)"] : []].join(", ") || "None" : "None"],
       ["Last error", s?.last_error ? [s.last_error, " ", when(s.last_error_at)] : "None"],
     ]));
+  };
+
+  // A field shows the project's own value, set again only when that changed,
+  // so a value being typed stays; was keeps the value it last showed.
+  const fill = (input, v) => {
+    if (input.dataset.was === v) return;
+    input.value = input.dataset.was = v;
+  };
+
+  // The parts that change with the config, drawn again only after a change,
+  // so a form's error and a focused button stay.
+  const drawConfig = (cfg, p, keys, cmd) => {
+    const c = cfg.config;
+    const d = cfg.defaults;
+    document.title = p.key + " · Projects · Cinderline runner";
+    $("title").textContent = p.key;
 
     const repos = p.extra_repositories || [];
     $("repos").replaceChildren(repos.length
@@ -55,15 +80,24 @@
         el("span", "status" + (r.has_token ? " ok" : ""), r.has_token ? "set" : "not set")]))
       : none("None."));
 
-    $("hosts").replaceChildren(items(p.allow_hosts || [], c.allow_hosts || [], (h) => el("code", "", h)));
+    $("hosts").replaceChildren(items(p.allow_hosts || [], c.allow_hosts || [], (h) => el("code", "", h), (h) => h,
+      (b, h) => act(b, "DELETE", "/api/hosts", { project: p.id, host: h })));
     $("skills").replaceChildren(items(p.allow_skills || [], c.allow_skills || [],
-      (k) => el("span", "", el("strong", "", k.name), " ", el("span", "muted small", k.url))));
+      (k) => el("span", "", el("strong", "", k.name), " ", el("span", "muted small", k.url)), (k) => k.name,
+      (b, k) => act(b, "DELETE", "/api/skills", { project: p.id, name: k.name })));
 
     $("limits").replaceChildren(kv([
       ["Memory per agent container", p.memory || fallback(d.memory, "default")],
       ["Parallel runs", p.max_parallel_runs ? String(p.max_parallel_runs) : wide(c.max_parallel_runs, d.max_parallel_runs)],
       ["Transcript days", p.transcript_days != null ? String(p.transcript_days) : wide(c.transcript_days, d.transcript_days)],
     ]));
+    const [memory, parallel, days] = ["memory", "parallel", "days"].map((id) => $(id).elements.value);
+    fill(memory, p.memory || "");
+    fill(parallel, p.max_parallel_runs ? String(p.max_parallel_runs) : "");
+    fill(days, p.transcript_days != null ? String(p.transcript_days) : "");
+    memory.placeholder = d.memory;
+    parallel.placeholder = c.max_parallel_runs ?? d.max_parallel_runs;
+    days.placeholder = c.transcript_days ?? d.transcript_days;
 
     $("secrets").replaceChildren(keys ? table(["Secret", "State"], keys.map((k) => [k.kind,
       el("span", "status" + (k.set ? " ok" : ""), k.set ? "set" : "not set")])) : none("Not known: the runner did not answer."));
@@ -71,7 +105,7 @@
     $("login").replaceChildren(copyable(cmd));
   };
 
-  let cfg, st, keys, name, last = "";
+  let cfg, st, keys, name, cur, lastConfig = "", lastStatus = "";
   const render = () => {
     const projects = cfg.config.projects || [];
     const i = projects.findIndex(wanted);
@@ -82,16 +116,22 @@
         + (want.workspace ? " in workspace " + want.workspace : "") + ".";
       return;
     }
-    const p = projects[i];
+    const p = cur = projects[i];
     const s = statuses(projects, st)[i];
     // The CLI needs -url and -workspace only when another project has the key.
     const shared = projects.some((o, j) => j !== i && o.key === p.key);
     const cmd = [name, "login", "CLIENT", "--project", p.key, ...shared ? ["-url", p.url, "-workspace", p.workspace] : []].map(sh).join(" ");
     // Drawn again only on a change, so a focused element keeps its focus.
-    const json = JSON.stringify([cfg, p, s && { ...s, last_poll: null }, keys, cmd]);
-    if (json === last) return;
-    last = json;
-    draw(cfg, p, s, keys, cmd);
+    const c = JSON.stringify([cfg, p, keys, cmd]);
+    if (c !== lastConfig) {
+      lastConfig = c;
+      drawConfig(cfg, p, keys, cmd);
+    }
+    const s2 = JSON.stringify([p, s && { ...s, last_poll: null }]);
+    if (s2 !== lastStatus) {
+      lastStatus = s2;
+      drawStatus(p, s);
+    }
   };
 
   // The config and the keys are read on opening and on coming back to the
@@ -104,6 +144,38 @@
   });
   const load = (full) => Promise.all([full || !cfg ? all() : null, getJSON("/api/status")])
     .then(([, s]) => { reachable(true); st = s; render(); }, () => reachable(false));
+
+  // act sends as send does and, on success, loads the page's data again.
+  const act = (b, method, url, body) => send(b, method, url, body).then((ok) => ok && load(true).then(() => true));
+
+  // A form's submit: send with the button that submitted it.
+  const onSubmit = (id, then) => $(id).addEventListener("submit", (e) => {
+    e.preventDefault();
+    then(e.submitter, e.currentTarget.elements);
+  });
+  onSubmit("add-host", (b, f) => act(b, "POST", "/api/hosts", { project: cur.id, host: f.host.value })
+    .then((ok) => ok && b.form.reset()));
+  onSubmit("add-skill", (b, f) => act(b, "POST", "/api/skills", { project: cur.id, name: f.name.value, url: f.url.value })
+    .then((ok) => ok && b.form.reset()));
+
+  // A setting of the project, which the settings routes name by key, URL
+  // and workspace. Save sends value(the field); the clear button sends
+  // clear, which drops the project's own value. After either the field
+  // shows what is set.
+  const setting = (id, url, value, clear) => {
+    const form = $(id);
+    const input = form.elements.value;
+    const put = (b, v) => act(b, "PUT", url, { project: cur.key, url: cur.url, workspace: cur.workspace, value: v })
+      .then((ok) => { if (ok) input.value = input.dataset.was; });
+    onSubmit(id, (b) => put(b, value(input.value)));
+    form.querySelector("[data-clear]").addEventListener("click", (e) => put(e.currentTarget, clear));
+  };
+  // A whole number goes as a number; anything else as typed, for the daemon
+  // to refuse.
+  const number = (v) => /^-?\d+$/.test(v.trim()) ? Number(v) : v;
+  setting("memory", "/api/settings/memory", (v) => v, "");
+  setting("parallel", "/api/settings/parallel", number, 0);
+  setting("days", "/api/settings/transcript-days", number, null);
 
   const visible = () => document.visibilityState === "visible";
   load(true);
