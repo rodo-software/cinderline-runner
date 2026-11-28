@@ -481,6 +481,22 @@ input:user-invalid { border-color: var(--err); }
 /* The daemon's refusal of what a form or a button sent (send in app.js). */
 .field-error { font-size: var(--t-1); color: var(--err); margin: var(--s2) 0 0; }
 .items li > .field-error { flex-basis: 100%; margin: 0; }
+/* A secret's own form, in its row of the table. */
+table.rows form.row { margin: 0; gap: var(--s2); flex-wrap: nowrap; }
+table.rows form.row input { min-height: 1.875rem; font-size: var(--t-1); }
+
+/* A plain confirmation (confirmed in app.js). */
+dialog.confirm {
+  max-width: min(32rem, calc(100% - 2 * var(--s4)));
+  padding: var(--s5);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+}
+dialog.confirm::backdrop { background: rgb(0 0 0 / 0.4); }
+dialog.confirm p { overflow-wrap: anywhere; }
+dialog.confirm .actions { display: flex; justify-content: end; gap: var(--s3); }
 
 /* A switch, a checkbox drawn as one: plain HTML, it still works by keyboard. */
 .switch { display: inline-flex; flex-direction: row; align-items: center; gap: var(--s2); color: var(--text); cursor: pointer; font-size: var(--t-1); }

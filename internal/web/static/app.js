@@ -206,6 +206,29 @@ const send = async (button, method, url, body) => {
   return false;
 };
 
+// confirmed asks question in a modal <dialog> with the buttons Cancel and
+// yes, Cancel focused, and resolves to whether yes was pressed; Escape
+// cancels. The browser gives the focus back to where it was on closing.
+const confirmed = (question, yes) => new Promise((resolve) => {
+  const q = el("p", "", question);
+  q.id = "confirm-question";
+  const no = el("button", "", "Cancel");
+  no.value = "no";
+  no.autofocus = true;
+  const ok = el("button", "danger", yes);
+  ok.value = "yes";
+  const form = el("form", "", q, el("div", "actions", no, ok));
+  form.method = "dialog"; // a button closes the dialog with its value
+  const d = el("dialog", "confirm", form);
+  d.setAttribute("aria-labelledby", q.id);
+  d.addEventListener("close", () => {
+    d.remove();
+    resolve(d.returnValue === "yes");
+  });
+  document.body.append(d);
+  d.showModal();
+});
+
 // copyable is a block of the command text, to type in a terminal, with a
 // button that copies it. Where the clipboard is refused the button selects
 // the text instead, for Ctrl+C.

@@ -38,6 +38,11 @@
         return el("li", "", show(x), el("span", "muted small", "all projects, on ", a));
       }))
     : none("None.");
+  // The project's routes, which name it by its ID.
+  const api = (p) => "/api/projects/" + encodeURIComponent(p.id);
+  // A secret field is emptied once its request is answered, refused or not,
+  // so its value stays nowhere on the page.
+  const secret = (input, request) => request(input.value).finally(() => { input.value = ""; });
   // A word for a shell: quoted unless it is plainly safe as it is.
   const sh = (s) => /^[\w.:/@%+=-]+$/.test(s) ? s : "'" + s.replaceAll("'", "'\\''") + "'";
 
@@ -76,8 +81,10 @@
 
     const repos = p.extra_repositories || [];
     $("repos").replaceChildren(repos.length
-      ? table(["Repository", "Ref", "Token"], repos.map((r) => [r.url, r.ref || el("span", "muted", "default branch"),
-        el("span", "status" + (r.has_token ? " ok" : ""), r.has_token ? "set" : "not set")]))
+      ? table(["Repository", "Ref", "Token", ""], repos.map((r) => [r.url, r.ref || el("span", "muted", "default branch"),
+        el("span", "status" + (r.has_token ? " ok" : ""), r.has_token ? "set" : "not set"),
+        button("Remove", "danger", "Remove " + r.url, (b) => confirmed("Remove the repository " + r.url + " from "
+          + p.key + "? Its git token, if it has one, is deleted too.", "Remove").then((yes) => yes && act(b, "DELETE", api(p) + "/repos", { repo: r.url })))]))
       : none("None."));
 
     $("hosts").replaceChildren(items(p.allow_hosts || [], c.allow_hosts || [], (h) => el("code", "", h), (h) => h,
@@ -99,8 +106,34 @@
     parallel.placeholder = c.max_parallel_runs ?? d.max_parallel_runs;
     days.placeholder = c.transcript_days ?? d.transcript_days;
 
-    $("secrets").replaceChildren(keys ? table(["Secret", "State"], keys.map((k) => [k.kind,
-      el("span", "status" + (k.set ? " ok" : ""), k.set ? "set" : "not set")])) : none("Not known: the runner did not answer."));
+    $("secrets").replaceChildren(keys ? table(["Secret", "State", "", ""], keys.map((k) => {
+      const url = api(p) + "/keys/" + encodeURIComponent(k.kind);
+      // An extra repository's token, git-token:URL, is set with its repository:
+      // the keys routes refuse it. The others are the two tokens and the
+      // clients' model keys.
+      const own = !k.kind.includes(":");
+      const client = own && k.kind !== "runner-token" && k.kind !== "git-token";
+      const input = el("input");
+      input.type = "password";
+      input.setAttribute("autocomplete", "off");
+      input.setAttribute("aria-label", "New value of " + k.kind);
+      const set = el("button", "", "Set");
+      set.type = "submit";
+      set.setAttribute("aria-label", "Set " + k.kind);
+      const form = el("form", "row", input, set);
+      form.method = "post";
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        secret(input, (value) => act(set, "PUT", url, { value }));
+      });
+      return [
+        client ? el("div", "", k.kind, el("p", "hint", "Setting it wins over an earlier login.")) : k.kind,
+        el("span", "status" + (k.set ? " ok" : ""), k.set ? "set" : "not set"),
+        own ? form : "",
+        own && k.set ? button("Delete", "danger", "Delete " + k.kind, (b) => confirmed("Delete the secret " + k.kind
+          + " of " + p.key + "?", "Delete").then((yes) => yes && act(b, "DELETE", url))) : "",
+      ];
+    })) : none("Not known: the runner did not answer."));
 
     $("login").replaceChildren(copyable(cmd));
   };
@@ -140,7 +173,7 @@
     cfg = c;
     name = n.name;
     const p = (c.config.projects || []).find(wanted);
-    return p ? getJSON("/api/projects/" + encodeURIComponent(p.id) + "/keys").then((k) => { keys = k; }, () => { keys = null; }) : null;
+    return p ? getJSON(api(p) + "/keys").then((k) => { keys = k; }, () => { keys = null; }) : null;
   });
   const load = (full) => Promise.all([full || !cfg ? all() : null, getJSON("/api/status")])
     .then(([, s]) => { reachable(true); st = s; render(); }, () => reachable(false));
@@ -155,6 +188,8 @@
   });
   onSubmit("add-host", (b, f) => act(b, "POST", "/api/hosts", { project: cur.id, host: f.host.value })
     .then((ok) => ok && b.form.reset()));
+  onSubmit("add-repo", (b, f) => secret(f.token, (token) => act(b, "POST", api(cur) + "/repos",
+    { url: f.url.value, ref: f.ref.value, token })).then((ok) => ok && b.form.reset()));
   onSubmit("add-skill", (b, f) => act(b, "POST", "/api/skills", { project: cur.id, name: f.name.value, url: f.url.value })
     .then((ok) => ok && b.form.reset()));
 

@@ -49,6 +49,14 @@
   <h2 id="h-repos">Repositories</h2>
   <p class="muted">Other repositories its runs may read, mounted read-only.</p>
   <div id="repos"></div>
+  <!-- method post: a submit before project.js runs never puts the token in the URL. -->
+  <form class="row" id="add-repo" method="post">
+    <label>Repository URL <input type="text" name="url" placeholder="https://github.com/owner/repo" autocomplete="off"></label>
+    <label>Ref <input type="text" name="ref" size="12" placeholder="default branch" autocomplete="off"></label>
+    <label>Git token <input type="password" name="token" autocomplete="off" aria-describedby="repo-hint"></label>
+    <button type="submit">Add repository</button>
+  </form>
+  <p class="hint" id="repo-hint">The ref and the token are optional; the token is only needed for a private repository.</p>
 </section>
 
 <section aria-labelledby="h-hosts">
@@ -98,7 +106,7 @@
 <section aria-labelledby="h-secrets">
   <h2 id="h-secrets">Secrets</h2>
   <div id="secrets"></div>
-  <p class="hint">A value is never shown, only whether it is set.</p>
+  <p class="hint">A value is never shown, only whether it is set. A repository's token is set with its repository.</p>
 </section>
 
 <section aria-labelledby="h-login">
