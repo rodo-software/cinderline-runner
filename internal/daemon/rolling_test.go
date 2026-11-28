@@ -24,18 +24,20 @@ type fakeLoops struct {
 	starts map[string][][]string            // by project key: each loop's environment allowlist
 	skills map[string][]config.AllowedSkill // by project key: the last loop's allow_skills
 	held   map[string]chan struct{}         // by project key: the next loop's run ends when it is closed
+	drop   map[string]bool                  // by project key: the last loop's DiscardTranscripts
 	cut    []string                         // the projects whose run a stop cut
 }
 
 func useFakeLoops(t *testing.T) *fakeLoops {
 	t.Helper()
-	f := &fakeLoops{starts: map[string][][]string{}, skills: map[string][]config.AllowedSkill{}, held: map[string]chan struct{}{}}
+	f := &fakeLoops{starts: map[string][][]string{}, skills: map[string][]config.AllowedSkill{}, drop: map[string]bool{}, held: map[string]chan struct{}{}}
 	old := runLoop
 	runLoop = func(p *run.Project, ctx context.Context, _ *cinderline.Client, drain <-chan struct{}) {
 		key := p.Config.Key
 		f.mu.Lock()
 		f.starts[key] = append(f.starts[key], p.Env.(*environment.Docker).Allow)
 		f.skills[key] = p.AllowSkills
+		f.drop[key] = p.DiscardTranscripts
 		release := f.held[key]
 		delete(f.held, key)
 		f.mu.Unlock()

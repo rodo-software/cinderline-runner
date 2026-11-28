@@ -48,6 +48,9 @@ var errStopping = errors.New("stopping")
 // detectInterval is how often client detection reruns (CSR-59).
 const detectInterval = time.Hour
 
+// sweepInterval is how often the transcripts the config keeps no longer are removed (CLR-283).
+const sweepInterval = time.Hour
+
 // runLoop runs a project's loop; a variable so tests can hold a run in flight.
 var runLoop = (*run.Project).Loop
 
@@ -88,6 +91,7 @@ type daemon struct {
 	turns      *run.ProviderTurns // the turns in flight on each provider, over every project and config, one for the process
 	web        *http.Server       // serves the local web page; nil while it does not
 	webAddr    string             // the address the config asks the page on, "" for off
+	transcript *transcript.Store  // every project's transcripts
 
 	// snapshot is the status GET /status answers, which the page shows too.
 	snapshot func() localapi.Status
@@ -116,6 +120,7 @@ func Run(ctx context.Context, o Options) error {
 	f, isFile := o.Verbose.(*os.File)
 	log := logger(lf, o.Verbose, isFile && term.IsTerminal(int(f.Fd())))
 	d := &daemon{ctx: ctx, log: log, o: o, slots: map[string]*slot{}, ended: make(chan *slot), stopModels: func() {}, stopTools: func() {}, budget: run.NewBudget(dockerMemory), turns: &run.ProviderTurns{}}
+	d.transcript = &transcript.Store{Dir: filepath.Join(o.Paths.State, "transcripts"), Log: log}
 	defer func() {
 		d.stopModels()
 		d.stopTools()
@@ -176,6 +181,9 @@ func Run(ctx context.Context, o Options) error {
 	log.Info("runner CA", "certificate", authority.CertFile, "expires", authority.Cert.NotAfter)
 	log.Info("started", "version", o.Version, "socket", o.Paths.Socket)
 	d.apply(cfg)
+	d.sweep()
+	sweep := time.NewTicker(sweepInterval)
+	defer sweep.Stop()
 
 	done, drained := ctx.Done(), (<-chan struct{})(drain)
 	for {
@@ -190,6 +198,8 @@ func Run(ctx context.Context, o Options) error {
 			d.drainAll()
 		case <-done:
 			done = nil // every loop sees ctx and ends
+		case <-sweep.C:
+			d.sweep()
 		case s := <-d.ended:
 			d.end(s)
 			if done != nil && drained != nil {
@@ -214,6 +224,23 @@ func Run(ctx context.Context, o Options) error {
 			d.apply(next)
 			reply <- nil
 		}
+	}
+}
+
+// sweep removes the transcripts the config keeps no longer: by each
+// project's transcript_days, the runner-wide one for a project the config
+// no longer has, and by transcript_max_size.
+func (d *daemon) sweep() {
+	cfg := d.cfg
+	days := func(key string) int {
+		i := slices.IndexFunc(cfg.Projects, func(p config.Project) bool { return p.Key == key })
+		if i < 0 {
+			return cfg.TranscriptDaysFor(config.Project{})
+		}
+		return cfg.TranscriptDaysFor(cfg.Projects[i])
+	}
+	if _, err := d.transcript.Sweep(time.Now(), days, cfg.TranscriptMax()); err != nil {
+		d.log.Warn("transcripts not all removed", "err", err)
 	}
 }
 
@@ -353,7 +380,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 	}
 	proj.KeepFor, proj.MinFree, proj.Others, proj.Models, proj.StrictHosts, proj.Budget, proj.Turns = cfg.KeepSessions(), cfg.MinFree(), cfg.Projects, d.models, cfg.StrictHosts, d.budget, d.turns
 	proj.MaxParallelRuns = cfg.MaxParallelRuns
-	proj.Transcripts = &transcript.Store{Dir: filepath.Join(d.o.Paths.State, "transcripts"), Log: log}
+	proj.Transcripts, proj.DiscardTranscripts = d.transcript, cfg.TranscriptDaysFor(p) == 0
 	proj.AllowSkills = slices.Concat(cfg.AllowSkills, p.AllowSkills)
 	s := &slot{id: p.ID(), proj: proj, drain: make(chan struct{})}
 	d.mu.Lock()

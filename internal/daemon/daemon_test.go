@@ -551,3 +551,51 @@ func TestAllowSkillsReachEveryProject(t *testing.T) {
 		t.Errorf("A allows %v, B %v", a, b)
 	}
 }
+
+// CLR-283: at start the daemon removes the transcripts each project keeps no
+// longer, by the project's own transcript_days or the runner-wide one, and
+// a project of 0 days discards each run's when it ends.
+func TestSweepsTranscriptsAtStart(t *testing.T) {
+	keyring.MockInit()
+	f := useFakeLoops(t)
+	p := paths(t)
+	year, two, zero := 365, 2, 0
+	pa := project("https://a.example.com", "A")
+	pa.TranscriptDays = &year
+	pb := project("https://b.example.com", "B")
+	pb.TranscriptDays = &zero
+	setToken(t, p, pa)
+	setToken(t, p, pb)
+	if err := (&config.Config{TranscriptDays: &two, Projects: []config.Project{pa, pb}}).Save(p.File); err != nil {
+		t.Fatal(err)
+	}
+	run := time.Now().Add(-5 * 24 * time.Hour).UTC().Format("20060102T150405Z")
+	var dirs []string
+	for _, key := range []string{"A", "B", "GONE"} { // GONE: a project no longer in the config
+		dir := filepath.Join(p.State, "transcripts", key, key+"-1", run)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-5 * 24 * time.Hour)
+		if err := os.Chtimes(dir, old, old); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, dir)
+	}
+	start(t, p)
+	gone := func(dir string) bool { _, err := os.Stat(dir); return os.IsNotExist(err) }
+	waitFor(t, "B's and GONE's runs to go", func() bool { return gone(dirs[1]) && gone(dirs[2]) })
+	if gone(dirs[0]) {
+		t.Error("A's run is gone, though A keeps its runs a year")
+	}
+	waitFor(t, "A and B to start", func() bool { return len(f.of("A")) == 1 && len(f.of("B")) == 1 })
+	f.mu.Lock()
+	if f.drop["A"] || !f.drop["B"] {
+		t.Errorf("DiscardTranscripts A %v, B %v; want B only", f.drop["A"], f.drop["B"])
+	}
+	f.mu.Unlock()
+	waitFor(t, "the log line of the 2 runs removed", func() bool {
+		b, _ := os.ReadFile(p.Log)
+		return strings.Contains(string(b), `"msg":"transcripts removed","runs":2,"by_age":2,"by_size":0`)
+	})
+}

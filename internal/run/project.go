@@ -91,6 +91,9 @@ type Project struct {
 	// Transcripts keeps each run's steps on disk (decision
 	// 2026-11-26-local-web-page); nil: none.
 	Transcripts *transcript.Store
+	// DiscardTranscripts removes each run's transcript once the run ended:
+	// the project's transcript_days is 0.
+	DiscardTranscripts bool
 
 	// Set only by NewProject; nil in tests.
 	deleteSession func(ctx context.Context, ref, session string) error                                                         // a session's files on the state volume

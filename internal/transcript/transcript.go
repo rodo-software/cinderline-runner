@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -294,4 +295,116 @@ func (s *Store) Open(project, issue, run string, n int) (io.ReadCloser, error) {
 		}
 	}
 	return nil, fmt.Errorf("transcript %s/%s/%s step %d: %w", project, issue, run, n, fs.ErrNotExist)
+}
+
+// Discard removes the run's folder, for a project that keeps no transcript
+// once the run ended (transcript_days 0). Call it after the run's last step.
+func (r *Run) Discard() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := os.RemoveAll(r.dir); err != nil {
+		r.store.log().Warn("transcript not removed", "project", r.project, "issue", r.issue, "err", err)
+	}
+}
+
+// inFlight is how recently a run may have changed and still be in flight, so
+// Sweep keeps it, also between two steps, when its last step has ended.
+const inFlight = time.Hour
+
+// Sweep removes every run older, by its start, than daysFor(its project)
+// days, then the oldest runs while all of them take more than maxBytes; a
+// run changed within inFlight is kept. Then it removes the issue and project
+// folders left empty and logs one line if it removed a run. err joins the
+// removals that failed.
+func (s *Store) Sweep(now time.Time, daysFor func(project string) int, maxBytes int64) (removed int, err error) {
+	type run struct {
+		dir   string
+		start time.Time
+		size  int64
+		busy  bool
+	}
+	var (
+		runs          []run
+		total         int64
+		byAge, bySize int
+		errs          []error
+	)
+	remove := func(dir string) bool {
+		if err := os.RemoveAll(dir); err != nil {
+			errs = append(errs, err)
+			return false
+		}
+		return true
+	}
+	for _, p := range dirs(s.Dir) {
+		keep := time.Duration(daysFor(p)) * 24 * time.Hour
+		for _, i := range dirs(filepath.Join(s.Dir, p)) {
+			for _, name := range dirs(filepath.Join(s.Dir, p, i)) {
+				start, err := time.Parse(RunID, name)
+				if err != nil {
+					continue
+				}
+				r := run{dir: filepath.Join(s.Dir, p, i, name), start: start}
+				var changed time.Time
+				r.size, changed = usage(r.dir)
+				r.busy = now.Sub(changed) < inFlight
+				if !r.busy && now.Sub(start) > keep {
+					if remove(r.dir) {
+						byAge++
+						continue
+					}
+				}
+				runs = append(runs, r)
+				total += r.size
+			}
+		}
+	}
+	slices.SortFunc(runs, func(a, b run) int { return cmp.Or(a.start.Compare(b.start), cmp.Compare(a.dir, b.dir)) })
+	for _, r := range runs {
+		if total <= maxBytes {
+			break
+		}
+		if !r.busy && remove(r.dir) {
+			total -= r.size
+			bySize++
+		}
+	}
+	// shortcut: a run of the project that starts its first step in the
+	// instant between its MkdirAll and its file writes nothing (logged);
+	// fine hourly, add a retry in Step if it shows up.
+	for _, p := range dirs(s.Dir) {
+		for _, i := range dirs(filepath.Join(s.Dir, p)) {
+			os.Remove(filepath.Join(s.Dir, p, i)) // fails, as meant, while it holds anything
+		}
+		os.Remove(filepath.Join(s.Dir, p))
+	}
+	if removed = byAge + bySize; removed > 0 {
+		s.log().Info("transcripts removed", "runs", removed, "by_age", byAge, "by_size", bySize)
+	}
+	return removed, errors.Join(errs...)
+}
+
+// usage returns the bytes of the files in a run's folder and when it or one
+// of them last changed.
+func usage(dir string) (size int64, changed time.Time) {
+	if fi, err := os.Stat(dir); err == nil {
+		changed = fi.ModTime()
+	}
+	entries, _ := os.ReadDir(dir) // unreadable: as empty, and its removal reports the error
+	for _, e := range entries {
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if fi.Mode().IsRegular() {
+			size += fi.Size()
+		}
+		if fi.ModTime().After(changed) {
+			changed = fi.ModTime()
+		}
+	}
+	return size, changed
 }

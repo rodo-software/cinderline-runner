@@ -253,3 +253,21 @@ func TestAStepHoldsItsRefusedHostsBeforeItsEnd(t *testing.T) {
 		}
 	}
 }
+
+// CLR-283: a project that keeps transcripts 0 days loses the run's once the
+// run ended; it was written while the run ran.
+func TestDaysZeroDiscardsTheTranscriptWhenTheRunEnds(t *testing.T) {
+	f := newFixture(t)
+	s := withTranscripts(t, f)
+	f.p.DiscardTranscripts = true
+	f.cl.Runs = fill(1, ok("sess-1", "Done."))
+	if _, err := f.run(t, &fakeApp{onNext: stepsOf(runNew, `{"kind":"stop"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if runs := s.List(); len(runs) != 0 {
+		t.Fatalf("runs = %+v, want none", runs)
+	}
+	if _, err := os.Stat(filepath.Join(s.Dir, "CSR", "CSR-1")); err != nil {
+		t.Errorf("the run's issue folder, which its steps made: %v", err)
+	}
+}

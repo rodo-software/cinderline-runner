@@ -166,6 +166,9 @@ func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline
 	}
 	if p.Transcripts != nil {
 		j.transcript = p.Transcripts.Begin(p.Config.Key, j.ref, time.Now()) // its folder comes with the first step
+		if p.DiscardTranscripts {
+			defer j.transcript.Discard() // after steps, whose last step has ended
+		}
 	}
 	// A manager run never commits or pushes: its clone is only read.
 	if j.manager {
