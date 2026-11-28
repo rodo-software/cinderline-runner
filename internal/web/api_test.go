@@ -303,6 +303,7 @@ func TestAPIWriteRefusesABadBody(t *testing.T) {
 		"unknown field":    `{"on": true, "off": false}`,
 		"too large":        `{"on":` + strings.Repeat(" ", 64<<10) + `true}`, // valid but for its size
 		"missing on":       `{}`,
+		"empty":            ``, // decodes as {}
 		"not JSON":         `on`,
 		"two values":       `{"on": true} {"on": true}`,
 		"wrong type of on": `{"on": "yes"}`,
@@ -422,5 +423,124 @@ func TestAPIReposRefuses(t *testing.T) {
 	}
 	if cfg, err := config.Load(paths.File); err != nil || len(cfg.Projects[0].ExtraRepositories) != 0 || *reloads != 0 {
 		t.Errorf("config %+v, %v, %d reloads; want it unchanged", cfg, err, *reloads)
+	}
+}
+
+// providerKey is the key the provider tests send, which no answer or log may hold.
+const providerKey = "sk-the-provider-key"
+
+// configText is GET /api/config as text, which must never hold providerKey.
+func configText(t *testing.T, h http.Handler, tok string) string {
+	t.Helper()
+	w := doTo(t, h, "GET", "/api/config", tok, nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/config = %d %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), providerKey) {
+		t.Fatalf("GET /api/config holds the key: %s", w.Body)
+	}
+	return w.Body.String()
+}
+
+// CLR-299: POST adds a provider with its key, GET /api/config says it has
+// one, PUT changes it, a PUT that changes nothing does not reload, and
+// DELETE, without a body, removes it and its key.
+func TestAPIProviders(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	logged.Reset()
+	for _, body := range []string{
+		`{"name": "lan", "base_url": "http://provider.example:8080/v1", "free": true, "max_agents": 2, "lookahead": 1, "key": "` + providerKey + `"}`,
+		`{"name": "nokey", "base_url": "http://other.example/v1", "key": ""}`,
+	} {
+		if w := send(t, h, "POST", tok, "/api/providers", body); w.Code != http.StatusNoContent || strings.Contains(w.Body.String(), providerKey) {
+			t.Fatalf("POST = %d %s, want 204", w.Code, w.Body)
+		}
+	}
+	var got struct {
+		Config struct {
+			Providers []struct {
+				config.Provider
+				HasKey *bool `json:"has_key"`
+			} `json:"providers"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal([]byte(configText(t, h, tok)), &got); err != nil {
+		t.Fatal(err)
+	}
+	ps := got.Config.Providers
+	want := []config.Provider{{Name: "lan", BaseURL: "http://provider.example:8080/v1", Free: true, MaxAgents: 2, Lookahead: 1}, {Name: "nokey", BaseURL: "http://other.example/v1"}}
+	if len(ps) != 2 || ps[0].Provider != want[0] || ps[1].Provider != want[1] || ps[0].HasKey == nil || !*ps[0].HasKey || ps[1].HasKey == nil || *ps[1].HasKey {
+		t.Fatalf("providers %+v, want %v with has_key true, false", ps, want)
+	}
+
+	if w := put(t, h, tok, "/api/providers/lan", `{"free": false, "max_agents": 3}`); w.Code != http.StatusNoContent {
+		t.Fatalf("PUT = %d %s, want 204", w.Code, w.Body)
+	}
+	cfg, err := config.Load(paths.File)
+	if err != nil || cfg.Providers[0].Free || cfg.Providers[0].MaxAgents != 3 || cfg.Providers[0].Lookahead != 1 {
+		t.Fatalf("config %+v, %v after PUT", cfg, err)
+	}
+	if w := put(t, h, tok, "/api/providers/lan", `{"max_agents": 3}`); w.Code != http.StatusNoContent || *reloads != 3 {
+		t.Fatalf("unchanged PUT = %d %s after %d reloads, want 204 and still 3", w.Code, w.Body, *reloads)
+	}
+
+	if w := send(t, h, "DELETE", tok, "/api/providers/lan", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body)
+	}
+	if cfg, err := config.Load(paths.File); err != nil || len(cfg.Providers) != 1 || cfg.Providers[0].Name != "nokey" {
+		t.Errorf("config %+v, %v after DELETE", cfg, err)
+	}
+	if _, _, err := secrets.New(paths.State).Get(secrets.Runner, secrets.ProviderKey("lan")); !errors.Is(err, secrets.ErrNotFound) {
+		t.Errorf("key after DELETE: %v, want none", err)
+	}
+	if *reloads != 4 {
+		t.Errorf("%d reloads, want 4", *reloads)
+	}
+	if strings.Contains(logged.String(), providerKey) {
+		t.Errorf("the log holds the key: %s", &logged)
+	}
+}
+
+// A refused add, set or remove is a 400 that changes and reloads nothing,
+// and no answer nor log line holds the key.
+func TestAPIProvidersRefuse(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	if w := send(t, h, "POST", tok, "/api/providers", `{"name": "lan", "base_url": "http://provider.example:8080/v1", "max_agents": 1, "lookahead": 1}`); w.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d %s", w.Code, w.Body)
+	}
+	*reloads = 0
+	logged.Reset()
+	add := func(name, url, extra string) string {
+		return `{"name": "` + name + `", "base_url": "` + url + `", "key": "` + providerKey + `"` + extra + `}`
+	}
+	for what, c := range map[string]struct{ method, path, body, want string }{
+		"bad name":        {"POST", "/api/providers", add("Lan", "http://h:1/v1", ""), "provider name"},
+		"key in the URL":  {"POST", "/api/providers", add("x", "http://u:"+providerKey+"@h:1/v1", ""), "base URL"},
+		"duplicate":       {"POST", "/api/providers", add("lan", "http://other:1/v1", ""), "already has a provider lan"},
+		"web page's port": {"POST", "/api/providers", add("x", "http://localhost:7420/v1", ""), "web page's port"},
+		"max_agents":      {"POST", "/api/providers", add("x", "http://h:1/v1", `, "max_agents": 101`), "max_agents"},
+		"unknown field":   {"POST", "/api/providers", add("x", "http://h:1/v1", `, "x": 1`), "unknown field"},
+		"set nothing":     {"PUT", "/api/providers/lan", `{}`, "nothing to set"},
+		"set unknown":     {"PUT", "/api/providers/nope", `{"free": true}`, "no provider nope"},
+		"lookahead alone": {"PUT", "/api/providers/lan", `{"max_agents": 0}`, "needs max_agents"},
+		"set the key":     {"PUT", "/api/providers/lan", `{"key": "` + providerKey + `"}`, "unknown field"},
+		"remove unknown":  {"DELETE", "/api/providers/nope", ``, "no provider nope"},
+	} {
+		w := send(t, h, c.method, tok, c.path, c.body)
+		var e struct{ Error string }
+		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != http.StatusBadRequest || !strings.Contains(e.Error, c.want) {
+			t.Errorf("%s: %d %s, want 400 containing %q", what, w.Code, w.Body, c.want)
+		}
+		if strings.Contains(w.Body.String(), providerKey) || strings.Contains(logged.String(), providerKey) {
+			t.Errorf("%s: the answer or log holds the key: %s / %s", what, w.Body, &logged)
+		}
+	}
+	configText(t, h, tok)
+	cfg, err := config.Load(paths.File)
+	if err != nil || len(cfg.Providers) != 1 || cfg.Providers[0].Lookahead != 1 || *reloads != 0 {
+		t.Errorf("config %+v, %v, %d reloads; want it unchanged", cfg, err, *reloads)
+	}
+	if _, _, err := secrets.New(paths.State).Get(secrets.Runner, secrets.ProviderKey("x")); !errors.Is(err, secrets.ErrNotFound) {
+		t.Errorf("a refused add stored a key: %v", err)
 	}
 }

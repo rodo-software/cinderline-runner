@@ -67,13 +67,44 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 		_, err := manage.RemoveRepo(h.Paths, h.Secrets, r.PathValue("key"), b.Repo)
 		return err
 	})
+	writeRoute(mux, "POST /api/providers", h, func(_ *http.Request, b struct {
+		config.Provider
+		Key string `json:"key"`
+	}) error {
+		_, err := manage.AddProvider(h.Paths, h.Secrets, b.Provider, b.Key)
+		return err
+	})
+	writeRoute(mux, "PUT /api/providers/{name}", h, func(r *http.Request, b struct {
+		Free      *bool `json:"free"`
+		MaxAgents *int  `json:"max_agents"`
+		Lookahead *int  `json:"lookahead"`
+	}) error {
+		changed, err := manage.SetProvider(h.Paths, r.PathValue("name"), b.Free, b.MaxAgents, b.Lookahead)
+		if err == nil && !changed {
+			return errUnchanged
+		}
+		return err
+	})
+	writeRoute(mux, "DELETE /api/providers/{name}", h, func(r *http.Request, _ struct{}) error {
+		return manage.RemoveProvider(h.Paths, h.Secrets, r.PathValue("name"))
+	})
 }
 
-// configJSON is the config as the page gets it: each extra repository says
-// whether its token is stored, never the token.
+// errUnchanged is a write that changed nothing: answered 204 without a
+// reload, which would drain the runs in flight for nothing.
+var errUnchanged = errors.New("unchanged")
+
+// configJSON is the config as the page gets it: each extra repository and
+// provider says whether its token or key is stored, never the value.
 type configJSON struct {
 	*config.Config
-	Projects []projectJSON `json:"projects"`
+	Projects  []projectJSON  `json:"projects"`
+	Providers []providerJSON `json:"providers"`
+}
+
+type providerJSON struct {
+	config.Provider
+	HasKey bool `json:"has_key"`
 }
 
 type projectJSON struct {
@@ -88,7 +119,14 @@ type repoJSON struct {
 
 // withTokens is cfg as configJSON, with what sec holds.
 func withTokens(cfg *config.Config, sec *secrets.Secrets) (configJSON, error) {
-	out := configJSON{Config: cfg, Projects: make([]projectJSON, len(cfg.Projects))}
+	out := configJSON{Config: cfg, Projects: make([]projectJSON, len(cfg.Projects)), Providers: make([]providerJSON, len(cfg.Providers))}
+	for i, p := range cfg.Providers {
+		_, _, err := sec.Get(secrets.Runner, secrets.ProviderKey(p.Name))
+		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return configJSON{}, err
+		}
+		out.Providers[i] = providerJSON{p, err == nil}
+	}
 	for i, p := range cfg.Projects {
 		out.Projects[i].Project = p
 		for _, r := range p.ExtraRepositories {
@@ -115,7 +153,9 @@ func writeRoute[B any](mux *http.ServeMux, pattern string, h *Handlers, change f
 		writes.Lock()
 		defer writes.Unlock()
 		err := change(r, b)
-		if err == nil {
+		if errors.Is(err, errUnchanged) {
+			err = nil
+		} else if err == nil {
 			err = h.Reload()
 		}
 		if err != nil {
@@ -127,11 +167,15 @@ func writeRoute[B any](mux *http.ServeMux, pattern string, h *Handlers, change f
 }
 
 // readBody decodes the request's one JSON value, of at most maxBody bytes
-// and with no field v lacks, into v; anything else is refused.
+// and with no field v lacks, into v; anything else is refused. An empty
+// body leaves v zero, for a DELETE without one.
 func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	err := dec.Decode(v)
+	if err == io.EOF {
+		return nil
+	}
 	if err == nil {
 		if err = dec.Decode(new(json.RawMessage)); err == io.EOF {
 			err = nil

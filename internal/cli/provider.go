@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
@@ -75,35 +76,19 @@ func (c *CLI) addProvider(args []string) int {
 		return code
 	}
 	pr := config.Provider{Name: rest[0], BaseURL: rest[1], Free: free, MaxAgents: maxAgents, Lookahead: lookahead}
-	if err := pr.Validate(); err != nil {
+	if err := manage.CheckProvider(cfg, pr); err != nil {
 		return c.fail(err)
-	}
-	if _, err := providerIndex(cfg, pr.Name); err == nil {
-		return c.fail(fmt.Errorf("this runner already has a provider %s; remove it first with remove-provider", pr.Name))
 	}
 	key, err := c.secretAsk("API key for " + pr.Name + " [empty for none]: ")
 	if err != nil {
 		return c.fail(err)
 	}
-	// The config first, so a failed save stores no secret.
-	old := cfg.Providers
-	cfg.Providers = append(slices.Clone(old), pr)
-	if err := cfg.Save(c.Paths.File); err != nil {
-		return c.fail(err)
-	}
-	kind := secrets.ProviderKey(pr.Name)
-	if key == "" {
-		// A key left under this name must not go to the new URL.
-		err = c.Secrets.Delete(secrets.Runner, kind)
-	} else {
-		err = c.storeKey(secrets.Runner, kind, "the key of "+pr.Name, key)
-	}
+	store, err := manage.AddProvider(c.Paths, c.Secrets, pr, key)
 	if err != nil {
-		cfg.Providers = old
-		if serr := cfg.Save(c.Paths.File); serr != nil {
-			fmt.Fprintln(c.Stderr, "error:", serr)
-		}
 		return c.fail(err)
+	}
+	if key != "" {
+		fmt.Fprintf(c.Stdout, "Stored the key of %s in %s\n", pr.Name, c.storeName(store))
 	}
 	fmt.Fprintf(c.Stdout, "Added %s at %s; OpenCode agents of every project use it as %s/<model id>\n", pr.Name, pr.BaseURL, pr.Name)
 	c.reload()
@@ -166,55 +151,46 @@ func (c *CLI) setProvider(args []string) int {
 		f.Usage()
 		return 2
 	}
-	cfg, err := c.loadConfig()
-	if err != nil {
-		return c.fail(err)
-	}
-	j, err := providerIndex(cfg, args[0])
-	if err != nil {
-		return c.fail(err)
-	}
-	old, pr := cfg.Providers[j], &cfg.Providers[j]
+	var fr *bool
+	var ma, la *int
 	if set["free"] {
-		pr.Free = *free
+		fr = free
 	}
 	if set["max-agents"] {
-		pr.MaxAgents = *maxAgents
+		ma = maxAgents
 	}
 	if set["lookahead"] {
-		pr.Lookahead = *lookahead
+		la = lookahead
 	}
-	if err := pr.Validate(); err != nil {
+	changed, err := manage.SetProvider(c.Paths, args[0], fr, ma, la)
+	if err != nil {
 		return c.fail(err)
 	}
-	state := "not free"
-	if pr.Free {
+	n, state := args[0], "not free"
+	if *free {
 		state = "free"
 	}
-	if *pr == old {
+	if !changed {
 		// No reload: it would drain the runs in flight for nothing.
 		if set["free"] {
-			fmt.Fprintf(c.Stdout, "%s is already %s\n", pr.Name, state)
+			fmt.Fprintf(c.Stdout, "%s is already %s\n", n, state)
 		}
 		if set["max-agents"] {
-			fmt.Fprintf(c.Stdout, "%s already has %s\n", pr.Name, agentLimit(pr.MaxAgents))
+			fmt.Fprintf(c.Stdout, "%s already has %s\n", n, agentLimit(*maxAgents))
 		}
 		if set["lookahead"] {
-			fmt.Fprintf(c.Stdout, "%s already has a lookahead of %d\n", pr.Name, pr.Lookahead)
+			fmt.Fprintf(c.Stdout, "%s already has a lookahead of %d\n", n, *lookahead)
 		}
 		return 0
 	}
-	if err := cfg.Save(c.Paths.File); err != nil {
-		return c.fail(err)
-	}
 	if set["free"] {
-		fmt.Fprintf(c.Stdout, "Marked %s %s\n", pr.Name, state)
+		fmt.Fprintf(c.Stdout, "Marked %s %s\n", n, state)
 	}
 	if set["max-agents"] {
-		fmt.Fprintf(c.Stdout, "%s now has %s\n", pr.Name, agentLimit(pr.MaxAgents))
+		fmt.Fprintf(c.Stdout, "%s now has %s\n", n, agentLimit(*maxAgents))
 	}
 	if set["lookahead"] {
-		fmt.Fprintf(c.Stdout, "%s now has a lookahead of %d\n", pr.Name, pr.Lookahead)
+		fmt.Fprintf(c.Stdout, "%s now has a lookahead of %d\n", n, *lookahead)
 	}
 	c.reload()
 	return 0
@@ -222,19 +198,11 @@ func (c *CLI) setProvider(args []string) int {
 
 // removeProvider removes a provider and its key.
 func (c *CLI) removeProvider(args []string) int {
-	cfg, rest, code := c.providerFlags("remove-provider", "NAME", args, 1, nil, nil, nil)
+	_, rest, code := c.providerFlags("remove-provider", "NAME", args, 1, nil, nil, nil)
 	if code != 0 {
 		return code
 	}
-	j, err := providerIndex(cfg, rest[0])
-	if err != nil {
-		return c.fail(err)
-	}
-	cfg.Providers = slices.Delete(slices.Clone(cfg.Providers), j, j+1)
-	if err := cfg.Save(c.Paths.File); err != nil {
-		return c.fail(err)
-	}
-	if err := c.Secrets.Delete(secrets.Runner, secrets.ProviderKey(rest[0])); err != nil {
+	if err := manage.RemoveProvider(c.Paths, c.Secrets, rest[0]); err != nil {
 		return c.fail(err)
 	}
 	fmt.Fprintf(c.Stdout, "Removed %s\n", rest[0])
