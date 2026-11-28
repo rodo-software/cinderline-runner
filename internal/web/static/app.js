@@ -141,6 +141,11 @@ const statuses = (projects, st) => {
 // share a key, never a key, URL and workspace.
 const projectHref = (p) => "project.html?" + new URLSearchParams({ key: p.key, url: p.url, workspace: p.workspace });
 
+// added is the project of /api/config whose ID is not in ids, the IDs of
+// before an add or a rename, or undefined: those routes answer 204 without
+// naming it.
+const added = (ids) => getJSON("/api/config").then((c) => (c.config.projects || []).filter((p) => !ids.includes(p.id)).pop());
+
 // runHref is the page of run r, an entry of /api/runs.
 const runHref = (r) => "run.html?" + new URLSearchParams({ project: r.project, issue: r.issue, run: r.run });
 

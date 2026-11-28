@@ -45,6 +45,43 @@
   const secret = (input, request) => request(input.value).finally(() => { input.value = ""; });
   // A word for a shell: quoted unless it is plainly safe as it is.
   const sh = (s) => /^[\w.:/@%+=-]+$/.test(s) ? s : "'" + s.replaceAll("'", "'\\''") + "'";
+  // Removing and renaming name the project by its key, with its URL and
+  // workspace for a key that several share (decision 2026-11-28-web-remove-project).
+  const byKey = (p) => "/api/projects/" + encodeURIComponent(p.key);
+
+  // typed opens a modal dialog for what cannot be undone: title, the
+  // paragraphs text, the fields, and the button yes, which works only once
+  // p's key is typed; the daemon checks the key again, the page only helps.
+  // request(button, the form's fields) sends it; a refusal shows in the
+  // dialog, which stays open.
+  const typed = (p, title, text, fields, yes, request) => {
+    const h = el("h2", "", title);
+    h.id = "dialog-title";
+    const key = el("input");
+    key.name = "confirm";
+    key.setAttribute("autocomplete", "off");
+    key.spellcheck = false;
+    const ok = el("button", "danger", yes);
+    const match = () => { ok.disabled = key.value !== p.key; };
+    match();
+    key.addEventListener("input", match);
+    const no = el("button", "", "Cancel");
+    no.type = "button";
+    const form = el("form", "stack", ...text.map((t) => el("p", "", t)), ...fields,
+      el("label", "", el("span", "", "Type ", el("strong", "", p.key), " to confirm"), key),
+      el("div", "actions", no, ok));
+    form.method = "post";
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      request(ok, form.elements).then(match); // send enabled it again
+    });
+    const d = el("dialog", "confirm", h, form);
+    d.setAttribute("aria-labelledby", h.id);
+    no.addEventListener("click", () => d.close());
+    d.addEventListener("close", () => d.remove());
+    document.body.append(d);
+    d.showModal();
+  };
 
   // The parts that change with the status, every 5 s.
   const drawStatus = (p, s) => {
@@ -211,6 +248,34 @@
   setting("memory", "/api/settings/memory", (v) => v, "");
   setting("parallel", "/api/settings/parallel", number, 0);
   setting("days", "/api/settings/transcript-days", number, null);
+
+  $("rename").addEventListener("click", () => {
+    const p = cur;
+    const ids = cfg.config.projects.map((x) => x.id);
+    const input = el("input");
+    input.name = "new_key";
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("aria-describedby", "new-key-hint");
+    input.spellcheck = false;
+    const hint = el("p", "hint", "The key Cinderline gives the project now: the runner asks Cinderline, and refuses another one. Left empty, it takes Cinderline's.");
+    hint.id = "new-key-hint";
+    typed(p, "Rename " + p.key, [
+      "This is for after the project's key was changed in Cinderline: the project here gets the new key too.",
+      "Its secrets move to the new key. Its Docker volumes and sessions are removed: the clones come back with the next run, kept sessions are gone, and a client signed in with " + name + " login must sign in again.",
+    ], [el("div", "", el("label", "", "New key", input), hint)], "Rename",
+    (b, f) => send(b, "POST", byKey(p) + "/rename", { confirm: f.confirm.value, new_key: f.new_key.value, url: p.url, workspace: p.workspace })
+      // The same ID again: the project had that key already.
+      .then((ok) => ok && added(ids).then((n) => n ? location.assign(projectHref(n)) : location.reload(),
+        () => location.assign("/projects.html"))));
+  });
+  $("remove").addEventListener("click", () => {
+    const p = cur;
+    typed(p, "Remove " + p.key, [
+      "Removes " + p.key + " from this runner: the project and its secrets. Its Docker containers, networks and volumes and its session notes go once its runs in flight have ended. Nothing changes in Cinderline.",
+    ], [], "Remove project",
+    (b, f) => send(b, "DELETE", byKey(p), { confirm: f.confirm.value, url: p.url, workspace: p.workspace })
+      .then((ok) => ok && location.assign("/projects.html")));
+  });
 
   const visible = () => document.visibilityState === "visible";
   load(true);

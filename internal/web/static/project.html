@@ -43,6 +43,7 @@
 <section aria-labelledby="h-project">
   <h2 id="h-project">Project</h2>
   <div id="project"></div>
+  <p><button type="button" id="rename">Rename</button></p>
 </section>
 
 <section aria-labelledby="h-repos">
@@ -113,6 +114,12 @@
   <h2 id="h-login">Sign in</h2>
   <p>A client can sign in with its own login instead of a key. This needs a terminal: type the command there, with CLIENT the agent CLI to sign in, such as claude.</p>
   <div id="login"></div>
+</section>
+
+<section aria-labelledby="h-danger">
+  <h2 id="h-danger">Danger</h2>
+  <p>Removes the project from this runner, with its secrets. Nothing changes in Cinderline.</p>
+  <button type="button" class="danger" id="remove">Remove project</button>
 </section>
 </div>
 </main>

@@ -1,0 +1,61 @@
+<!doctype html>
+<!-- Add a project: project-add.js sends the form to POST /api/projects. Its
+     fields are those of `add`, in its order, labelled with its questions. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add project · Projects · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="project-add.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/runs.html">Runs</a></li>
+      <li><a href="/projects.html" aria-current="page">Projects</a></li>
+      <li><a href="/log.html">Log</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <p class="crumbs"><a href="/projects.html">Projects</a></p>
+  <h1>Add project</h1>
+</header>
+
+<!-- method post: a submit before project-add.js runs never puts a token in
+     the URL. novalidate: the daemon checks the values, the browser only sends them. -->
+<form class="stack" id="add" method="post" novalidate>
+  <div>
+    <label>URL of the Cinderline instance <input type="text" name="url" placeholder="https://cinderline.example.com" autocomplete="off" aria-describedby="url-hint"></label>
+    <p class="hint" id="url-hint">Where the project lives in Cinderline. https, or plain http on localhost only.</p>
+  </div>
+  <div>
+    <label>Runner token <input type="password" name="runner_token" autocomplete="off" aria-describedby="runner-hint"></label>
+    <p class="hint" id="runner-hint">The project's runner token from Cinderline. The runner checks it with the instance and stores it; it is never shown again.</p>
+  </div>
+  <div>
+    <label>Repository <input type="text" name="repository" placeholder="the one Cinderline names" autocomplete="off" aria-describedby="repo-hint"></label>
+    <p class="hint" id="repo-hint">The project's git repository. Left empty, the one Cinderline names for the project.</p>
+  </div>
+  <div>
+    <label>Git token <input type="password" name="git_token" autocomplete="off" aria-describedby="git-hint"></label>
+    <p class="hint" id="git-hint">A token that can push branches to the repository and open pull requests. It is stored, not checked, and never shown again.</p>
+  </div>
+  <div class="actions"><button type="submit" class="primary">Add project</button> <a class="btn quiet" href="/projects.html">Cancel</a></div>
+</form>
+<p class="hint">Model keys and a client's login are set on the project's page once it is added.</p>
+</main>
+</body>
+</html>

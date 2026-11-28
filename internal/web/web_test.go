@@ -143,13 +143,16 @@ func TestHandlerServesTheProjectPages(t *testing.T) {
 		"/projects.js":   "text/javascript; charset=utf-8",
 		"/project.html":  "text/html; charset=utf-8",
 		"/project.js":    "text/javascript; charset=utf-8",
+		// CLR-307: the page that adds a project.
+		"/project-add.html": "text/html; charset=utf-8",
+		"/project-add.js":   "text/javascript; charset=utf-8",
 	} {
 		w := do(t, dir, "GET", path, tok, nil)
 		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != want {
 			t.Errorf("GET %s = %d, %q, want 200 %q", path, w.Code, w.Header().Get("Content-Type"), want)
 		}
 	}
-	for page, script := range map[string]string{"/projects.html": "projects.js", "/project.html?key=CLR": "project.js"} {
+	for page, script := range map[string]string{"/projects.html": "projects.js", "/project.html?key=CLR": "project.js", "/project-add.html": "project-add.js"} {
 		if w := do(t, dir, "GET", page, tok, nil); !strings.Contains(w.Body.String(), `src="`+script+`"`) {
 			t.Errorf("GET %s does not load %s", page, script)
 		}

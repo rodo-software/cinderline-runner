@@ -477,6 +477,11 @@ input, select {
 input::placeholder { color: var(--muted); }
 input[type="number"] { width: 6.5rem; }
 input:user-invalid { border-color: var(--err); }
+/* A form of one field under the other, each with its hint (project-add.html). */
+form.stack { display: grid; gap: var(--s4); max-width: 36rem; }
+form.stack .hint { margin-top: var(--s1); }
+form.stack > p { margin: 0; }
+form.stack .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
 .hint { font-size: var(--t-1); color: var(--muted); margin: var(--s2) 0 0; }
 /* The daemon's refusal of what a form or a button sent (send in app.js). */
 .field-error { font-size: var(--t-1); color: var(--err); margin: var(--s2) 0 0; }
@@ -496,6 +501,7 @@ dialog.confirm {
 }
 dialog.confirm::backdrop { background: rgb(0 0 0 / 0.4); }
 dialog.confirm p { overflow-wrap: anywhere; }
+dialog.confirm h2 { margin-top: 0; }
 dialog.confirm .actions { display: flex; justify-content: end; gap: var(--s3); }
 
 /* A switch, a checkbox drawn as one: plain HTML, it still works by keyboard. */
