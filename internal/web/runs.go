@@ -1,7 +1,13 @@
 package web
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"slices"
@@ -15,6 +21,10 @@ import (
 
 // maxRuns is the most runs GET /api/runs answers.
 const maxRuns = 500
+
+// followEvery is how often the events of a step in flight read its file
+// again for what was appended.
+const followEvery = 300 * time.Millisecond
 
 // runJSON is what the list and the detail of a run share.
 type runJSON struct {
@@ -121,4 +131,85 @@ func runRoutes(mux *http.ServeMux, h *Handlers) {
 			Steps []stepJSON `json:"steps"`
 		}{toRun(ri, h.Config()), out})
 	})
+	mux.HandleFunc("GET /api/runs/{project}/{issue}/{run}/steps/{n}/events", func(w http.ResponseWriter, r *http.Request) {
+		project, issue, run := r.PathValue("project"), r.PathValue("issue"), r.PathValue("run")
+		if !transcript.Plain(project) || !transcript.Plain(issue) || !transcript.Plain(run) {
+			http.Error(w, "not a plain name", http.StatusBadRequest)
+			return
+		}
+		n, err := strconv.Atoi(r.PathValue("n"))
+		if err != nil || n < 1 {
+			http.Error(w, "step must be a number from 1", http.StatusBadRequest)
+			return
+		}
+		from := 0
+		if v := r.URL.Query().Get("from"); v != "" {
+			if from, err = strconv.Atoi(v); err != nil || from < 0 {
+				http.Error(w, "from must be a number of lines from 0", http.StatusBadRequest)
+				return
+			}
+		}
+		f, err := h.Transcripts.Open(project, issue, run, n)
+		if errors.Is(err, fs.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		} else if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+		streamStep(r, newSSE(w), f, from, h.Tick*pingTicks)
+	})
+}
+
+// streamStep sends each line of a step's file from line from on, then
+// follows the file until its end line or the request's end. A bufio.Reader
+// tries its reader again after io.EOF, so reading on picks up what was
+// appended.
+func streamStep(r *http.Request, s sse, f io.Reader, from int, pingEvery time.Duration) {
+	if s.ping() != nil { // sends the headers when there is nothing to send yet
+		return
+	}
+	rd := bufio.NewReader(f)
+	var part []byte // a line read up to the end of the file, without its newline yet
+	poll := time.NewTicker(followEvery)
+	defer poll.Stop()
+	ping := time.NewTicker(pingEvery)
+	defer ping.Stop()
+	for i := 0; ; {
+		b, err := rd.ReadBytes('\n')
+		part = append(part, b...)
+		if err == nil {
+			line := part[:len(part)-1]
+			part = nil
+			var typ struct{ Type string }
+			// Every stored line is an object that starts with {"t":, so i goes
+			// in front of it without encoding it again. Any other line, only
+			// in a damaged file, is skipped but counted.
+			ok := json.Unmarshal(line, &typ) == nil && bytes.HasPrefix(line, []byte(`{"`))
+			if ok && i >= from {
+				if s.send(append(fmt.Appendf(nil, `{"i":%d,`, i), line[1:]...)) != nil {
+					return
+				}
+			}
+			i++
+			if typ.Type == "end" { // a step writes nothing after it
+				s.done()
+				return
+			}
+			continue
+		}
+		if err != io.EOF {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-poll.C:
+		case <-ping.C:
+			if s.ping() != nil {
+				return
+			}
+		}
+	}
 }

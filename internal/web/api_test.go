@@ -29,7 +29,7 @@ func TestAPIStatusAnswersTheStatus(t *testing.T) {
 }
 
 // stream opens /api/status/stream on a server of h and returns its data
-// lines and its comment lines as they come; the stream ends with the test.
+// lines (and event lines, whole) and its comment lines as they come; the stream ends with the test.
 func stream(t *testing.T, h Handlers) (data, comments <-chan string) {
 	t.Helper()
 	return streamPath(t, h, "/api/status/stream")
@@ -60,6 +60,8 @@ func streamPath(t *testing.T, h Handlers, path string) (data, comments <-chan st
 			switch line := s.Text(); {
 			case strings.HasPrefix(line, "data: "):
 				d <- strings.TrimPrefix(line, "data: ")
+			case strings.HasPrefix(line, "event: "): // as is, so a test tells it from data
+				d <- line
 			case strings.HasPrefix(line, ":"):
 				c <- line
 			}

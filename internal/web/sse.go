@@ -30,3 +30,12 @@ func (s sse) ping() error {
 	}
 	return s.rc.Flush()
 }
+
+// done writes the event named done, with empty data: an event without a
+// data line is not dispatched.
+func (s sse) done() error {
+	if _, err := s.w.Write([]byte("event: done\ndata:\n\n")); err != nil {
+		return err
+	}
+	return s.rc.Flush()
+}
