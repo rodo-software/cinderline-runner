@@ -60,6 +60,14 @@ type Config struct {
 	// broken release; a client left out follows its vendor's latest (CLR-317).
 	// The runner checks each pin when it resolves it.
 	Pinned map[string]string `json:"pinned,omitempty"`
+	// TranscriptDays is how many days a run's transcript is kept, 0 to
+	// MaxTranscriptDays, unless a project sets its own; nil is
+	// DefaultTranscriptDays. A pointer: 0 keeps nothing after the run ends.
+	// TranscriptMaxSize is the most disk all transcripts take, written like
+	// memory, at least MinTranscriptSize; empty is DefaultTranscriptSize
+	// (decision 2026-11-26-local-web-page).
+	TranscriptDays    *int   `json:"transcript_days,omitempty"`
+	TranscriptMaxSize string `json:"transcript_max_size,omitempty"`
 	// Web turns the daemon's local web page on or off: "on", "off" or ""
 	// for webDefaultOn; WebPort is its port on 127.0.0.1, 0 for
 	// DefaultWebPort (decision 2026-11-26-local-web-page).
@@ -162,20 +170,75 @@ var memorySize = regexp.MustCompile(`^([1-9][0-9]{0,8})([mMgG])$`)
 // ParseMemory reads a memory size such as "4g" or "512m", 1024-based as in
 // docker run --memory, of at least MinMemory, in bytes.
 func ParseMemory(s string) (int64, error) {
+	return parseMiB("memory", s, MinMemory, DefaultMemory)
+}
+
+// parseMiB reads a size written like memory, of at least minimum, also
+// written like memory, in bytes; field and example are for the error.
+func parseMiB(field, s, minimum, example string) (int64, error) {
+	n, ok := bytesOf(s)
+	if !ok {
+		return 0, fmt.Errorf("%s %q must be a whole number of MiB or GiB such as %q or %q, at least %s", field, s, example, "512m", minimum)
+	}
+	if lowest, _ := bytesOf(minimum); n < lowest {
+		return 0, fmt.Errorf("%s %q is under the minimum of %s", field, s, minimum)
+	}
+	return n, nil
+}
+
+// bytesOf reads a size written like memory, in bytes.
+func bytesOf(s string) (int64, bool) {
 	m := memorySize.FindStringSubmatch(s)
 	if m == nil {
-		return 0, fmt.Errorf("memory %q must be a whole number of MiB or GiB such as %q or %q, at least %s", s, DefaultMemory, "512m", MinMemory)
+		return 0, false
 	}
 	n, _ := strconv.ParseInt(m[1], 10, 64) // at most 9 digits: no overflow below
 	if strings.EqualFold(m[2], "g") {
-		n <<= 30
-	} else {
-		n <<= 20
+		return n << 30, true
 	}
-	if n < 256<<20 {
-		return 0, fmt.Errorf("memory %q is under the minimum of %s", s, MinMemory)
+	return n << 20, true
+}
+
+// Defaults and limits of transcript_days and transcript_max_size (decision
+// 2026-11-26-local-web-page).
+const (
+	DefaultTranscriptDays = 14
+	MaxTranscriptDays     = 365
+	DefaultTranscriptSize = "1g"
+	MinTranscriptSize     = "100m"
+)
+
+// ParseTranscriptSize reads a transcript_max_size such as "1g" or "512m",
+// of at least MinTranscriptSize, in bytes.
+func ParseTranscriptSize(s string) (int64, error) {
+	return parseMiB("transcript_max_size", s, MinTranscriptSize, DefaultTranscriptSize)
+}
+
+// TranscriptDaysFor is how many days p's transcripts are kept: its own
+// transcript_days, else the runner-wide one, else DefaultTranscriptDays.
+func (c *Config) TranscriptDaysFor(p Project) int {
+	switch {
+	case p.TranscriptDays != nil:
+		return *p.TranscriptDays
+	case c.TranscriptDays != nil:
+		return *c.TranscriptDays
 	}
-	return n, nil
+	return DefaultTranscriptDays
+}
+
+// TranscriptMax is the most bytes all transcripts take. Validate has
+// checked the value.
+func (c *Config) TranscriptMax() int64 {
+	n, _ := ParseTranscriptSize(cmp.Or(c.TranscriptMaxSize, DefaultTranscriptSize))
+	return n
+}
+
+// checkTranscriptDays reports a transcript_days out of range; nil is unset.
+func checkTranscriptDays(days *int) string {
+	if days != nil && (*days < 0 || *days > MaxTranscriptDays) {
+		return fmt.Sprintf("transcript_days must be 0 to %d", MaxTranscriptDays)
+	}
+	return ""
 }
 
 // GiB writes bytes as GiB with one decimal, as the log and status show memory.
@@ -232,6 +295,9 @@ type Project struct {
 	// config's MaxParallelRuns (see Parallel). The Project Manager's run is
 	// not one of them (decision 2026-11-24-lanes in the app repository).
 	MaxParallelRuns int `json:"max_parallel_runs,omitempty"`
+	// TranscriptDays is the project's own transcript_days, which wins over
+	// the config's; nil is the config's (see TranscriptDaysFor).
+	TranscriptDays *int `json:"transcript_days,omitempty"`
 	// ExtraRepositories are other repositories the project's runs may read,
 	// mounted read-only (CSR-160). Configured only here, not in Cinderline
 	// (app decision 2026-11-11-extra-repositories-in-runner).
@@ -528,6 +594,12 @@ func (c *Config) Validate() error {
 	if problem := checkAllowSkills(c.AllowSkills); problem != "" {
 		return errors.New(problem)
 	}
+	if problem := checkTranscriptDays(c.TranscriptDays); problem != "" {
+		return errors.New(problem)
+	}
+	if _, err := ParseTranscriptSize(cmp.Or(c.TranscriptMaxSize, DefaultTranscriptSize)); err != nil {
+		return err
+	}
 	if c.Web != "" && c.Web != "on" && c.Web != "off" {
 		return fmt.Errorf("web %q must be on or off", c.Web)
 	}
@@ -565,6 +637,8 @@ func (c *Config) Validate() error {
 		} else if errMsg := checkParallel(p.MaxParallelRuns); errMsg != "" {
 			problem = errMsg
 		} else if errMsg := checkAllowSkills(p.AllowSkills); errMsg != "" {
+			problem = errMsg
+		} else if errMsg := checkTranscriptDays(p.TranscriptDays); errMsg != "" {
 			problem = errMsg
 		} else {
 			problem = checkExtraRepositories(p.ExtraRepositories)

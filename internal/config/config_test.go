@@ -863,3 +863,62 @@ func TestTheWebPortIsNeverOpenedToAgents(t *testing.T) {
 		t.Errorf("provider on 7420 with web_port 8080: %v, want valid", err)
 	}
 }
+
+// CLR-282, decision 2026-11-26-local-web-page: transcript_days is 0 to 365,
+// runner-wide or a project's own, which wins, and 0 is kept; transcript_max_size
+// is written like memory, at least 100m, 1g by default.
+func TestTranscriptSettings(t *testing.T) {
+	days := func(n int) *int { return &n }
+	ok := Project{URL: "https://a.example.com", Key: "WEB", Workspace: "default", Repository: "https://g.example.com/r.git"}
+	for _, tt := range []struct {
+		name    string
+		cfg     Config
+		wantErr string // empty means valid
+	}{
+		{"defaults", Config{}, ""},
+		{"days 0", Config{TranscriptDays: days(0)}, ""},
+		{"days 365", Config{TranscriptDays: days(365)}, ""},
+		{"days 366", Config{TranscriptDays: days(366)}, "transcript_days"},
+		{"days negative", Config{TranscriptDays: days(-1)}, "transcript_days"},
+		{"project days 0", Config{Projects: []Project{{URL: ok.URL, Key: ok.Key, Workspace: ok.Workspace, Repository: ok.Repository, TranscriptDays: days(0)}}}, ""},
+		{"project days 366", Config{Projects: []Project{{URL: ok.URL, Key: ok.Key, Workspace: ok.Workspace, Repository: ok.Repository, TranscriptDays: days(366)}}}, "project 1 (WEB): transcript_days"},
+		{"size 2g", Config{TranscriptMaxSize: "2g"}, ""},
+		{"size at the minimum", Config{TranscriptMaxSize: "100M"}, ""},
+		{"size under the minimum", Config{TranscriptMaxSize: "99m"}, "transcript_max_size"},
+		{"size in GB", Config{TranscriptMaxSize: "1GB"}, "transcript_max_size"},
+		{"size without unit", Config{TranscriptMaxSize: "1073741824"}, "transcript_max_size"},
+		{"size fraction", Config{TranscriptMaxSize: "1.5g"}, "transcript_max_size"},
+		{"size zero", Config{TranscriptMaxSize: "0g"}, "transcript_max_size"},
+	} {
+		err := tt.cfg.Validate()
+		switch {
+		case tt.wantErr == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", tt.name, err)
+		case tt.wantErr != "" && (err == nil || !strings.HasPrefix(err.Error(), tt.wantErr)):
+			t.Errorf("%s: err %v, want prefix %q", tt.name, err, tt.wantErr)
+		}
+	}
+
+	for _, tt := range []struct {
+		runner, project *int
+		want            int
+	}{
+		{nil, nil, 14},
+		{days(30), nil, 30},
+		{nil, days(3), 3},
+		{days(30), days(3), 3},
+		{days(30), days(0), 0},
+		{days(0), nil, 0},
+	} {
+		c := Config{TranscriptDays: tt.runner}
+		if got := c.TranscriptDaysFor(Project{TranscriptDays: tt.project}); got != tt.want {
+			t.Errorf("TranscriptDaysFor(runner %v, project %v) = %d, want %d", tt.runner, tt.project, got, tt.want)
+		}
+	}
+
+	for size, want := range map[string]int64{"": 1 << 30, "512m": 512 << 20, "2G": 2 << 30, "100m": 100 << 20} {
+		if got := (&Config{TranscriptMaxSize: size}).TranscriptMax(); got != want {
+			t.Errorf("TranscriptMax(%q) = %d, want %d", size, got, want)
+		}
+	}
+}
