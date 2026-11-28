@@ -188,12 +188,3 @@ func without(ps []config.Project, p config.Project) []config.Project {
 	}
 	return out
 }
-
-// where is p's URL and, outside the default one, its workspace: what tells
-// apart two projects with one key (CSR-97).
-func where(p config.Project) string {
-	if p.Workspace == config.DefaultWorkspace {
-		return p.URL
-	}
-	return p.URL + " (workspace " + p.Workspace + ")"
-}

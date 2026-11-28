@@ -45,7 +45,7 @@ func (c *CLI) allowHost(args []string) int {
 	hosts := &cfg.AllowHosts
 	var projKey, id string
 	if *project != "" {
-		p, err := findProject(cfg, *project, *instance, *ws)
+		p, err := manage.FindByKey(cfg, *project, *instance, *ws)
 		if err != nil {
 			return c.fail(err)
 		}

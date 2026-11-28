@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 )
 
 const transcriptsUsage = "[" + projectUsage + "] [DAYS|clear] | --max-size SIZE"
@@ -36,9 +37,10 @@ func (c *CLI) transcripts(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
+	which := manage.Project{Key: *project, URL: *instance, Workspace: *ws}
 	var p *config.Project
 	if *project != "" {
-		found, err := findProject(cfg, *project, *instance, *ws)
+		found, err := manage.FindByKey(cfg, *project, *instance, *ws)
 		if err != nil {
 			return c.fail(err)
 		}
@@ -52,11 +54,13 @@ func (c *CLI) transcripts(args []string) int {
 	}
 	switch value := f.Arg(0); {
 	case *maxSize != "":
-		size := strings.ToLower(*maxSize)
-		if _, err := config.ParseTranscriptSize(size); err != nil {
+		if err := manage.SetTranscriptMaxSize(c.Paths, *maxSize); err != nil {
 			return c.fail(err)
 		}
-		cfg.TranscriptMaxSize = size
+		cfg.TranscriptMaxSize = strings.ToLower(*maxSize)
+		c.showTranscripts(cfg, p)
+		c.reload()
+		return 0
 	case value == "":
 		c.showTranscripts(cfg, p)
 		return 0
@@ -68,12 +72,12 @@ func (c *CLI) transcripts(args []string) int {
 		*days = nil
 	default:
 		n, err := strconv.Atoi(value)
-		if err != nil || n < 0 || n > config.MaxTranscriptDays {
+		if err != nil {
 			return c.fail(fmt.Errorf("transcript_days %q must be 0 to %d", value, config.MaxTranscriptDays))
 		}
 		*days = &n
 	}
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := manage.SetTranscriptDays(c.Paths, which, *days); err != nil {
 		return c.fail(err)
 	}
 	c.showTranscripts(cfg, p)

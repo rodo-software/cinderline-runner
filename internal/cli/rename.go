@@ -48,7 +48,7 @@ func (c *CLI) rename(args []string) int {
 	p.LocalID = p.Label()
 	// An entry renamed by 0.4.1 has the new key and still the old ID.
 	if p.ID() == old.ID() {
-		fmt.Fprintf(c.Stdout, "%s is already the key of this project at %s\n", p.Key, where(p))
+		fmt.Fprintf(c.Stdout, "%s is already the key of this project at %s\n", p.Key, manage.Where(p))
 		return 0
 	}
 	for j, q := range cfg.Projects {
@@ -92,7 +92,7 @@ func (c *CLI) rename(args []string) int {
 	}
 	c.dropLocal(cfg, old)
 	fmt.Fprintf(c.Stdout, "Renamed %s to %s at %s. Its secrets moved with it. Its Docker volumes are removed: the clones come back with the next run, kept sessions are gone, and a client signed in with `%s login` must sign in again.\n",
-		old.ID(), p.ID(), where(p), name.Name)
+		old.ID(), p.ID(), manage.Where(p), name.Name)
 	return 0
 }
 

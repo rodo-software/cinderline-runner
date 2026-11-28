@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
@@ -51,6 +52,61 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 			return manage.Refused{Err: errors.New("on must be true or false")}
 		}
 		return manage.SetStrictHosts(h.Paths, *b.On)
+	})
+	writeRoute(mux, "PUT /api/settings/memory", h, func(_ *http.Request, b struct {
+		manage.Project
+		Value string `json:"value"`
+	}) error {
+		return manage.SetMemory(h.Paths, b.Project, b.Value)
+	})
+	writeRoute(mux, "PUT /api/settings/parallel", h, func(_ *http.Request, b struct {
+		manage.Project
+		Value int `json:"value"`
+	}) error {
+		return manage.SetParallel(h.Paths, b.Project, b.Value)
+	})
+	writeRoute(mux, "PUT /api/settings/transcript-days", h, func(_ *http.Request, b struct {
+		manage.Project
+		Value *int `json:"value"`
+	}) error {
+		return manage.SetTranscriptDays(h.Paths, b.Project, b.Value)
+	})
+	writeRoute(mux, "PUT /api/settings/transcript-max-size", h, func(_ *http.Request, b struct {
+		Value string `json:"value"`
+	}) error {
+		return manage.SetTranscriptMaxSize(h.Paths, b.Value)
+	})
+	mux.HandleFunc("PUT /api/settings/web", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			On   *bool `json:"on"`
+			Port *int  `json:"port"`
+		}
+		if err := readBody(w, r, &b); err != nil {
+			writeError(w, err)
+			return
+		}
+		writes.Lock()
+		defer writes.Unlock()
+		if err := manage.SetWeb(h.Paths, b.On, b.Port); err != nil {
+			writeError(w, err)
+			return
+		}
+		cfg, err := manage.Load(h.Paths)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		// The reload closes this connection when the page moves or goes off,
+		// so the whole answer goes out first, with its length, and the
+		// connection is not kept for another request; a reload that fails
+		// after it is the daemon's to log.
+		body, _ := json.Marshal(map[string]any{"web_on": cfg.WebOn(), "web_addr": cfg.WebAddr()})
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Connection", "close")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.Write(body)
+		http.NewResponseController(w).Flush()
+		h.Reload()
 	})
 	// {key} is the project's ID, the config's id: unique where a key is not.
 	writeRoute(mux, "POST /api/projects/{key}/repos", h, func(r *http.Request, b struct {

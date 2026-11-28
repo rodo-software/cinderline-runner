@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 )
 
 const memoryUsage = "show|set SIZE|clear " + projectUsage
@@ -39,11 +40,7 @@ func (c *CLI) memory(args []string) int {
 		}
 		return 0
 	case "set":
-		size := strings.ToLower(args[1])
-		if _, err := config.ParseMemory(size); err != nil {
-			return c.fail(err)
-		}
-		p.Memory = size
+		p.Memory = strings.ToLower(args[1])
 	default:
 		if p.Memory == "" {
 			fmt.Fprintf(c.Stdout, "Project %s has no memory setting; nothing changed\n", p.Key)
@@ -51,7 +48,7 @@ func (c *CLI) memory(args []string) int {
 		}
 		p.Memory = ""
 	}
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := manage.SetMemory(c.Paths, manage.Project{Key: p.Key, URL: p.URL, Workspace: p.Workspace}, p.Memory); err != nil {
 		return c.fail(err)
 	}
 	fmt.Fprintf(c.Stdout, "Agent containers of %s get %s of memory from their next run; %s\n", p.Key, cmp.Or(p.Memory, config.DefaultMemory), wins)

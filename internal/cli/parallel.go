@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 )
 
 const parallelUsage = "show|set N|clear [" + projectUsage + "]"
@@ -40,9 +41,10 @@ func (c *CLI) parallel(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
+	which := manage.Project{Key: *project, URL: *instance, Workspace: *ws}
 	var p *config.Project
 	if *project != "" {
-		found, err := findProject(cfg, *project, *instance, *ws)
+		found, err := manage.FindByKey(cfg, *project, *instance, *ws)
 		if err != nil {
 			return c.fail(err)
 		}
@@ -71,7 +73,7 @@ func (c *CLI) parallel(args []string) int {
 		return 0
 	case "set":
 		n, err := strconv.Atoi(args[1])
-		if err != nil || n < 1 || n > config.MaxParallel {
+		if err != nil || n < 1 { // 0 would clear; SetParallel checks the top
 			return c.fail(fmt.Errorf("max_parallel_runs %q must be 1 to %d", args[1], config.MaxParallel))
 		}
 		*value = n
@@ -86,7 +88,7 @@ func (c *CLI) parallel(args []string) int {
 		}
 		*value = 0 // unset: the runner-wide value, or 1
 	}
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := manage.SetParallel(c.Paths, which, *value); err != nil {
 		return c.fail(err)
 	}
 	// Decision 2026-11-24-rolling-reload: a loop takes its new slots once it has drained.

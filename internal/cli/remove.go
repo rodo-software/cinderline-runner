@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -9,11 +8,11 @@ import (
 	"os"
 	"os/signal"
 	"slices"
-	"strings"
 	"syscall"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -34,7 +33,7 @@ func (c *CLI) remove(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	p, err := findProject(cfg, f.Arg(0), *instance, *ws)
+	p, err := manage.FindByKey(cfg, f.Arg(0), *instance, *ws)
 	if err != nil {
 		return c.fail(err)
 	}
@@ -105,29 +104,4 @@ func (c *CLI) waitProject(p config.Project) bool {
 func projectFlags(f *flag.FlagSet) (instance, workspace *string) {
 	return f.String("url", "", "URL of the instance, when several projects share the key"),
 		f.String("workspace", "", "workspace slug, when several projects at one URL share the key")
-}
-
-// findProject returns the one project with key, at instance and in ws when
-// those are not empty; a key in several places needs them.
-func findProject(cfg *config.Config, key, instance, ws string) (config.Project, error) {
-	want := strings.TrimRight(instance, "/")
-	var matches []config.Project
-	for _, p := range cfg.Projects {
-		if p.Key == key && (want == "" || p.URL == want) && (ws == "" || p.Workspace == ws) {
-			matches = append(matches, p)
-		}
-	}
-	switch {
-	case len(matches) == 0 && (want != "" || ws != ""):
-		return config.Project{}, fmt.Errorf("no project %s at %s in workspace %s", key, cmp.Or(want, "any URL"), cmp.Or(ws, "any"))
-	case len(matches) == 0:
-		return config.Project{}, fmt.Errorf("no project %s", key)
-	case len(matches) > 1:
-		var places []string
-		for _, p := range matches {
-			places = append(places, where(p))
-		}
-		return config.Project{}, fmt.Errorf("several projects have key %s; choose one with -url or -workspace: %s", key, strings.Join(places, ", "))
-	}
-	return matches[0], nil
 }

@@ -49,7 +49,7 @@ func (c *CLI) allowSkill(args []string) int {
 	skills := &cfg.AllowSkills
 	var projKey, id string
 	if *project != "" {
-		p, err := findProject(cfg, *project, *instance, *ws)
+		p, err := manage.FindByKey(cfg, *project, *instance, *ws)
 		if err != nil {
 			return c.fail(err)
 		}

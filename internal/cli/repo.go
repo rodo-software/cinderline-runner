@@ -37,7 +37,7 @@ func (c *CLI) repoFlags(cmd, usage string, args []string, nargs int) (cfg *confi
 	if err != nil {
 		return nil, 0, nil, c.fail(err)
 	}
-	p, err := findProject(cfg, *project, *instance, *ws)
+	p, err := manage.FindByKey(cfg, *project, *instance, *ws)
 	if err != nil {
 		return nil, 0, nil, c.fail(err)
 	}

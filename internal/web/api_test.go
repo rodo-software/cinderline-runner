@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -823,5 +824,112 @@ func TestAPISkillsRefuse(t *testing.T) {
 	cfg, err := config.Load(paths.File)
 	if err != nil || len(cfg.AllowSkills) != 0 || len(cfg.Projects[0].AllowSkills) != 1 || *reloads != 0 {
 		t.Errorf("config %+v, %v, %d reloads; want it unchanged", cfg, err, *reloads)
+	}
+}
+
+// CLR-297: the transcript_max_size route sets the value, clears it with "",
+// and refuses one under the minimum without a reload.
+func TestAPITranscriptMaxSize(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	if w := put(t, h, tok, "/api/settings/transcript-max-size", `{"value": "2g"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("PUT 2g = %d %s, want 204", w.Code, w.Body)
+	}
+	if cfg, err := config.Load(paths.File); err != nil || cfg.TranscriptMaxSize != "2g" {
+		t.Errorf("config %+v, %v; want 2g", cfg, err)
+	}
+	if w := put(t, h, tok, "/api/settings/transcript-max-size", `{"value": "50m"}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "100m") {
+		t.Errorf("PUT 50m = %d %s, want 400 naming the minimum", w.Code, w.Body)
+	}
+	if w := put(t, h, tok, "/api/settings/transcript-max-size", `{"value": ""}`); w.Code != http.StatusNoContent {
+		t.Fatalf("PUT \"\" = %d %s, want 204", w.Code, w.Body)
+	}
+	if cfg, err := config.Load(paths.File); err != nil || cfg.TranscriptMaxSize != "" || *reloads != 2 {
+		t.Errorf("config %+v, %v, %d reloads; want it cleared after 2", cfg, err, *reloads)
+	}
+}
+
+// CLR-297: the web route answers the page's new place in full even when
+// the reload closes the connection it came on, as moving the page does.
+func TestAPIWebMovesThePage(t *testing.T) {
+	dir := t.TempDir()
+	paths := config.Paths{Dir: dir, File: filepath.Join(dir, "config.json"), State: dir}
+	var srv *httptest.Server
+	reloads := 0
+	srv = httptest.NewServer(Handler(dir, port, Handlers{Paths: paths, Reload: func() error {
+		reloads++
+		srv.CloseClientConnections() // what serveWeb's Close does to the page's connections
+		return nil
+	}}))
+	t.Cleanup(srv.Close)
+	tok := token(t, dir)
+	putWeb := func(body string) (int, string) {
+		req, _ := http.NewRequest("PUT", srv.URL+"/api/settings/web", strings.NewReader(body))
+		req.Host = "127.0.0.1:7420"
+		req.Header.Set("Origin", "http://127.0.0.1:7420")
+		req.AddCookie(&http.Cookie{Name: name.Name, Value: tok})
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("PUT %s: %v", body, err)
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("PUT %s: body %q, %v", body, b, err)
+		}
+		return resp.StatusCode, strings.TrimSpace(string(b))
+	}
+	if code, body := putWeb(`{"on": true, "port": 8080}`); code != http.StatusOK || body != `{"web_addr":"127.0.0.1:8080","web_on":true}` {
+		t.Errorf("PUT on 8080 = %d %s", code, body)
+	}
+	if code, body := putWeb(`{"on": false}`); code != http.StatusOK || body != `{"web_addr":"127.0.0.1:8080","web_on":false}` {
+		t.Errorf("PUT off = %d %s", code, body)
+	}
+	if code, body := putWeb(`{"port": 80}`); code != http.StatusBadRequest || !strings.Contains(body, "1024 to 65535") {
+		t.Errorf("PUT port 80 = %d %s, want 400 with the range", code, body)
+	}
+	if cfg, err := config.Load(paths.File); err != nil || cfg.Web != "off" || cfg.WebPort != 8080 || reloads != 2 {
+		t.Errorf("config %+v, %v, %d reloads; want off at 8080 after 2", cfg, err, reloads)
+	}
+}
+
+// CLR-297: the project settings' routes set a good value, a project's own
+// or runner-wide, and refuse a bad one, or an unknown project, without a
+// reload.
+func TestAPIProjectSettings(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	for _, tc := range []struct {
+		path, good, bad, refusal string
+		check                    func(*config.Config) bool
+	}{
+		{"/api/settings/memory", `{"project": "WEB", "url": "https://a.example.com", "value": "8G"}`, `{"project": "WEB", "value": "100m"}`, "256m",
+			func(c *config.Config) bool { return c.Projects[0].Memory == "8g" }},
+		{"/api/settings/memory", `{"project": "WEB", "value": ""}`, `{"project": "", "value": "8g"}`, "project",
+			func(c *config.Config) bool { return c.Projects[0].Memory == "" }},
+		{"/api/settings/parallel", `{"project": "WEB", "workspace": "default", "value": 5}`, `{"project": "WEB", "value": 11}`, "1 to 10",
+			func(c *config.Config) bool { return c.Projects[0].MaxParallelRuns == 5 && c.MaxParallelRuns == 3 }},
+		{"/api/settings/parallel", `{"project": "", "value": 0}`, `{"project": "NOPE", "value": 2}`, "no project NOPE",
+			func(c *config.Config) bool { return c.MaxParallelRuns == 0 && c.Projects[0].MaxParallelRuns == 5 }},
+		{"/api/settings/transcript-days", `{"project": "WEB", "value": 0}`, `{"project": "WEB", "value": 366}`, "0 to 365",
+			func(c *config.Config) bool { return c.TranscriptDaysFor(c.Projects[0]) == 0 && c.TranscriptDays == nil }},
+		{"/api/settings/transcript-days", `{"project": "", "value": 30}`, `{"project": "", "url": "https://a.example.com", "value": 30}`, "need a project",
+			func(c *config.Config) bool { return *c.TranscriptDays == 30 }},
+		{"/api/settings/transcript-days", `{"project": "WEB", "value": null}`, `{"project": "WEB", "value": "7"}`, "",
+			func(c *config.Config) bool {
+				return c.Projects[0].TranscriptDays == nil && c.TranscriptDaysFor(c.Projects[0]) == 30
+			}},
+	} {
+		if w := put(t, h, tok, tc.path, tc.good); w.Code != http.StatusNoContent {
+			t.Fatalf("PUT %s %s = %d %s, want 204", tc.path, tc.good, w.Code, w.Body)
+		}
+		before := *reloads
+		if w := put(t, h, tok, tc.path, tc.bad); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), tc.refusal) || *reloads != before {
+			t.Errorf("PUT %s %s = %d %s, want 400 with %q and no reload", tc.path, tc.bad, w.Code, w.Body, tc.refusal)
+		}
+		if cfg, err := config.Load(paths.File); err != nil || !tc.check(cfg) {
+			t.Errorf("after PUT %s %s: config %+v, %v", tc.path, tc.good, cfg, err)
+		}
+	}
+	if *reloads != 7 {
+		t.Errorf("%d reloads, want 7", *reloads)
 	}
 }

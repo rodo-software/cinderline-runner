@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/web"
 )
@@ -46,16 +47,18 @@ func (c *CLI) web(args []string) int {
 	if f.NArg() == 0 {
 		return c.openWeb(cfg.WebOn(), cfg.WebAddr(), !*noOpen)
 	}
+	var on *bool
+	var port *int
 	if verb == "port" {
 		n, err := strconv.Atoi(f.Arg(1))
 		if err != nil {
 			return c.fail(fmt.Errorf("web_port %q must be 1024 to 65535", f.Arg(1)))
 		}
-		cfg.WebPort = n // Save refuses a port out of range
+		port, cfg.WebPort = &n, n
 	} else {
-		cfg.Web = verb
+		on = new(verb == "on")
 	}
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := manage.SetWeb(c.Paths, on, port); err != nil {
 		return c.fail(err)
 	}
 	if verb == "port" {
