@@ -64,6 +64,24 @@ func TestHandlerServesTheStaticFiles(t *testing.T) {
 	}
 }
 
+func TestHandlerServesTheOverview(t *testing.T) {
+	dir := t.TempDir()
+	tok := token(t, dir)
+	for path, want := range map[string]string{
+		"/":            "text/html; charset=utf-8",
+		"/app.js":      "text/javascript; charset=utf-8",
+		"/overview.js": "text/javascript; charset=utf-8",
+	} {
+		w := do(t, dir, "GET", path, tok, nil)
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != want {
+			t.Errorf("GET %s = %d, %q, want 200 %q", path, w.Code, w.Header().Get("Content-Type"), want)
+		}
+	}
+	if w := do(t, dir, "GET", "/", tok, nil); !strings.Contains(w.Body.String(), `src="overview.js"`) {
+		t.Error("GET / does not load overview.js")
+	}
+}
+
 func TestTokenIsMadeOnceAndPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	tok := token(t, dir)

@@ -1,22 +1,63 @@
 <!doctype html>
-<!-- Start page until the real one (CLR-270): links to the mocks of CLR-268. -->
+<!-- The Overview: overview.js fills it from /api/status/stream. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cinderline runner</title>
+<title>Overview · Cinderline runner</title>
 <link rel="stylesheet" href="app.css">
 <script src="app.js"></script>
+<script src="overview.js" defer></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
 <main id="main">
-  <h1>Cinderline runner</h1>
-  <p>Mock pages, made-up data:</p>
-  <ul>
-    <li><a href="mock-overview.html">Overview</a></li>
-    <li><a href="mock-run.html">Run</a></li>
-    <li><a href="mock-project.html">Project</a></li>
-  </ul>
+<header class="page-head">
+  <h1>Overview</h1>
+  <p class="lead" id="lead"></p>
+</header>
+
+<section aria-labelledby="needs">
+  <h2 id="needs">Needs you</h2>
+  <div id="attention"></div>
+</section>
+
+<section aria-labelledby="now">
+  <h2 id="now">Running now</h2>
+  <ul class="runs" id="runs"></ul>
+  <p class="muted" id="no-runs" hidden>Nothing runs now.</p>
+</section>
+
+<section aria-labelledby="projects">
+  <h2 id="projects">Projects</h2>
+  <div class="folds" id="project-list"></div>
+  <p class="muted" id="no-projects" hidden>No projects yet.</p>
+</section>
+
+<section aria-labelledby="runner">
+  <h2 id="runner">This runner</h2>
+  <div id="budget" hidden>
+    <p id="budget-label"></p>
+    <div class="meter" role="meter" aria-labelledby="budget-label" aria-valuemin="0"><span></span></div>
+    <p class="hint">A run waits when its project's memory does not fit.</p>
+  </div>
+  <table class="kv">
+    <tr><th scope="row">Version</th><td id="version"></td></tr>
+  </table>
+</section>
 </main>
 </body>
 </html>
