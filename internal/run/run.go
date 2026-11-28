@@ -21,6 +21,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/redact"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/transcript"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -53,6 +54,10 @@ type job struct {
 	// blocked is the merge agent's "Blocked" line when it could not resolve
 	// the base merge in this run, for the publish's reason (CLR-245).
 	blocked string
+	// transcript is the run's transcript and tstep its step in flight, for
+	// the code that does the step to write to; nil writes nothing.
+	transcript *transcript.Run
+	tstep      *transcript.Step
 }
 
 func (j *job) isTeam() bool { return len(j.team.Agents) > 1 }
@@ -159,6 +164,9 @@ func (p *Project) run(ctx context.Context, c *cinderline.Client, proj cinderline
 	if err != nil {
 		return false, err
 	}
+	if p.Transcripts != nil {
+		j.transcript = p.Transcripts.Begin(p.Config.Key, j.ref, time.Now()) // its folder comes with the first step
+	}
 	// A manager run never commits or pushes: its clone is only read.
 	if j.manager {
 		defer p.removeClone(context.WithoutCancel(ctx), j) // also after a plain stop
@@ -237,6 +245,8 @@ func (p *Project) steps(ctx context.Context, c *cinderline.Client, j *job, cf *c
 // step does one step and returns its facts. An error, a panic too, is the
 // runner's own failure, as is a step it does not know.
 func (p *Project) step(ctx context.Context, c *cinderline.Client, j *job, h *held, step cinderline.Step, pending **conflict) (last *cinderline.LastStep, err error) {
+	j.tstep = j.transcript.Step(step.Kind, stepStart(j, step))
+	defer func() { j.tstep.End(stepEnd(ctx, last, err)) }() // after the recovery below, which sets err
 	defer func() {
 		if r := recover(); r != nil {
 			p.Log.Error("panic", "project", p.Config.Key, "issue", j.ref, "stack", string(debug.Stack()))
@@ -273,6 +283,34 @@ func (p *Project) step(ctx context.Context, c *cinderline.Client, j *job, h *hel
 		return &last, nil
 	}
 	return nil, malformed(c, step.Kind, "unknown kind or session "+step.Session)
+}
+
+// stepStart is what a step's transcript starts with: for a turn, the agent
+// the step names with its client and model on the team.
+func stepStart(j *job, step cinderline.Step) transcript.Start {
+	st := transcript.Start{Manager: j.manager}
+	if step.Kind == "run" || step.Kind == "resolve" {
+		st.Agent = step.Agent
+		if i := slices.IndexFunc(j.team.Agents, func(a cinderline.TeamAgent) bool { return a.Name == step.Agent }); i >= 0 {
+			st.Client, st.Model = j.team.Agents[i].Client, deref(j.team.Agents[i].Model)
+		}
+	}
+	return st
+}
+
+// stepEnd is a step's transcript outcome: stopped when the poll's stop
+// ended its turn or check or the run's ctx ended, ok with its facts and no
+// error, else failed with the error.
+func stepEnd(ctx context.Context, last *cinderline.LastStep, err error) (outcome, errText string) {
+	switch {
+	case ctx.Err() != nil || last != nil && last.Outcome == "stopped":
+		return "stopped", ""
+	case err == nil && last != nil:
+		return "ok", ""
+	case err == nil:
+		return "failed", ""
+	}
+	return "failed", err.Error()
 }
 
 // next asks the app for the next step, again after nextWaits while it does not answer.

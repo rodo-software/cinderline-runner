@@ -28,6 +28,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/tools"
+	"github.com/rodo-software/cinderline-runner/internal/transcript"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -87,6 +88,9 @@ type Project struct {
 	// Turns are the agent turns in flight on each of the runner's providers,
 	// which every project's runs share, for their max_agents (CLR-243); nil: no limit.
 	Turns *ProviderTurns
+	// Transcripts keeps each run's steps on disk (decision
+	// 2026-11-26-local-web-page); nil: none.
+	Transcripts *transcript.Store
 
 	// Set only by NewProject; nil in tests.
 	deleteSession func(ctx context.Context, ref, session string) error                                                         // a session's files on the state volume
