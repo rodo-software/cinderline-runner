@@ -88,6 +88,47 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 	writeRoute(mux, "DELETE /api/providers/{name}", h, func(r *http.Request, _ struct{}) error {
 		return manage.RemoveProvider(h.Paths, h.Secrets, r.PathValue("name"))
 	})
+
+	// Secrets are write-only: no route answers a value, nor puts one in an
+	// error (decision 2026-11-26-local-web-page, Config management).
+	mux.HandleFunc("GET /api/projects/{key}/keys", func(w http.ResponseWriter, r *http.Request) {
+		p, err := manage.FindProject(h.Paths, r.PathValue("key"))
+		var ks []manage.KeyInfo
+		if err == nil {
+			ks, err = manage.ListKeys(h.Secrets, p)
+		}
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, ks)
+	})
+	type keyBody struct {
+		Value string `json:"value"`
+	}
+	writeRoute(mux, "PUT /api/projects/{key}/keys/{kind}", h, func(r *http.Request, b keyBody) error {
+		p, err := manage.FindProject(h.Paths, r.PathValue("key"))
+		if err != nil {
+			return err
+		}
+		_, err = manage.SetKey(r.Context(), h.Paths, h.Secrets, h.Version, p, r.PathValue("kind"), b.Value)
+		return err
+	})
+	writeRoute(mux, "DELETE /api/projects/{key}/keys/{kind}", h, func(r *http.Request, _ struct{}) error {
+		p, err := manage.FindProject(h.Paths, r.PathValue("key"))
+		if err != nil {
+			return err
+		}
+		return manage.DeleteKey(h.Paths, h.Secrets, p, r.PathValue("kind"))
+	})
+	// A provider's key belongs to no project: the zero one.
+	writeRoute(mux, "PUT /api/providers/{name}/key", h, func(r *http.Request, b keyBody) error {
+		_, err := manage.SetKey(r.Context(), h.Paths, h.Secrets, h.Version, config.Project{}, "provider:"+r.PathValue("name"), b.Value)
+		return err
+	})
+	writeRoute(mux, "DELETE /api/providers/{name}/key", h, func(r *http.Request, _ struct{}) error {
+		return manage.DeleteKey(h.Paths, h.Secrets, config.Project{}, "provider:"+r.PathValue("name"))
+	})
 }
 
 // errUnchanged is a write that changed nothing: answered 204 without a

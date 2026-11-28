@@ -2,16 +2,14 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 
 	"golang.org/x/term"
 
-	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
@@ -46,20 +44,17 @@ func (c *CLI) key(args []string) int {
 		return code
 	}
 	p, n := cfg.Projects[i], args[1]
-	kind, label := secrets.Kind(n), n
-	if kind != secrets.RunnerToken && kind != secrets.GitToken {
-		kind, label = secrets.ClientKeys[n], ""
-		for _, m := range modelKeys {
-			if m.client == n {
-				label = m.label + " for " + n
-			}
-		}
-		if label == "" {
-			return c.fail(fmt.Errorf("unknown key %q; use %s, %s, claude, opencode, codex or gemini", n, secrets.RunnerToken, secrets.GitToken))
+	if _, err := manage.KeyKind(n); err != nil {
+		return c.fail(err)
+	}
+	label := n
+	for _, m := range modelKeys {
+		if m.client == n {
+			label = m.label + " for " + n
 		}
 	}
 	if args[0] == "delete" {
-		if err := c.Secrets.Delete(p, kind); err != nil {
+		if err := manage.DeleteKey(c.Paths, c.Secrets, p, n); err != nil {
 			return c.fail(err)
 		}
 		fmt.Fprintf(c.Stdout, "Deleted %s of %s\n", label, p.Key)
@@ -70,17 +65,11 @@ func (c *CLI) key(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	if v == "" {
-		return c.fail(errors.New("empty value; nothing was stored"))
-	}
-	if kind == secrets.RunnerToken {
-		if err := c.checkRunnerToken(p, v); err != nil {
-			return c.fail(err)
-		}
-	}
-	if err := c.storeKey(p, kind, label, v); err != nil {
+	store, err := manage.SetKey(context.Background(), c.Paths, c.Secrets, c.Version, p, n, v)
+	if err != nil {
 		return c.fail(err)
 	}
+	fmt.Fprintf(c.Stdout, "Stored %s in %s\n", label, c.storeName(store))
 	c.reload()
 	return 0
 }
@@ -95,9 +84,9 @@ func (c *CLI) providerKey(verb, pr string, args []string) int {
 	if _, err := providerIndex(cfg, pr); err != nil {
 		return c.fail(err)
 	}
-	kind, label := secrets.ProviderKey(pr), "the key of "+pr
+	label := "the key of " + pr
 	if verb == "delete" {
-		if err := c.Secrets.Delete(secrets.Runner, kind); err != nil {
+		if err := manage.DeleteKey(c.Paths, c.Secrets, config.Project{}, "provider:"+pr); err != nil {
 			return c.fail(err)
 		}
 		fmt.Fprintf(c.Stdout, "Deleted %s\n", label)
@@ -108,12 +97,11 @@ func (c *CLI) providerKey(verb, pr string, args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	if v == "" {
-		return c.fail(errors.New("empty value; nothing was stored"))
-	}
-	if err := c.storeKey(secrets.Runner, kind, label, v); err != nil {
+	store, err := manage.SetKey(context.Background(), c.Paths, c.Secrets, c.Version, config.Project{}, "provider:"+pr, v)
+	if err != nil {
 		return c.fail(err)
 	}
+	fmt.Fprintf(c.Stdout, "Stored %s in %s\n", label, c.storeName(store))
 	c.reload()
 	return 0
 }
@@ -124,25 +112,15 @@ func (c *CLI) keyList(args []string) int {
 	if code != 0 {
 		return code
 	}
-	p := cfg.Projects[i]
-	names := []string{string(secrets.RunnerToken), string(secrets.GitToken)}
-	kinds := []secrets.Kind{secrets.RunnerToken, secrets.GitToken}
-	for _, m := range modelKeys {
-		names, kinds = append(names, m.client), append(kinds, secrets.ClientKeys[m.client])
+	ks, err := manage.ListKeys(c.Secrets, cfg.Projects[i])
+	if err != nil {
+		return c.fail(err)
 	}
-	for _, r := range p.ExtraRepositories {
-		k := secrets.ExtraGitToken(r.URL)
-		names, kinds = append(names, string(k)), append(kinds, k)
-	}
-	for j, k := range kinds {
-		_, store, err := c.Secrets.Get(p, k)
-		switch {
-		case err == nil:
-			fmt.Fprintf(c.Stdout, "%-13s set, in %s\n", names[j], c.storeName(store))
-		case errors.Is(err, secrets.ErrNotFound):
-			fmt.Fprintf(c.Stdout, "%-13s not set\n", names[j])
-		default:
-			return c.fail(err)
+	for _, k := range ks {
+		if k.Set {
+			fmt.Fprintf(c.Stdout, "%-13s set, in %s\n", k.Kind, c.storeName(k.Store))
+		} else {
+			fmt.Fprintf(c.Stdout, "%-13s not set\n", k.Kind)
 		}
 	}
 	return 0
@@ -159,31 +137,6 @@ func (c *CLI) secretAsk(prompt string) (string, error) {
 	b, err := term.ReadPassword(int(f.Fd()))
 	fmt.Fprintln(c.Stdout)
 	return strings.TrimSpace(string(b)), err
-}
-
-// checkRunnerToken checks v against p's instance, as add does, and that it is p's.
-func (c *CLI) checkRunnerToken(p config.Project, v string) error {
-	proj, err := c.tokenProject(p, v)
-	if err != nil {
-		return err
-	}
-	if proj.Key != p.Key || proj.WorkspaceSlug() != p.Workspace {
-		return fmt.Errorf("this runner token is for %s in workspace %s, not %s in %s", proj.Key, proj.WorkspaceSlug(), p.Key, p.Workspace)
-	}
-	return nil
-}
-
-// tokenProject asks p's instance which project runner token v is for.
-func (c *CLI) tokenProject(p config.Project, v string) (cinderline.Project, error) {
-	proj, err := cinderline.New(p.URL, v, c.Version).Project(context.Background())
-	var apiErr *cinderline.APIError
-	if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
-		return proj, errors.New("the instance rejected this runner token")
-	}
-	if err != nil {
-		return proj, fmt.Errorf("%s could not be reached: %w", p.URL, err)
-	}
-	return proj, nil
 }
 
 // storeKey stores v as p's secret of kind and says where, never what.

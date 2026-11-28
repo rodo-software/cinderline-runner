@@ -12,6 +12,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
@@ -35,7 +36,7 @@ func (c *CLI) rename(args []string) int {
 	if err != nil {
 		return c.fail(fmt.Errorf("%s has no runner token to ask its instance with: %w", old.Key, err))
 	}
-	proj, err := c.tokenProject(old, token)
+	proj, err := manage.TokenProject(context.Background(), old, token, c.Version)
 	if err != nil {
 		return c.fail(fmt.Errorf("%s: %w", old.Key, err))
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -542,5 +543,170 @@ func TestAPIProvidersRefuse(t *testing.T) {
 	}
 	if _, _, err := secrets.New(paths.State).Get(secrets.Runner, secrets.ProviderKey("x")); !errors.Is(err, secrets.ErrNotFound) {
 		t.Errorf("a refused add stored a key: %v", err)
+	}
+}
+
+// keysInstance is a Cinderline instance that takes only runnerToken, as
+// project WEB's, and the config.json of configHandler moved to it, with
+// provider lan; its refusal echoes the token it got, as a careless app could.
+func keysInstance(t *testing.T, paths config.Paths) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); tok != runnerToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"message":"bad token ` + tok + `"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"poll_after":30,"project":{"key":"WEB","name":"Web","repository_url":"https://git.example.com/o/web","forge":"forgejo","base_branch":"main","environment":"default"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	cfg, err := config.Load(paths.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Projects[0].URL = srv.URL
+	cfg.Providers = []config.Provider{{Name: "lan", BaseURL: "http://provider.example:8080/v1"}}
+	if err := cfg.Save(paths.File); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const runnerToken = "the-good-runner-token"
+
+// keyList is GET /api/projects/WEB/keys as kind: set.
+func keyList(t *testing.T, h http.Handler, tok string) map[string]bool {
+	t.Helper()
+	var ks []struct {
+		Kind string `json:"kind"`
+		Set  *bool  `json:"set"`
+	}
+	getJSON(t, h, tok, "/api/projects/WEB/keys", &ks)
+	m := map[string]bool{}
+	for _, k := range ks {
+		if k.Set == nil {
+			t.Fatalf("key %s has no set", k.Kind)
+		}
+		m[k.Kind] = *k.Set
+	}
+	return m
+}
+
+// CLR-300: PUT sets each key of a project and a provider's, GET lists
+// which are set, DELETE deletes them; each write reloads. No answer and
+// no log line holds a value.
+func TestAPIKeys(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	keysInstance(t, paths)
+	logged.Reset()
+	var answers strings.Builder
+	do := func(method, path, body string, want int) {
+		t.Helper()
+		w := send(t, h, method, tok, path, body)
+		answers.WriteString(w.Body.String())
+		if w.Code != want {
+			t.Fatalf("%s %s = %d %s, want %d", method, path, w.Code, w.Body, want)
+		}
+	}
+	values := map[string]string{"runner-token": runnerToken}
+	for _, n := range []string{"git-token", "claude", "opencode", "codex", "gemini"} {
+		values[n] = "secret-value-of-" + n
+	}
+	for n, v := range values {
+		do("PUT", "/api/projects/WEB/keys/"+n, `{"value": "`+v+`"}`, http.StatusNoContent)
+	}
+	do("PUT", "/api/providers/lan/key", `{"value": "`+providerKey+`"}`, http.StatusNoContent)
+
+	p, err := manage.FindProject(paths, "WEB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := secrets.New(paths.State)
+	for n, v := range values {
+		k := secrets.Kind(n)
+		if c, ok := secrets.ClientKeys[n]; ok {
+			k = c
+		}
+		if got, _, err := sec.Get(p, k); err != nil || got != v {
+			t.Errorf("%s = %q, %v; want it stored", n, got, err)
+		}
+	}
+	if got, _, err := sec.Get(secrets.Runner, secrets.ProviderKey("lan")); err != nil || got != providerKey {
+		t.Errorf("lan's key = %q, %v", got, err)
+	}
+	got := keyList(t, h, tok)
+	answers.WriteString(configText(t, h, tok))
+	for n := range values {
+		if !got[n] {
+			t.Errorf("list %v: %s not set", got, n)
+		}
+	}
+	if len(got) != len(values) {
+		t.Errorf("list %v, want the %d kinds", got, len(values))
+	}
+
+	for n := range values {
+		do("DELETE", "/api/projects/WEB/keys/"+n, "", http.StatusNoContent)
+	}
+	do("DELETE", "/api/providers/lan/key", "", http.StatusNoContent)
+	for n, set := range keyList(t, h, tok) {
+		if set {
+			t.Errorf("%s still set after DELETE", n)
+		}
+	}
+	if _, _, err := sec.Get(secrets.Runner, secrets.ProviderKey("lan")); !errors.Is(err, secrets.ErrNotFound) {
+		t.Errorf("lan's key after DELETE: %v", err)
+	}
+	if want := 2 * (len(values) + 1); *reloads != want {
+		t.Errorf("%d reloads, want %d", *reloads, want)
+	}
+	for _, v := range append(slices.Collect(maps.Values(values)), providerKey) {
+		if strings.Contains(answers.String(), v) || strings.Contains(logged.String(), v) {
+			t.Errorf("an answer or the log holds %q:\n%s\n%s", v, &answers, &logged)
+		}
+	}
+}
+
+// A refused write is a 400 that stores and reloads nothing, and neither
+// its answer nor the log holds the value.
+func TestAPIKeysRefuse(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	keysInstance(t, paths)
+	logged.Reset()
+	const v = "a-secret-value"
+	body := `{"value": "` + v + `"}`
+	for what, c := range map[string]struct{ method, path, body, want string }{
+		"empty value":           {"PUT", "/api/projects/WEB/keys/claude", `{"value": ""}`, "empty value"},
+		"no value":              {"PUT", "/api/projects/WEB/keys/claude", `{}`, "empty value"},
+		"no body":               {"PUT", "/api/projects/WEB/keys/claude", ``, "empty value"},
+		"unknown field":         {"PUT", "/api/projects/WEB/keys/claude", `{"value": "` + v + `", "x": 1}`, "unknown field"},
+		"unknown kind":          {"PUT", "/api/projects/WEB/keys/aider", body, "unknown key"},
+		"extra repo's token":    {"PUT", "/api/projects/WEB/keys/git-token:x", body, "unknown key"},
+		"provider via project":  {"PUT", "/api/projects/WEB/keys/provider:lan", body, "belongs to no project"},
+		"unknown project":       {"PUT", "/api/projects/NOPE/keys/claude", body, "no project NOPE"},
+		"rejected runner token": {"PUT", "/api/projects/WEB/keys/runner-token", body, "rejected this runner token"},
+		"unknown provider":      {"PUT", "/api/providers/nope/key", body, "no provider nope"},
+		"empty provider key":    {"PUT", "/api/providers/lan/key", `{"value": ""}`, "empty value"},
+		"delete unknown kind":   {"DELETE", "/api/projects/WEB/keys/aider", ``, "unknown key"},
+		"delete unknown proj":   {"DELETE", "/api/projects/NOPE/keys/claude", ``, "no project NOPE"},
+		"delete unknown prov":   {"DELETE", "/api/providers/nope/key", ``, "no provider nope"},
+		"list unknown project":  {"GET", "/api/projects/NOPE/keys", ``, "no project NOPE"},
+	} {
+		w := send(t, h, c.method, tok, c.path, c.body)
+		var e struct{ Error string }
+		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != http.StatusBadRequest || !strings.Contains(e.Error, c.want) {
+			t.Errorf("%s: %d %s, want 400 containing %q", what, w.Code, w.Body, c.want)
+		}
+		if strings.Contains(w.Body.String(), v) || strings.Contains(logged.String(), v) {
+			t.Errorf("%s: the answer or log holds the value: %s / %s", what, w.Body, &logged)
+		}
+	}
+	for n, set := range keyList(t, h, tok) {
+		if set {
+			t.Errorf("%s set by a refused write", n)
+		}
+	}
+	if *reloads != 0 {
+		t.Errorf("%d reloads, want 0", *reloads)
 	}
 }

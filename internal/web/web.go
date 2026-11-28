@@ -38,6 +38,7 @@ type Handlers struct {
 	Secrets *secrets.Secrets
 	Exec    workspace.Exec
 	Log     *slog.Logger
+	Version string // the build's, sent when a runner token is checked
 
 	// Stats measures the containers of the project's run of issue once
 	// (environment.Docker.Stats), every StatsEvery while a page watches;
