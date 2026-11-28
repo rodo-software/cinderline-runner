@@ -163,6 +163,24 @@ func TestHandlerServesTheProjectPages(t *testing.T) {
 	}
 }
 
+// CLR-309: the Settings page, the runner-wide settings.
+func TestHandlerServesTheSettingsPage(t *testing.T) {
+	dir := t.TempDir()
+	tok := token(t, dir)
+	for path, want := range map[string]string{
+		"/settings.html": "text/html; charset=utf-8",
+		"/settings.js":   "text/javascript; charset=utf-8",
+	} {
+		w := do(t, dir, "GET", path, tok, nil)
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != want {
+			t.Errorf("GET %s = %d, %q, want 200 %q", path, w.Code, w.Header().Get("Content-Type"), want)
+		}
+	}
+	if w := do(t, dir, "GET", "/settings.html", tok, nil); !strings.Contains(w.Body.String(), `src="settings.js"`) {
+		t.Error("GET /settings.html does not load settings.js")
+	}
+}
+
 func TestTokenIsMadeOnceAndPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	tok := token(t, dir)

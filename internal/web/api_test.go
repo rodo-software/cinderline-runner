@@ -268,6 +268,8 @@ func TestAPIConfig(t *testing.T) {
 			MaxParallelRuns   int    `json:"max_parallel_runs"`
 			TranscriptDays    int    `json:"transcript_days"`
 			TranscriptMaxSize string `json:"transcript_max_size"`
+			KeepSessionsFor   string `json:"keep_sessions_for"`
+			MinFreeDisk       string `json:"min_free_disk"`
 		} `json:"defaults"`
 	}
 	getJSON(t, h, tok, "/api/config", &got)
@@ -287,7 +289,8 @@ func TestAPIConfig(t *testing.T) {
 		t.Errorf("projects %+v, want the ID and label WEB, which config.json leaves out", p)
 	}
 	d := got.Defaults
-	if d.Memory != "4g" || d.MaxParallelRuns != 1 || d.TranscriptDays != 14 || d.TranscriptMaxSize != "1g" {
+	if d.Memory != "4g" || d.MaxParallelRuns != 1 || d.TranscriptDays != 14 || d.TranscriptMaxSize != "1g" ||
+		d.KeepSessionsFor != "7d" || d.MinFreeDisk != "10GB" {
 		t.Errorf("defaults %+v", d)
 	}
 }

@@ -169,8 +169,8 @@ const describe = (n, id, on) => {
 // send sends body as JSON with method to url, for button, which is disabled
 // while it runs. A refusal shows the answer's error under button's form, or
 // beside button when it has none, tied to its fields with aria-describedby;
-// the next answer of 2xx takes it away. It resolves to whether the answer was
-// 2xx: the page then loads its data again. The browser checks nothing
+// the next answer of 2xx takes it away. It resolves to the answer when it was
+// 2xx, else false: the page then loads its data again. The browser checks nothing
 // itself: what the daemon refuses, it says.
 const sendErrors = new WeakMap(); // a form's or a lone button's error line
 let sendIds = 0;
@@ -197,7 +197,7 @@ const send = async (button, method, url, body) => {
     if (r.status === 401) location.reload();
     if (r.ok) {
       show("");
-      return true;
+      return r;
     }
     const answer = await r.json().catch(() => ({}));
     show(answer.error || r.status + " " + r.statusText);

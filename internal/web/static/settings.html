@@ -1,0 +1,123 @@
+<!doctype html>
+<!-- Settings: what holds for all projects. settings.js fills it from
+     /api/config and sends its forms. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="settings.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/runs.html">Runs</a></li>
+      <li><a href="/projects.html">Projects</a></li>
+      <li><a href="/log.html">Log</a></li>
+      <li><a href="/settings.html">Settings</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <h1>Settings</h1>
+  <p class="lead">What holds for all projects of this runner. A project's own parallel runs and transcript days, set on its page, win over these.</p>
+</header>
+
+<div id="panels" hidden>
+<section aria-labelledby="h-strict">
+  <h2 id="h-strict">Strict host blocking</h2>
+  <p class="muted" id="strict-hint">When on, a person's answer in Cinderline cannot open a host the egress proxy refused: only the hosts allowed here, for all projects, or on a project's page can. When off, a person can open a host for one issue's runs in Cinderline.</p>
+  <form id="strict">
+    <label class="switch"><input type="checkbox" role="switch" name="on" aria-describedby="strict-hint"> Strict host blocking</label>
+  </form>
+</section>
+
+<section aria-labelledby="h-hosts">
+  <h2 id="h-hosts">Hosts for all projects</h2>
+  <p class="muted">The hosts the runs of every project may reach.</p>
+  <div id="hosts"></div>
+  <form class="row" id="add-host">
+    <label>Host and port <input type="text" name="host" placeholder="example.com:443" autocomplete="off"></label>
+    <button type="submit">Add host</button>
+  </form>
+</section>
+
+<section aria-labelledby="h-skills">
+  <h2 id="h-skills">Skill packages for all projects</h2>
+  <p class="muted">The skill packages the runs of every project may load with strict hosts on.</p>
+  <div id="skills"></div>
+  <form class="row" id="add-skill">
+    <label>Name <input type="text" name="name" size="12" autocomplete="off"></label>
+    <label>Repository URL <input type="text" name="url" placeholder="https://github.com/owner/repo" autocomplete="off"></label>
+    <button type="submit">Add skill</button>
+  </form>
+</section>
+
+<section aria-labelledby="h-parallel">
+  <h2 id="h-parallel">Parallel runs</h2>
+  <p class="muted">How many runs of one project may run at once, unless the project sets its own.</p>
+  <p id="parallel-now"></p>
+  <!-- novalidate: the daemon checks the values, the browser only sends them. -->
+  <form class="row" id="parallel" novalidate>
+    <label>Parallel runs <input type="number" name="value" min="1" max="10" aria-describedby="parallel-hint"></label>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" data-clear>Use the default</button>
+  </form>
+  <p class="hint" id="parallel-hint">1 to 10.</p>
+</section>
+
+<section aria-labelledby="h-transcripts">
+  <h2 id="h-transcripts">Transcripts</h2>
+  <p class="muted">What the runner keeps of each run for the Runs page: its steps, prompts and the agent's output.</p>
+  <p id="days-now"></p>
+  <form class="row" id="days" novalidate>
+    <label>Days kept <input type="number" name="value" min="0" max="365" aria-describedby="days-hint"></label>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" data-clear>Use the default</button>
+  </form>
+  <p class="hint" id="days-hint">0 to 365, unless a project sets its own. 0 keeps nothing after a run ends.</p>
+  <p id="size-now"></p>
+  <form class="row" id="size" novalidate>
+    <label>Disk limit <input type="text" name="value" size="8" autocomplete="off" aria-describedby="size-hint"></label>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" data-clear>Use the default</button>
+  </form>
+  <p class="hint" id="size-hint">The most disk all transcripts take, such as 512m or 2g; the oldest go first.</p>
+</section>
+
+<section aria-labelledby="h-web">
+  <h2 id="h-web">Web page</h2>
+  <p id="web-now"></p>
+  <form class="row" id="port" novalidate>
+    <label>Port <input type="number" name="value" min="1024" max="65535" aria-describedby="port-hint"></label>
+    <button type="submit" class="primary">Save</button>
+  </form>
+  <p class="hint" id="port-hint">1024 to 65535. After a change this page answers only at the new address.</p>
+  <p class="attention" id="moved" role="status" hidden></p>
+  <form id="off">
+    <label class="switch"><input type="checkbox" role="switch" name="off"> Turn the web page off</label>
+  </form>
+  <div id="is-off" role="status" hidden></div>
+</section>
+
+<section aria-labelledby="h-fixed">
+  <h2 id="h-fixed">Set in config.json</h2>
+  <p class="muted">These have no command: they are set in the runner's config.json.</p>
+  <div id="fixed"></div>
+</section>
+</div>
+</main>
+</body>
+</html>

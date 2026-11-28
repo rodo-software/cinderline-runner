@@ -47,6 +47,8 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 				"max_parallel_runs":   config.Project{}.Parallel(0),
 				"transcript_days":     config.DefaultTranscriptDays,
 				"transcript_max_size": config.DefaultTranscriptSize,
+				"keep_sessions_for":   config.DefaultKeepSessionsFor,
+				"min_free_disk":       config.DefaultMinFreeDisk,
 			},
 		})
 	})
