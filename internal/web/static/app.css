@@ -405,6 +405,14 @@ details.fold > summary .badge { margin-left: var(--s1); }
 .spark .area { fill: var(--accent-soft); }
 .stat { font-size: var(--t2); font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* A run's containers: one row each, its name, then CPU and memory with their graphs. */
+.ctrs { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.ctrs li { display: grid; grid-template-columns: 8rem repeat(2, minmax(0, 1fr)); gap: var(--s2) var(--s5); padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
+.ctrs .name { font-weight: 600; font-family: var(--mono); font-size: var(--t-1); overflow-wrap: anywhere; }
+.ctrs .meter { margin: var(--s1) 0 0; }
+.meter.warn > span { background: var(--warn); }
+.near { color: var(--warn); font-weight: 600; }
+
 /* A plain list of items with an action, such as hosts and skills. */
 
 .items { list-style: none; margin: 0; padding: 0; }
@@ -493,6 +501,7 @@ input:user-invalid { border-color: var(--err); }
   .runs .badge, .runs .title, .runs .now, .runs .meta { grid-column: 1; grid-row: auto; text-align: left; white-space: normal; }
   .steps li { grid-template-columns: 1.25rem auto minmax(0, 1fr); }
   .steps li > .badge { grid-column: 2 / -1; }
+  .ctrs li { grid-template-columns: 1fr; }
   .more-body { padding-left: 0; }
   table.kv, table.kv tbody, table.kv tr, table.kv th, table.kv td { display: block; width: auto; }
   table.kv th { padding-bottom: 0; }

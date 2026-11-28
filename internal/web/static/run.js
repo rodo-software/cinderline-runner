@@ -1,5 +1,6 @@
 // One run: its header and steps from /api/runs/{project}/{issue}/{run}, read
-// again every 3 s while the run is live, and for each open step its events.
+// again every 3 s while the run is live, for each open step its events, and
+// while live its containers' CPU and memory.
 // Every text here comes from an agent or an issue: it goes in as text only.
 (() => {
   const $ = (id) => document.getElementById(id);
@@ -270,7 +271,84 @@
     $("steps-section").hidden = false;
   };
 
-  let live = true;
+  // The containers' measurements, by name: the last keep within the last
+  // period ms, kept while the page is, so a container back after a step goes on.
+  const keep = 200, period = 10 * 60 * 1000;
+  const history = new Map();
+  const pct = (v) => (v < 10 ? v.toFixed(1) : Math.round(v)) + "%";
+
+  // spark is a small graph of points [time, value] up to top, the period up
+  // to end wide: x by time, so the minutes the page was hidden keep their width.
+  const spark = (pts, end, top, label) => {
+    const svg = (tag, attrs) => {
+      const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const k in attrs) n.setAttribute(k, attrs[k]);
+      return n;
+    };
+    const x = (t) => (120 * (t - end + period) / period).toFixed(1);
+    const xy = pts.map(([t, v]) => x(t) + "," + (29 - 28 * Math.min(v / (top || 1), 1)).toFixed(1)).join(" ");
+    const s = svg("svg", { class: "spark", viewBox: "0 0 120 30", preserveAspectRatio: "none", role: "img", "aria-label": label });
+    s.append(svg("polygon", { class: "area", points: x(pts[0][0]) + ",30 " + xy + " 120,30" }), svg("polyline", { class: "line", points: xy }));
+    return s;
+  };
+
+  const row = (c, end) => {
+    const h = history.get(c.name);
+    const highCPU = Math.max(...h.map((m) => m.cpu));
+    const highMem = Math.max(...h.map((m) => m.mem));
+    const limit = c.memory_limit_bytes; // 0: docker gave none, the graph's top is the highest seen
+    const cpu = el("div", "", el("div", "muted small", "CPU"), el("div", "stat", pct(c.cpu_percent)),
+      spark(h.map((m) => [m.t, m.cpu]), end, Math.max(100, highCPU),
+        `${c.name} CPU, last 10 minutes: now ${pct(c.cpu_percent)}, highest ${pct(highCPU)}`));
+    const used = el("div", "stat", bytes(c.memory_bytes));
+    const mem = el("div", "", el("div", "muted small", "Memory"), used);
+    if (limit) {
+      const share = c.memory_bytes / limit;
+      used.append(el("span", "muted small", " of " + bytes(limit)));
+      if (share > 0.85) used.append(el("span", "near small", " near the limit"));
+      const bar = el("div", share > 0.85 ? "meter warn" : "meter", el("span"));
+      bar.setAttribute("role", "meter");
+      bar.setAttribute("aria-label", c.name + " memory");
+      bar.setAttribute("aria-valuemin", 0);
+      bar.setAttribute("aria-valuemax", limit);
+      bar.setAttribute("aria-valuenow", c.memory_bytes);
+      bar.setAttribute("aria-valuetext", bytes(c.memory_bytes) + " of " + bytes(limit));
+      bar.firstChild.style.width = Math.min(100, 100 * share) + "%";
+      mem.append(bar);
+    }
+    mem.append(spark(h.map((m) => [m.t, m.mem]), end, limit || highMem,
+      `${c.name} memory, last 10 minutes: now ${bytes(c.memory_bytes)}, highest ${bytes(highMem)}`));
+    return el("li", "", el("div", "name", c.name), cpu, mem);
+  };
+
+  // stats shows one event of the stats stream (Web 26): its containers, or its error.
+  const stats = (ev) => {
+    $("stats-error").textContent = ev.error ?? "";
+    $("stats-error").hidden = !ev.error;
+    $("ctrs").hidden = !!ev.error;
+    $("stats-none").hidden = !!ev.error || ev.containers.length > 0;
+    $("stats-none").textContent = "No container runs now.";
+    if (ev.error) return;
+    const end = new Date(ev.time).getTime();
+    for (const c of ev.containers) {
+      const h = history.get(c.name) ?? [];
+      h.push({ t: end, cpu: c.cpu_percent, mem: c.memory_bytes });
+      while (h.length > keep || h[0].t < end - period) h.shift();
+      history.set(c.name, h);
+    }
+    $("ctrs").replaceChildren(...ev.containers.map((c) => row(c, end)));
+  };
+
+  // The stats stream is open while the page shows a live run, so docker is
+  // asked only then (decision 2026-11-26-local-web-page).
+  let live = true, stopStats = null;
+  const watch = () => {
+    const on = live && visible();
+    if (on && !stopStats) stopStats = listen("/api/runs/" + [project, issue].map(encodeURIComponent).join("/") + "/stats", stats);
+    if (!on && stopStats) { stopStats(); stopStats = null; }
+    $("containers").hidden = !live;
+  };
+
   const load = () => fetch(base).then((r) => {
     if (r.status === 401) location.reload(); // the token was replaced: the daemon's answer says what to do
     if (r.status === 404) return null;
@@ -278,12 +356,12 @@
     return r.json();
   }).then((r) => {
     reachable(true);
+    live = !!r?.live;
+    watch();
     if (!r) {
-      live = false;
       missing("This run is not on disk: it may have been deleted, or the link is wrong.");
       return;
     }
-    live = r.live;
     render(r);
   }, () => reachable(false));
 
@@ -294,9 +372,19 @@
   const visible = () => document.visibilityState === "visible";
   load();
   setInterval(() => live && visible() && load(), 3000);
-  document.addEventListener("visibilitychange", () => live && visible() && load());
+  document.addEventListener("visibilitychange", () => {
+    watch();
+    if (live && visible()) load();
+  });
   // The browser closes the streams itself when the page is left; a page kept
   // for the back button gets them again from its open panels.
-  addEventListener("pagehide", () => panels.forEach((p) => { if (p.stop) { p.stop(); p.stop = null; } }));
-  addEventListener("pageshow", (e) => e.persisted && panels.forEach(follow));
+  addEventListener("pagehide", () => {
+    panels.forEach((p) => { if (p.stop) { p.stop(); p.stop = null; } });
+    if (stopStats) { stopStats(); stopStats = null; }
+  });
+  addEventListener("pageshow", (e) => {
+    if (!e.persisted) return;
+    panels.forEach(follow);
+    watch();
+  });
 })();
