@@ -57,7 +57,7 @@ func token(t *testing.T, dir string) string {
 func TestHandlerServesTheStaticFiles(t *testing.T) {
 	dir := t.TempDir()
 	tok := token(t, dir)
-	for path, want := range map[string]string{"/": "<title>", "/app.css": "", "/mock-run.html": "<title>"} {
+	for path, want := range map[string]string{"/": "<title>", "/app.css": "", "/run.html": "<title>"} {
 		w := do(t, dir, "GET", path, tok, nil)
 		if w.Code != http.StatusOK || w.Body.Len() == 0 || !strings.Contains(w.Body.String(), want) {
 			t.Errorf("GET %s = %d, %d bytes, want 200 containing %q", path, w.Code, w.Body.Len(), want)

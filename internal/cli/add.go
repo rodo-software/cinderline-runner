@@ -147,6 +147,7 @@ func (c *CLI) add(args []string) int {
 	} else {
 		say("Added %s in workspace %s at %s", p.Key, p.Workspace, p.URL)
 	}
+	say("%s", webLine(cfg))
 	c.reload()
 	return 0
 }

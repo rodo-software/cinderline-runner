@@ -15,7 +15,7 @@ This replaces the line "The runner serves no local web page" of 2026-11-11-runne
 
 - The daemon serves the page itself, in the package `internal/web`. No second process. When the daemon is stopped there is no page; starting the daemon stays a CLI or service matter.
 - It listens on `127.0.0.1` only, default port 7420. No LAN or remote option.
-- Config, runner-wide: `web` (`"on"`, `"off"` or absent for the default) and `web_port`. The default is off until the last issue of this work turns it on.
+- Config, runner-wide: `web` (`"on"`, `"off"` or absent for the default) and `web_port`. The default is on; `web off` turns it off.
 - `cinderline web` opens the page in the browser; `cinderline web on|off`, `cinderline web port N` and `cinderline web --new-token` change it.
 - A port that is taken is logged once at Error; the daemon runs on without the page.
 - Nothing about the page goes to Cinderline: no poll field, no change to the OpenAPI contract.
@@ -66,4 +66,4 @@ Browser notifications, editing `config.json` as raw text in the page, searching 
 
 ## How it is built
 
-Mock pages first, for Willem's approval of the look. Then the issues `Web NN` in order. The page stays off by default until the last one.
+Mock pages first, for Willem's approval of the look. Then the issues `Web NN` in order. The last one (CLR-313) turns the page on by default; `web off` turns it off.

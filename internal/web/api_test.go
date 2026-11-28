@@ -276,8 +276,8 @@ func TestAPIConfig(t *testing.T) {
 	if len(got.Config.Projects) != 1 || got.Config.Projects[0].Key != "WEB" || got.Config.MaxParallelRuns != 3 {
 		t.Errorf("config %+v, want config.json's", got.Config)
 	}
-	if got.WebOn == nil || *got.WebOn || got.WebAddr != "127.0.0.1:7420" {
-		t.Errorf("web_on %v, web_addr %q; want false, 127.0.0.1:7420", got.WebOn, got.WebAddr)
+	if got.WebOn == nil || !*got.WebOn || got.WebAddr != "127.0.0.1:7420" {
+		t.Errorf("web_on %v, web_addr %q; want true, 127.0.0.1:7420", got.WebOn, got.WebAddr)
 	}
 	var ids struct {
 		Config struct {

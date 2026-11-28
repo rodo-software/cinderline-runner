@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
@@ -68,6 +69,14 @@ func (c *CLI) web(args []string) int {
 	}
 	c.reload()
 	return 0
+}
+
+// webLine is the line add and status end with: where the page is, or that it is off.
+func webLine(cfg *config.Config) string {
+	if !cfg.WebOn() {
+		return "Web page: off, turn it on with: " + name.Name + " web on"
+	}
+	return "Web page: http://" + cfg.WebAddr() + ", open it with: " + name.Name + " web"
 }
 
 // openWeb prints the page's URL with its token, and opens it in the browser

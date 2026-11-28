@@ -41,12 +41,17 @@ func serves(port int) bool {
 	return resp.StatusCode == http.StatusUnauthorized
 }
 
+// CLR-313: web unset serves the page too, as on is the default.
 func TestWebOnServesThePage(t *testing.T) {
-	keyring.MockInit()
-	p, port := paths(t), freePort(t)
-	writeWeb(t, p, "on", port)
-	start(t, p)
-	waitFor(t, "the page", func() bool { return serves(port) })
+	for _, web := range []string{"on", ""} {
+		t.Run("web="+web, func(t *testing.T) {
+			keyring.MockInit()
+			p, port := paths(t), freePort(t)
+			writeWeb(t, p, web, port)
+			start(t, p)
+			waitFor(t, "the page", func() bool { return serves(port) })
+		})
+	}
 }
 
 func TestWebOffDoesNotListen(t *testing.T) {
@@ -71,7 +76,7 @@ func TestWebPortTakenDoesNotStopTheDaemon(t *testing.T) {
 	}
 	defer taken.Close()
 	p, port := paths(t), taken.Addr().(*net.TCPAddr).Port
-	writeWeb(t, p, "on", port)
+	writeWeb(t, p, "", port) // the default, on (CLR-313)
 	c, _ := start(t, p)
 	// An unchanged config does not try the port again, so it is logged once.
 	if err := c.Reload(ctxT(t)); err != nil {

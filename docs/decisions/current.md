@@ -187,7 +187,6 @@ A new decision gets its own dated record next to this file, `YYYY-MM-DD-topic.md
 
 ## Known gaps between the rules and the code
 
-- The page is still off by default (`webDefaultOn` in `internal/config/config.go`), though 2026-11-26-local-web-page has the last `Web NN` issue turn it on; CLR-312, the last one, was documentation only. (2026-11-26-local-web-page)
 - `cinderline pin` (2026-11-27-agent-cli-updates, decided after the page) is not on the page, nor in its list of commands to type in a terminal. (2026-11-26-local-web-page)
 - Until the app has the push scan's contract change, it refuses a step reported with the outcome `secret` (`422`). (2026-11-17-push-scan)
 - Until the default image is pinned again, every runner builds it locally from unpinned inputs, as the pin no longer matches the Dockerfile. (2026-11-24-default-image-amd64)

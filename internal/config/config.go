@@ -85,9 +85,9 @@ const (
 	DefaultMinFreeDisk     = "10GB"
 )
 
-// webDefaultOn is whether the page is on when web is unset: off until the
-// last issue of the web page work turns it on (decision 2026-11-26-local-web-page).
-const webDefaultOn = false
+// webDefaultOn is whether the page is on when web is unset: on by default;
+// `web off` turns it off (decision 2026-11-26-local-web-page).
+const webDefaultOn = true
 
 // DefaultWebPort is the page's port when web_port is unset.
 const DefaultWebPort = 7420

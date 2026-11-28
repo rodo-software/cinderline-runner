@@ -68,8 +68,8 @@ func webCLI(t *testing.T, on bool) (c *CLI, out, errb *bytes.Buffer, opened *[]s
 	t.Helper()
 	c, out, errb = daemonCLI(t, "")
 	cfg := &config.Config{WebPort: 8080}
-	if on {
-		cfg.Web = "on"
+	if !on {
+		cfg.Web = "off"
 	}
 	if err := cfg.Save(c.Paths.File); err != nil {
 		t.Fatal(err)

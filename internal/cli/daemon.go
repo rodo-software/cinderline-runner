@@ -105,6 +105,9 @@ func (c *CLI) status(args []string) int {
 			fmt.Fprintf(c.Stdout, "memory: %s of %s reserved for runs\n", config.GiB(m.Reserved), config.GiB(m.Budget))
 		}
 	}
+	if cfg, err := c.loadConfig(); err == nil { // a config that does not load leaves the line out: status is about the daemon
+		fmt.Fprintln(c.Stdout, webLine(cfg))
+	}
 	return 0
 }
 

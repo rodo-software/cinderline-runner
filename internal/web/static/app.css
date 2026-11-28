@@ -109,7 +109,7 @@ pre code { background: none; padding: 0; }
 .small { font-size: var(--t-1); }
 .num, time, .time, .meta, table { font-variant-numeric: tabular-nums; }
 
-.skip:not(:focus), .sr {
+.skip:not(:focus) {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -327,15 +327,10 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 }
 .steps li::before { counter-increment: step; content: counter(step); color: var(--muted); font-variant-numeric: tabular-nums; }
 .steps .name { font-weight: 600; font-family: var(--mono); font-size: var(--t-1); }
-.steps .note { color: var(--muted); }
 .steps li[aria-current="step"] { background: var(--run-soft); }
-.steps li[aria-current="step"] .note { color: var(--text); }
 
 /* The timeline of an agent turn. */
 
-.turn-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--s2) var(--s4); }
-.turn-head h2 { margin-bottom: 0; }
-.turn-meta { color: var(--muted); margin: var(--s1) 0 var(--s4); }
 .timeline { list-style: none; margin: var(--s4) 0 0; padding: 0; border-top: 1px solid var(--line); }
 .timeline > li { padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
 .timeline .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); }
@@ -343,13 +338,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .timeline .tool .who { color: var(--accent); }
 .timeline .time { margin-left: auto; font-size: var(--t-1); color: var(--muted); }
 .timeline p { margin: var(--s1) 0 0; }
-.timeline .raw { display: none; }
-.timeline .raw pre { margin: 0; }
 .timeline .unknown pre { border: 1px dashed var(--line-strong); background: none; }
-
-/* The raw-lines switch: with it on, the timeline shows each line as the client wrote it. */
-.turn:has(.raw-switch:checked) .timeline .parsed { display: none; }
-.turn:has(.raw-switch:checked) .timeline .raw { display: block; }
 
 /* The run page's timeline: text as written, never Markdown; a tool call is
    one row that opens its input, its result folded under it with its first
@@ -404,7 +393,6 @@ details.fold > summary .badge { margin-left: var(--s1); }
 
 .usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: var(--s5); margin-bottom: var(--s5); }
 .spark { display: block; width: 100%; height: 3rem; margin: var(--s2) 0 var(--s1); }
-.spark .grid-line { stroke: var(--line); stroke-width: 1; }
 .spark .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
 .spark .area { fill: var(--accent-soft); }
 .stat { font-size: var(--t2); font-weight: 600; font-variant-numeric: tabular-nums; }

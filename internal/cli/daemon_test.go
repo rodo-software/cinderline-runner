@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/daemon"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
@@ -108,8 +110,11 @@ func TestStatusPrintsEachProject(t *testing.T) {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 3 {
-		t.Fatalf("want a version line and two project lines:\n%s", out.String())
+	if len(got) != 4 {
+		t.Fatalf("want a version line, two project lines and the web page's:\n%s", out.String())
+	}
+	if want := "Web page: http://127.0.0.1:7420, open it with: " + name.Name + " web"; got[3] != want {
+		t.Errorf("last line %q, want %q", got[3], want)
 	}
 	if !strings.Contains(got[0], "4.5.6") {
 		t.Errorf("line %q lacks the daemon version", got[0])
@@ -131,9 +136,15 @@ func TestStatusPrintsEachProject(t *testing.T) {
 
 func TestStatusNoProjects(t *testing.T) {
 	c, out, _ := daemonCLI(t, "")
+	if err := (&config.Config{Web: "off"}).Save(c.Paths.File); err != nil {
+		t.Fatal(err)
+	}
 	serve(t, c, localapi.Handlers{Version: "4.5.6", Status: func() []localapi.ProjectStatus { return nil }})
 	if code := c.Run([]string{"status"}); code != 0 || !strings.Contains(out.String(), "no projects") {
 		t.Errorf("code %d, stdout %q", code, out.String())
+	}
+	if want := "Web page: off, turn it on with: " + name.Name + " web on\n"; !strings.HasSuffix(out.String(), want) {
+		t.Errorf("stdout %q does not end with %q", out.String(), want)
 	}
 }
 
@@ -462,8 +473,8 @@ func TestStatusPrintsMemory(t *testing.T) {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
 	got := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(got) != 4 {
-		t.Fatalf("want a version line, two project lines and a memory line:\n%s", out.String())
+	if len(got) != 5 {
+		t.Fatalf("want a version line, two project lines, a memory line and the web page's:\n%s", out.String())
 	}
 	if !strings.Contains(got[1], "a run takes 2.5 GiB") || strings.Contains(got[1], "waits") {
 		t.Errorf("line %q, want WEB's run size and no wait", got[1])

@@ -810,9 +810,9 @@ func TestValidateWeb(t *testing.T) {
 	}
 }
 
-// CLR-269: the page follows web, else webDefaultOn, on 127.0.0.1 at web_port or 7420.
+// CLR-269, CLR-313: the page follows web, else is on, on 127.0.0.1 at web_port or 7420.
 func TestWebOnAndAddr(t *testing.T) {
-	for web, want := range map[string]bool{"": webDefaultOn, "on": true, "off": false} {
+	for web, want := range map[string]bool{"": true, "on": true, "off": false} {
 		if got := (&Config{Web: web}).WebOn(); got != want {
 			t.Errorf("web %q: WebOn %v, want %v", web, got, want)
 		}

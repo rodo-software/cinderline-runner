@@ -186,7 +186,8 @@ func TestAddHappyPath(t *testing.T) {
 	if v := secret(t, c, want, secrets.GitToken); v != "git-tok" {
 		t.Errorf("git token %q", v)
 	}
-	for _, s := range []string{"WEB", "Web shop", "Stored runner token in the keychain", "Stored git token in the keychain", `see "CI secrets" in the README`, "Added WEB at " + u + "\n"} {
+	for _, s := range []string{"WEB", "Web shop", "Stored runner token in the keychain", "Stored git token in the keychain", `see "CI secrets" in the README`, "Added WEB at " + u + "\n",
+		"Web page: http://127.0.0.1:7420, open it with: " + name.Name + " web\n"} {
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("stdout lacks %q:\n%s", s, out.String())
 		}
