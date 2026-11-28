@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
@@ -50,102 +50,71 @@ func (c *CLI) add(args []string) int {
 	}
 	say := func(format string, a ...any) { fmt.Fprintf(c.Stdout, format+"\n", a...) }
 
-	// URL and token, re-asking the token when it is rejected and the URL when it is not an instance.
-	var instance, token string
+	// URL and token, re-asking the token when it is rejected and the URL when
+	// it is not an instance; each answer is checked as manage.AddProject checks it again.
+	var in manage.NewProject
 	var proj cinderline.Project
 	for {
-		for instance == "" {
+		for in.URL == "" {
 			v, err := ask("URL of the " + name.Name + " instance: ")
 			if err != nil {
 				return c.fail(err)
 			}
-			if err := config.CheckInstanceURL(v); err != nil {
-				say("%q %v.", v, err)
-				continue
+			if in.URL, err = manage.CheckInstanceURL(v); err != nil {
+				say("%v.", err)
 			}
-			instance = strings.TrimRight(v, "/")
 		}
-		for token == "" {
-			if token, err = ask("Runner token: "); err != nil {
+		for in.RunnerToken == "" {
+			if in.RunnerToken, err = ask("Runner token: "); err != nil {
 				return c.fail(err)
 			}
 		}
-		proj, err = cinderline.New(instance, token, c.Version).Project(context.Background())
-		var apiErr *cinderline.APIError
-		if errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden) {
+		proj, err = manage.Instance(context.Background(), in.URL, in.RunnerToken, c.Version)
+		if errors.Is(err, manage.ErrTokenRejected) {
 			say("The instance rejected this runner token.")
-			token = ""
+			in.RunnerToken = ""
 			continue
 		}
 		if err != nil {
-			say("%s could not be reached as a %s instance: %v", instance, name.Name, err)
-			instance = ""
+			say("%v", err)
+			in.URL = ""
 			continue
 		}
 		break
 	}
 	say("Project %s: %s", proj.Key, proj.Name)
-	p := config.Project{URL: instance, Key: proj.Key, Workspace: proj.WorkspaceSlug()}
-	p.LocalID = p.Label() // stays until `rename`, whatever the key becomes in the app
-	for _, q := range cfg.Projects {
-		if q.URL == p.URL && q.Key == p.Key && q.Workspace == p.Workspace {
-			return c.fail(fmt.Errorf("%s at %s is already added, in workspace %s; run `%s remove -url %s -workspace %s %s` first", p.Key, p.URL, q.Workspace, name.Name, q.URL, q.Workspace, q.Key))
-		}
-		// Docker volumes are named by the ID (decision 2026-11-11-audit-fixes, CSR-97).
-		if q.ID() == p.ID() {
-			return c.fail(fmt.Errorf("%s at %s already names its Docker volumes and secrets %s, perhaps its key before a rename; two projects with one name would share them", q.Key, q.URL, p.ID()))
-		}
+	if _, err := manage.Entry(cfg, in.URL, proj); err != nil {
+		return c.fail(err)
 	}
 
 	prompt := "Repository: "
 	if proj.RepositoryURL != "" {
 		prompt = "Repository [" + proj.RepositoryURL + "]: "
 	}
-	for p.Repository == "" {
+	for in.Repository == "" {
 		v, err := ask(prompt)
 		if err != nil {
 			return c.fail(err)
 		}
-		if v == "" {
-			v = proj.RepositoryURL
-		}
-		if err := config.CheckRepositoryURL(v); err != nil {
+		if in.Repository, err = manage.CheckRepository(proj, v); err != nil {
 			say("%v.", err)
-			continue
 		}
-		if proj.RepositoryURL != "" && !config.SameRepository(v, proj.RepositoryURL) {
-			say("%s is not the project's repository, %s.", v, proj.RepositoryURL)
-			continue
-		}
-		p.Repository = v
 	}
 
 	// Stored, not validated against the forge.
-	var gitToken string
-	for gitToken == "" {
-		if gitToken, err = ask("Git token: "); err != nil {
+	for in.GitToken == "" {
+		if in.GitToken, err = ask("Git token: "); err != nil {
 			return c.fail(err)
 		}
 	}
 
-	// The config first, so a failed save stores no secrets.
 	others := cfg.Projects
-	cfg.Projects = append(append([]config.Project(nil), others...), p)
-	if err := cfg.Save(c.Paths.File); err != nil {
+	p, stores, err := manage.AddProject(context.Background(), c.Paths, c.Secrets, c.Version, in)
+	if err != nil {
 		return c.fail(err)
 	}
-	for _, s := range []struct {
-		kind  secrets.Kind
-		label string
-		value string
-	}{{secrets.RunnerToken, "runner token", token}, {secrets.GitToken, "git token", gitToken}} {
-		store, err := c.Secrets.Set(p, s.kind, s.value)
-		if err != nil {
-			c.undoAdd(cfg, p)
-			return c.fail(err)
-		}
-		say("Stored %s in %s", s.label, c.storeName(store))
-	}
+	say("Stored runner token in %s", c.storeName(stores[0]))
+	say("Stored git token in %s", c.storeName(stores[1]))
 
 	if len(others) > 0 {
 		if code := c.offerCopy(others, p, ask); code != 0 {
@@ -180,19 +149,6 @@ func (c *CLI) add(args []string) int {
 	}
 	c.reload()
 	return 0
-}
-
-// undoAdd removes p and its tokens again after a failed Set; errors are printed, the Set error is what fails.
-func (c *CLI) undoAdd(cfg *config.Config, p config.Project) {
-	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken} {
-		if err := c.Secrets.Delete(p, k); err != nil {
-			fmt.Fprintln(c.Stderr, "error:", err)
-		}
-	}
-	cfg.Projects = without(cfg.Projects, p)
-	if err := cfg.Save(c.Paths.File); err != nil {
-		fmt.Fprintln(c.Stderr, "error:", err)
-	}
 }
 
 // offerCopy offers to copy model credentials from one of others to p (decision

@@ -108,6 +108,11 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 		http.NewResponseController(w).Flush()
 		h.Reload()
 	})
+	// Adds a project as `add` does; no answer holds its tokens.
+	writeRoute(mux, "POST /api/projects", h, func(r *http.Request, b manage.NewProject) error {
+		_, _, err := manage.AddProject(r.Context(), h.Paths, h.Secrets, h.Version, b)
+		return err
+	})
 	// {key} is the project's ID, the config's id: unique where a key is not.
 	writeRoute(mux, "POST /api/projects/{key}/repos", h, func(r *http.Request, b struct {
 		URL   string `json:"url"`

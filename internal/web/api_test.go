@@ -721,6 +721,91 @@ func TestAPIKeysRefuse(t *testing.T) {
 	}
 }
 
+// addInstance is a Cinderline instance that takes only runnerToken, as
+// project NEW's; its refusal echoes the token it got, as a careless app could.
+func addInstance(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); tok != runnerToken {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"message":"bad token ` + tok + `"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"poll_after":30,"project":{"key":"NEW","name":"New","repository_url":"https://git.example.com/o/new","forge":"forgejo","base_branch":"main","environment":"default"}}`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// CLR-301: POST /api/projects adds a project as `add` does and reloads; a
+// refused one is a 400 with add's text that adds and reloads nothing. No
+// answer and no log line holds a token.
+func TestAPIAddProject(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	u := addInstance(t)
+	logged.Reset()
+	var answers strings.Builder
+	const gitToken = "the-git-token-of-new"
+	body := func(url, runner, repo, git string) string {
+		b, _ := json.Marshal(map[string]string{"url": url, "runner_token": runner, "repository": repo, "git_token": git})
+		return string(b)
+	}
+	for what, c := range map[string]struct{ body, want string }{
+		"plain http":       {body("http://cinderline.example.com", runnerToken, "", gitToken), "must be an absolute https URL"},
+		"wrong token":      {body(u, "a-wrong-runner-token", "", gitToken), "the instance rejected this runner token"},
+		"other repository": {body(u, runnerToken, "https://git.example.com/o/web", gitToken), "is not the project's repository"},
+		"no git token":     {body(u, runnerToken, "", ""), "a git token is needed"},
+		"unknown field":    {`{"url": "` + u + `", "runner_token": "` + runnerToken + `", "key": "NEW"}`, "unknown field"},
+	} {
+		w := send(t, h, "POST", tok, "/api/projects", c.body)
+		answers.WriteString(w.Body.String())
+		var e struct{ Error string }
+		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != http.StatusBadRequest || !strings.Contains(e.Error, c.want) {
+			t.Errorf("%s: %d %s, want 400 containing %q", what, w.Code, w.Body, c.want)
+		}
+	}
+	load := func() []config.Project {
+		t.Helper()
+		cfg, err := config.Load(paths.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Projects
+	}
+	if *reloads != 0 || len(load()) != 1 {
+		t.Fatalf("a refused add reloaded %d times or changed the config", *reloads)
+	}
+
+	w := send(t, h, "POST", tok, "/api/projects", body(u, runnerToken, "", gitToken))
+	answers.WriteString(w.Body.String())
+	if w.Code != http.StatusNoContent || *reloads != 1 {
+		t.Fatalf("add = %d %s, %d reloads; want 204 and 1", w.Code, w.Body, *reloads)
+	}
+	ps := load()
+	if len(ps) != 2 || ps[1].Key != "NEW" || ps[1].URL != u || ps[1].Repository != "https://git.example.com/o/new" {
+		t.Fatalf("projects %+v", ps)
+	}
+	sec := secrets.New(paths.State)
+	for k, want := range map[secrets.Kind]string{secrets.RunnerToken: runnerToken, secrets.GitToken: gitToken} {
+		if got, _, err := sec.Get(ps[1], k); err != nil || got != want {
+			t.Errorf("%s = %q, %v; want it stored", k, got, err)
+		}
+	}
+
+	w = send(t, h, "POST", tok, "/api/projects", body(u, runnerToken, "", gitToken))
+	answers.WriteString(w.Body.String())
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "NEW at "+u+" is already added") || *reloads != 1 {
+		t.Errorf("duplicate = %d %s, %d reloads; want 400 already added", w.Code, w.Body, *reloads)
+	}
+	answers.WriteString(configText(t, h, tok))
+	for _, v := range []string{runnerToken, gitToken, "a-wrong-runner-token"} {
+		if strings.Contains(answers.String(), v) || strings.Contains(logged.String(), v) {
+			t.Errorf("an answer or the log holds %q:\n%s\n%s", v, &answers, &logged)
+		}
+	}
+}
+
 // CLR-295: POST /api/hosts adds an allow_hosts entry, runner-wide for an
 // empty project, and DELETE removes it; each reloads.
 func TestAPIHosts(t *testing.T) {
