@@ -5,12 +5,14 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/transcript"
 )
@@ -23,6 +25,12 @@ type Handlers struct {
 
 	Transcripts transcript.Store
 	Config      func() *config.Config // the config now, safe from any goroutine
+
+	// Stats measures the containers of the project's run of issue once
+	// (environment.Docker.Stats), every StatsEvery while a page watches;
+	// StatsEvery 0: every 3 seconds.
+	Stats      func(ctx context.Context, project, issue string) ([]environment.ContainerStats, error)
+	StatsEvery time.Duration
 }
 
 // maxTail is the most lines GET /api/log sends before following: what the
@@ -38,6 +46,9 @@ const pingTicks = 20
 func Handler(stateDir string, port int, h Handlers) http.Handler {
 	if h.Tick == 0 {
 		h.Tick = time.Second
+	}
+	if h.StatsEvery == 0 {
+		h.StatsEvery = 3 * time.Second
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", http.FileServerFS(static))

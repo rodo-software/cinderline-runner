@@ -66,8 +66,9 @@ var dockerMemory = func(ctx context.Context) (int64, error) {
 type slot struct {
 	id    string
 	proj  *run.Project
-	drain chan struct{} // closed: take no new work, end once nothing is in flight
-	stale bool          // drain is closed
+	env   *environment.Docker // proj's
+	drain chan struct{}       // closed: take no new work, end once nothing is in flight
+	stale bool                // drain is closed
 }
 
 // daemon is the state Run shares with the local API handlers. Only Run's
@@ -331,9 +332,29 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 		return
 	}
 	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot, Follow: d.follow,
-		Transcripts: *d.transcript, Config: d.shown.Load})}
+		Transcripts: *d.transcript, Config: d.shown.Load, Stats: d.stats})}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
+}
+
+// stats measures the containers of the run of issue of the project with
+// key project, which transcripts name it by.
+func (d *daemon) stats(ctx context.Context, project, issue string) ([]environment.ContainerStats, error) {
+	d.mu.Lock()
+	var env *environment.Docker
+	// shortcut: the first loop with the key, while two workspaces' projects
+	// may share one; name runs by ID in the transcripts when that happens.
+	for _, s := range d.slots {
+		if s.proj.Config.Key == project {
+			env = s.env
+			break
+		}
+	}
+	d.mu.Unlock()
+	if env == nil {
+		return []environment.ContainerStats{}, nil // the project does not run: none of its containers do
+	}
+	return env.Stats(ctx, issue)
 }
 
 // fill starts every project of the config that does not run yet, has no
@@ -387,7 +408,7 @@ func (d *daemon) start(p config.Project) (*run.Project, error) {
 	proj.MaxParallelRuns = cfg.MaxParallelRuns
 	proj.Transcripts, proj.DiscardTranscripts = d.transcript, cfg.TranscriptDaysFor(p) == 0
 	proj.AllowSkills = slices.Concat(cfg.AllowSkills, p.AllowSkills)
-	s := &slot{id: p.ID(), proj: proj, drain: make(chan struct{})}
+	s := &slot{id: p.ID(), proj: proj, env: env, drain: make(chan struct{})}
 	d.mu.Lock()
 	d.slots[s.id] = s
 	d.mu.Unlock()

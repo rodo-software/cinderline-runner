@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/transcript"
 )
 
@@ -166,6 +167,51 @@ func runRoutes(mux *http.ServeMux, h *Handlers) {
 		defer f.Close()
 		streamStep(r, newSSE(w), f, from, h.Tick*pingTicks)
 	})
+	// More specific than {run}, so it wins over a run named stats, which the
+	// store's run names, made from a time, never are.
+	mux.HandleFunc("GET /api/runs/{project}/{issue}/stats", func(w http.ResponseWriter, r *http.Request) {
+		project, issue := r.PathValue("project"), r.PathValue("issue")
+		if !transcript.Plain(project) || !transcript.Plain(issue) {
+			http.Error(w, "not a plain name", http.StatusBadRequest)
+			return
+		}
+		streamStats(r, newSSE(w), h, project, issue)
+	})
+}
+
+// streamStats sends the run's containers now and every h.StatsEvery until
+// the request ends: docker is asked only while a page watches (decision
+// 2026-11-26-local-web-page), once per page. A docker error is an event
+// with its text, and the stream goes on.
+func streamStats(r *http.Request, s sse, h *Handlers, project, issue string) {
+	t := time.NewTicker(h.StatsEvery)
+	defer t.Stop()
+	for {
+		ev := struct {
+			Time       time.Time                    `json:"time"`
+			Containers []environment.ContainerStats `json:"containers"`
+			Error      string                       `json:"error,omitempty"`
+		}{Time: time.Now()}
+		cs, err := h.Stats(r.Context(), project, issue)
+		if r.Context().Err() != nil {
+			return
+		}
+		if ev.Containers = cs; cs == nil {
+			ev.Containers = []environment.ContainerStats{} // [] rather than null
+		}
+		if err != nil {
+			ev.Error = err.Error()
+		}
+		b, _ := json.Marshal(ev) // cannot fail: strings, numbers, a time
+		if s.send(b) != nil {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // streamStep sends each line of a step's file from line from on, an out
