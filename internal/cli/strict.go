@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
@@ -30,8 +31,7 @@ func (c *CLI) strictHosts(args []string) int {
 		fmt.Fprintln(c.Stdout, "Strict host blocking is "+state)
 		return 0
 	}
-	cfg.StrictHosts = f.Arg(0) == "on"
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if err := manage.SetStrictHosts(c.Paths, f.Arg(0) == "on"); err != nil {
 		return c.fail(err)
 	}
 	fmt.Fprintf(c.Stdout, "Strict host blocking is %s for every project of this %s\n", f.Arg(0), name.Name)

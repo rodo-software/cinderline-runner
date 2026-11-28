@@ -26,6 +26,11 @@ type Handlers struct {
 	Transcripts transcript.Store
 	Config      func() *config.Config // the config now, safe from any goroutine
 
+	// Paths are where the config API reads and writes config.json, and
+	// Reload makes the daemon take a write (localapi.Handlers.Reload).
+	Paths  config.Paths
+	Reload func() error
+
 	// Stats measures the containers of the project's run of issue once
 	// (environment.Docker.Stats), every StatsEvery while a page watches;
 	// StatsEvery 0: every 3 seconds.
@@ -127,5 +132,6 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 		}
 	})
 	runRoutes(mux, &h)
+	configRoutes(mux, &h)
 	return guard(stateDir, port, mux)
 }

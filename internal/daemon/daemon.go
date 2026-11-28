@@ -99,6 +99,8 @@ type daemon struct {
 	snapshot func() localapi.Status
 	// follow is the log's tail and stream, for `logs` and the page alike.
 	follow func(n int) ([]byte, <-chan []byte, func(), error)
+	// reload makes the main loop take config.json again, for `reload` and the page alike.
+	reload func() error
 	// shown is cfg for the page's handlers, which run on other goroutines.
 	shown atomic.Pointer[config.Config]
 }
@@ -165,7 +167,7 @@ func Run(ctx context.Context, o Options) error {
 			}
 		},
 	}
-	d.snapshot, d.follow = api.Snapshot, api.Follow
+	d.snapshot, d.follow, d.reload = api.Snapshot, api.Follow, api.Reload
 	srv := &http.Server{Handler: localapi.Handler(api)}
 	go srv.Serve(ln)
 	defer srv.Close() // closes the listener, which removes the socket file
@@ -332,7 +334,7 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 		return
 	}
 	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot, Follow: d.follow,
-		Transcripts: *d.transcript, Config: d.shown.Load, Stats: d.stats})}
+		Transcripts: *d.transcript, Config: d.shown.Load, Stats: d.stats, Paths: d.o.Paths, Reload: d.reload})}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
 }
