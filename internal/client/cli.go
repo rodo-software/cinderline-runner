@@ -136,6 +136,7 @@ func (c *CLI) Run(ctx context.Context, t Turn) (Result, error) {
 		Idle:     t.Idle,
 		Allow:    k.hosts(c, t),
 		AppAllow: t.Allow,
+		OnLine:   t.OnLine,
 	})
 	if err != nil {
 		c.forgetState()

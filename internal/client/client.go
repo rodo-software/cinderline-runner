@@ -53,6 +53,9 @@ type Turn struct {
 	// Tools is the run's tools mount, taken when it started, so a run keeps
 	// its CLIs while new ones go live (CLR-317); nil: the CLI's.
 	Tools *tools.Mount
+	// OnLine is called with each line the turn's container prints, as it
+	// comes; nil: none.
+	OnLine func(line string)
 }
 
 // SkillMount is a skill package a run loaded: its name, its read-only volume

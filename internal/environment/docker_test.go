@@ -1035,3 +1035,36 @@ func TestRunWithoutItsCARunsNothing(t *testing.T) {
 		t.Errorf("calls = %q, want none", got)
 	}
 }
+
+// CLR-279: OnLine gets every line the log gets, the last one without a
+// newline and the long-line marker too, in order.
+func TestLinesCallOnLine(t *testing.T) {
+	var got []string
+	l := &lines{log: slog.New(slog.DiscardHandler), onLine: func(s string) { got = append(got, s) }}
+	l.Write([]byte("one\ntw"))
+	l.Write([]byte("o\n"))
+	l.Write(bytes.Repeat([]byte("="), lineBytes+1))
+	l.Write([]byte("rest of it\nlast"))
+	l.flush()
+	want := []string{"one", "two", fmt.Sprintf("[a line of more than %d bytes, not logged]", lineBytes), "last"}
+	if !slices.Equal(got, want) {
+		t.Errorf("lines = %q, want %q", got, want)
+	}
+}
+
+// Run hands the turn's output to its OnLine as it comes.
+func TestRunCallsOnLine(t *testing.T) {
+	d, _, _ := runner(nil, func(_ context.Context, out io.Writer) error {
+		io.WriteString(out, "first\nsecond")
+		return nil
+	})
+	var got []string
+	s := turn
+	s.OnLine = func(l string) { got = append(got, l) }
+	if _, err := d.Run(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"first", "second"}) {
+		t.Errorf("lines = %q", got)
+	}
+}

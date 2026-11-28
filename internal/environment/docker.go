@@ -239,7 +239,7 @@ func (d *Docker) Run(ctx context.Context, s Spec) (string, error) {
 		})
 		defer t.Stop()
 	}
-	out := &lines{log: d.log().With("project", d.Project, "issue", s.Issue)}
+	out := &lines{log: d.log().With("project", d.Project, "issue", s.Issue), onLine: s.OnLine}
 	var idled atomic.Bool
 	if s.Idle > 0 {
 		stall := time.AfterFunc(s.Idle, func() {
@@ -375,7 +375,8 @@ const (
 // writes from one goroutine at a time.
 type lines struct {
 	log     *slog.Logger
-	touch   func() // called on every write; nil: none
+	touch   func()            // called on every write; nil: none
+	onLine  func(line string) // Spec.OnLine
 	head    []byte
 	tail    []byte // up to twice tailBytes, as forge's tail
 	cut     int64  // bytes dropped from the tail's front
@@ -402,14 +403,14 @@ func (l *lines) Write(p []byte) (int, error) {
 			break
 		}
 		if !l.long {
-			l.log.Debug(OutputMsg, "line", string(l.pending[:i]))
+			l.line(string(l.pending[:i]))
 		}
 		l.long = false
 		l.pending = l.pending[i+1:]
 	}
 	if len(l.pending) > lineBytes {
 		if !l.long {
-			l.log.Debug(OutputMsg, "line", fmt.Sprintf("[a line of more than %d bytes, not logged]", lineBytes))
+			l.line(fmt.Sprintf("[a line of more than %d bytes, not logged]", lineBytes))
 		}
 		l.long, l.pending = true, nil
 	}
@@ -418,9 +419,17 @@ func (l *lines) Write(p []byte) (int, error) {
 
 func (l *lines) flush() {
 	if len(l.pending) > 0 && !l.long {
-		l.log.Debug(OutputMsg, "line", string(l.pending))
+		l.line(string(l.pending))
 	}
 	l.pending = nil
+}
+
+// line logs one complete line and hands it to onLine.
+func (l *lines) line(s string) {
+	l.log.Debug(OutputMsg, "line", s)
+	if l.onLine != nil {
+		l.onLine(s)
+	}
 }
 
 // dropped is how many bytes of output were not kept.

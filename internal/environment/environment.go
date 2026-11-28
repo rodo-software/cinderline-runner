@@ -61,6 +61,9 @@ type Spec struct {
 	// AppAllow holds app-approved host:port pairs. Unlike local config and
 	// provider hosts, these may connect only to public addresses.
 	AppAllow []string
+	// OnLine is called with each line of the output as it comes, the last
+	// one without its newline too; nil: none.
+	OnLine func(line string)
 }
 
 // Tail is the end of a turn's output kept for comments: the last 40 lines,

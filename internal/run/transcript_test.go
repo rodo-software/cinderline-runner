@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
+	"github.com/rodo-software/cinderline-runner/internal/client"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/forge"
 	"github.com/rodo-software/cinderline-runner/internal/transcript"
@@ -91,8 +92,9 @@ func TestARunLeavesOneTranscriptFilePerStep(t *testing.T) {
 		`{"kind":"publish","type":"start"}`,
 		`{"kind":"stop","type":"start"}`,
 	}
+	sizes := []int{3, 2, 2, 2} // the run step holds its prompt between them too (CLR-279)
 	for i, ls := range lines {
-		if len(ls) != 2 || jsonOf(ls[0]) != starts[i] || jsonOf(ls[1]) != `{"error":"","outcome":"ok","type":"end"}` {
+		if len(ls) != sizes[i] || jsonOf(ls[0]) != starts[i] || jsonOf(ls[len(ls)-1]) != `{"error":"","outcome":"ok","type":"end"}` {
 			t.Errorf("%s = %v", names[i], ls)
 		}
 	}
@@ -166,5 +168,27 @@ func TestWithoutTranscriptsNothingIsWritten(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.p.State, "transcripts")); !os.IsNotExist(err) {
 		t.Errorf("transcripts folder: %v", err)
+	}
+}
+
+// CLR-279: a turn's step holds the prompt the agent got and each line its
+// container printed, in order, between start and end.
+func TestATurnsStepHoldsItsPromptAndOutput(t *testing.T) {
+	f := newFixture(t)
+	s := withTranscripts(t, f)
+	f.env.Runs = []environment.RunReply{{Output: "working\ndone"}}
+	f.p.Clients["claude"] = &client.CLI{Name: "claude", Project: "CSR", Env: f.env,
+		Exec: func(context.Context, []string, ...string) (string, error) { return "", nil }}
+	if _, err := f.run(t, &fakeApp{onNext: stepsOf(runNew, `{"kind":"stop"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	_, lines := transcriptSteps(t, s)
+	var got []string
+	for _, l := range lines[0][1 : len(lines[0])-1] {
+		got = append(got, jsonOf(l))
+	}
+	want := []string{`{"text":"Do it.","type":"prompt"}`, `{"line":"working","type":"out"}`, `{"line":"done","type":"out"}`}
+	if lines[0][0]["type"] != "start" || lines[0][len(lines[0])-1]["type"] != "end" || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("lines = %v", lines[0])
 	}
 }

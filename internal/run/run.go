@@ -511,6 +511,9 @@ func (p *Project) agentTurn(ctx context.Context, c *cinderline.Client, j *job, h
 		}
 	}
 
+	turn.OnLine = j.tstep.Out
+	j.tstep.Prompt(turn.Prompt)
+
 	// The wait for the provider is part of the step, so the poll's stop ends it too.
 	tctx, end := p.stoppable(ctx, j.ref)
 	res, err := func() (client.Result, error) {

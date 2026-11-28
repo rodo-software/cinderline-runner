@@ -189,3 +189,16 @@ func TestStatePreparedOnceInParallel(t *testing.T) {
 		t.Errorf("prepared %d times, want 1", x.count())
 	}
 }
+
+// CLR-279: the turn's OnLine gets the container's output, for its transcript.
+func TestTurnOnLine(t *testing.T) {
+	env := &environment.Fake{Runs: []environment.RunReply{{Output: "a\nb\n"}}}
+	c := &CLI{Name: "claude", Project: "CSR", Env: env, Exec: (&prepares{}).exec}
+	var got []string
+	if _, err := c.Run(context.Background(), Turn{Dir: "/runs/CSR-7", OnLine: func(l string) { got = append(got, l) }}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"a", "b"}) {
+		t.Errorf("lines = %q", got)
+	}
+}

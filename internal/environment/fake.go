@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -25,7 +26,7 @@ type RunReply struct {
 }
 
 // Fake is a scripted Environment. Fill the queues before use; each call pops
-// the next reply in order and is recorded. An empty queue returns the zero
+// the next reply in order and is recorded; Run hands its output to OnLine. An empty queue returns the zero
 // value and ErrNotScripted.
 type Fake struct {
 	Runs     []RunReply
@@ -43,15 +44,28 @@ func (f *Fake) Calls() []Call {
 }
 
 func (f *Fake) Run(_ context.Context, s Spec) (string, error) {
+	r, err := f.pop(s)
+	if err != nil {
+		return "", err
+	}
+	for l := range strings.Lines(r.Output) {
+		if s.OnLine != nil {
+			s.OnLine(strings.TrimSuffix(l, "\n"))
+		}
+	}
+	return r.Output, r.Err
+}
+
+func (f *Fake) pop(s Spec) (RunReply, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, Call{"Run", []any{s}})
 	if len(f.Runs) == 0 {
-		return "", fmt.Errorf("%w for Run", ErrNotScripted)
+		return RunReply{}, fmt.Errorf("%w for Run", ErrNotScripted)
 	}
 	r := f.Runs[0]
 	f.Runs = f.Runs[1:]
-	return r.Output, r.Err
+	return r, nil
 }
 
 func (f *Fake) Cleanup(context.Context) error {
