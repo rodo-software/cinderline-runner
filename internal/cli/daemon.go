@@ -39,7 +39,14 @@ func (c *CLI) run(args []string) int {
 	if *verbose {
 		o.Verbose = c.Stderr
 	}
-	if err := daemon.Run(context.Background(), o); err != nil {
+	exe, exeErr := os.Executable() // now: an update renames or replaces the file, and the new binary takes this path
+	err := daemon.Run(context.Background(), o)
+	if errors.Is(err, daemon.ErrRestart) {
+		if err = exeErr; err == nil {
+			err = reexec(exe)
+		}
+	}
+	if err != nil {
 		return c.fail(err)
 	}
 	return 0

@@ -46,6 +46,14 @@ type Options struct {
 // errStopping answers a reload that arrives while the daemon stops.
 var errStopping = errors.New("stopping")
 
+// ErrRestart is Run's answer once the drain of an update from the page has
+// ended: the caller runs the new binary in its place (decision
+// 2026-11-28-update-restart).
+var ErrRestart = errors.New("restart with the new binary")
+
+// webExec is what the page's handlers run commands with; a variable so tests fake an update.
+var webExec = workspace.RunCommand
+
 // detectInterval is how often client detection reruns (CSR-59).
 const detectInterval = time.Hour
 
@@ -101,6 +109,10 @@ type daemon struct {
 	follow func(n int) ([]byte, <-chan []byte, func(), error)
 	// reload makes the main loop take config.json again, for `reload` and the page alike.
 	reload func() error
+	// stop and drain end the daemon, at once or once its runs have finished, for the CLI and the page alike.
+	stop, drain func()
+	// restart drains the daemon, after which Run returns ErrRestart, for the page's update.
+	restart func()
 	// shown is cfg for the page's handlers, which run on other goroutines.
 	shown atomic.Pointer[config.Config]
 }
@@ -138,6 +150,7 @@ func Run(ctx context.Context, o Options) error {
 	reloads := make(chan chan error)
 	drain := make(chan struct{})
 	var drainOnce sync.Once // a second drain request must not close it again
+	var restarting atomic.Bool
 	api := localapi.Handlers{
 		Version: o.Version,
 		Status:  d.status,
@@ -167,7 +180,8 @@ func Run(ctx context.Context, o Options) error {
 			}
 		},
 	}
-	d.snapshot, d.follow, d.reload = api.Snapshot, api.Follow, api.Reload
+	d.snapshot, d.follow, d.reload, d.stop, d.drain = api.Snapshot, api.Follow, api.Reload, api.Stop, api.Drain
+	d.restart = func() { restarting.Store(true); api.Drain() }
 	srv := &http.Server{Handler: localapi.Handler(api)}
 	go srv.Serve(ln)
 	defer srv.Close() // closes the listener, which removes the socket file
@@ -194,6 +208,10 @@ func Run(ctx context.Context, o Options) error {
 	done, drained := ctx.Done(), (<-chan struct{})(drain)
 	for {
 		if (done == nil || drained == nil) && len(d.slots) == 0 {
+			if done != nil && restarting.Load() { // a stop meanwhile wins: the runner stays stopped
+				log.Info("restarting with the new binary")
+				return ErrRestart
+			}
 			log.Info("stopped")
 			return nil
 		}
@@ -335,7 +353,8 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 	}
 	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot, Follow: d.follow,
 		Transcripts: *d.transcript, Config: d.shown.Load, Stats: d.stats, Paths: d.o.Paths, Reload: d.reload,
-		Secrets: secrets.New(d.o.Paths.State), Exec: workspace.RunCommand, Log: d.log, Version: d.o.Version})}
+		Secrets: secrets.New(d.o.Paths.State), Exec: webExec, Log: d.log, Version: d.o.Version,
+		Stop: d.stop, Drain: d.drain, Restart: d.restart})}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
 }

@@ -41,6 +41,13 @@ type Handlers struct {
 	Log     *slog.Logger
 	Version string // the build's, sent when a runner token is checked
 
+	// Stop and Drain are the local API's (localapi.Handlers.Stop, Drain).
+	Stop  func()
+	Drain func()
+	// Restart drains the daemon, which then runs the new binary in its
+	// place, after an update (decision 2026-11-28-update-restart).
+	Restart func()
+
 	// Stats measures the containers of the project's run of issue once
 	// (environment.Docker.Stats), every StatsEvery while a page watches;
 	// StatsEvery 0: every 3 seconds.
@@ -69,7 +76,7 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 	mux.Handle("/", http.FileServerFS(static))
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(h.Status())
+		json.NewEncoder(w).Encode(h.status())
 	})
 	// The command's name, for the commands the page shows to type.
 	mux.HandleFunc("GET /api/name", func(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +84,7 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 	})
 	mux.HandleFunc("GET /api/status/stream", func(w http.ResponseWriter, r *http.Request) {
 		s := newSSE(w)
-		last, _ := json.Marshal(h.Status())
+		last, _ := json.Marshal(h.status())
 		if s.send(last) != nil {
 			return
 		}
@@ -90,7 +97,7 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 			case <-t.C:
 			}
 			var err error
-			if b, _ := json.Marshal(h.Status()); !bytes.Equal(b, last) {
+			if b, _ := json.Marshal(h.status()); !bytes.Equal(b, last) {
 				last = b
 				err = s.send(b)
 			} else if n%pingTicks == 0 {
@@ -147,5 +154,6 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 	})
 	runRoutes(mux, &h)
 	configRoutes(mux, &h)
+	daemonRoutes(mux, &h)
 	return guard(stateDir, port, mux)
 }

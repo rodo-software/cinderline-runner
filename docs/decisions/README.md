@@ -19,3 +19,4 @@ A record is folded and archived once it is built: each binding point goes into c
 - [2026-11-27-agent-cli-updates](2026-11-27-agent-cli-updates.md): the agent CLIs follow their vendors' releases (CLR-317). Folded into current.md; archived once CLR-317 is merged.
 - [2026-11-28-skill-downloads](2026-11-28-skill-downloads.md): a skill package's downloads (CLR-318). Kept until the app has added `downloads` to its contract and it is copied here.
 - [2026-11-28-web-remove-project](2026-11-28-web-remove-project.md): removing and renaming a project from the page (CLR-302). Kept with 2026-11-26-local-web-page.
+- [2026-11-28-update-restart](2026-11-28-update-restart.md): the daemon re-execs itself after an update from the page (CLR-303). Kept with 2026-11-26-local-web-page.

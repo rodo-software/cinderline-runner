@@ -4,12 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rodo-software/cinderline-runner/internal/ca"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 )
 
-// rotateCA replaces the runner's CA (CLR-247). A running runner needs no
-// reload: each container takes the CA as it is when it starts, so those
-// running now keep the old one.
+// rotateCA replaces the runner's CA (manage.RotateCA).
 func (c *CLI) rotateCA(args []string) int {
 	if !c.parsed(c.flags("rotate-ca", ""), args, 0) {
 		return 2
@@ -17,7 +15,7 @@ func (c *CLI) rotateCA(args []string) int {
 	if c.pathsErr != nil {
 		return c.fail(c.pathsErr)
 	}
-	authority, err := ca.Rotate(ca.Dir(c.Paths.State), time.Now())
+	authority, err := manage.RotateCA(c.Paths)
 	if err != nil {
 		return c.fail(err)
 	}
