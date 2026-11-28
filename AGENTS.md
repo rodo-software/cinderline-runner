@@ -47,3 +47,17 @@ Apply **KISS first, then DRY, then SOLID where it pays off**. When they conflict
 - Record every decision Willem makes, with its reason, as a new dated record `docs/decisions/YYYY-MM-DD-topic.md` next to `current.md` (see its README) or, if purely local, in a code comment. Refer to it as `decision YYYY-MM-DD-topic`. Decisions from the app repository are referred to by their name there.
 - The OpenAPI file in `docs/runner-api/` is authored in the app repository and copied here. A change to the contract starts there; say so on its own line in your final report.
 - To copy the contract: `cp` the app's `docs/runner-api/openapi.yaml` over this one unchanged, set `contractSHA256` in `internal/cinderline/types.go` to its `sha256sum`, check the types against it, and commit all three together (decision 2026-11-26-contract-hash).
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in Cinderline, project `CLR`, through the ember MCP tools. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Cinderline has no labels: the five triage roles are statuses and Backlog folders. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` at the root, decisions in `docs/decisions/` (not `docs/adr/`). See `docs/agents/domain.md`.
