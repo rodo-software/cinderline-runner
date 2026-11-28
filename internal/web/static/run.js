@@ -6,7 +6,8 @@
   const q = new URLSearchParams(location.search);
   const [project, issue, run] = ["project", "issue", "run"].map((k) => q.get(k) || "");
   const base = "/api/runs/" + [project, issue, run].map(encodeURIComponent).join("/");
-  const maxLines = 20000; // out lines of one step kept in the page
+  const maxLines = 20000; // out lines of one step kept in the page, and entries of its timeline
+  const turns = ["run", "resolve"]; // the steps that are an agent turn
 
   const missing = (text) => {
     $("missing").textContent = text;
@@ -29,8 +30,23 @@
     $("links").hidden = !r.issue_url;
   };
 
-  // view is what an open step shows of its events stream, filled as they come.
-  const view = () => {
+  // The Raw lines switch's last choice, the start of each agent turn opened after it.
+  let rawLines = false;
+  try { rawLines = localStorage.getItem("raw-lines") === "1"; } catch { /* storage off: the timeline */ }
+
+  // scroller is a box that scrolls n, followed while live, with its jump button.
+  const scroller = (n, label) => {
+    n.tabIndex = 0;
+    n.setAttribute("aria-label", label);
+    const jump = el("button", "primary jump", "Jump to newest");
+    jump.type = "button";
+    jump.hidden = true;
+    return { root: el("div", "follow", n, jump), keep: follower(n, jump) };
+  };
+
+  // view is what an open step shows of its events stream, filled as they
+  // come: its out lines in the plain box and, for an agent turn, in a timeline.
+  const view = (turn) => {
     const text = el("pre", "box");
     const prompt = el("details", "fold", el("summary", "", "Prompt"), text);
     const hosts = el("tbody");
@@ -43,34 +59,143 @@
       el("div", "scroll", el("table", "rows", el("thead", "", el("tr", "", ...cols)), hosts)));
     const earlier = el("p", "muted small");
     const out = el("pre", "box");
-    out.tabIndex = 0;
     out.setAttribute("role", "region");
-    out.setAttribute("aria-label", "Output lines");
-    for (const n of [prompt, refused, earlier, out]) n.hidden = true;
-    return { root: el("div", "", prompt, refused, earlier, out), text, prompt, hosts, refused, earlier, out, pending: [], dropped: 0, frame: 0 };
+    const lines = scroller(out, "Output lines");
+    const v = { text, prompt, hosts, refused, earlier, out, lines, pending: [], dropped: 0, frame: 0, has: false };
+    const kids = [prompt, refused, earlier, lines.root];
+    if (turn) {
+      v.tl = el("ol", "timeline box");
+      v.timeline = scroller(v.tl, "Timeline");
+      v.calls = new Map(); // a tool call's id: its row and running mark, until its result comes
+      v.raw = el("input");
+      v.raw.type = "checkbox";
+      v.raw.setAttribute("role", "switch");
+      v.raw.checked = rawLines;
+      v.raw.addEventListener("change", () => {
+        rawLines = v.raw.checked;
+        try { localStorage.setItem("raw-lines", rawLines ? "1" : "0"); } catch { /* kept for this page only */ }
+        show(v);
+        const box = rawLines ? v.out : v.tl;
+        box.scrollTop = box.scrollHeight;
+      });
+      v.toggle = el("p", "raw-toggle", el("label", "switch", v.raw, " Raw lines"));
+      kids.splice(2, 0, v.toggle);
+      kids.push(v.timeline.root);
+    }
+    for (const n of kids) n.hidden = true;
+    v.root = el("div", "", ...kids);
+    return v;
   };
 
-  const atBottom = (n) => n.scrollTop + n.clientHeight >= n.scrollHeight - 8;
+  // show shows the plain box or the timeline, once there are lines.
+  const show = (v) => {
+    const raw = !v.tl || v.raw.checked;
+    v.lines.root.hidden = !v.has || !raw;
+    if (v.tl) {
+      v.timeline.root.hidden = !v.has || raw;
+      v.toggle.hidden = !v.has;
+    }
+  };
+
+  const tokens = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+  // usage is a usage event as "312K in · 14.1K out · $1.42", of what it reports.
+  const usage = (e) => [e.input_tokens != null && tokens.format(e.input_tokens) + " in",
+    e.output_tokens != null && tokens.format(e.output_tokens) + " out",
+    e.cost_usd != null && "$" + e.cost_usd.toFixed(2)].filter(Boolean).join(" · ");
+
+  const time = (t) => {
+    const n = el("time", "time", new Date(t).toLocaleTimeString());
+    n.dateTime = t;
+    return n;
+  };
+
+  const peekLines = 3; // of a tool result, shown while it is closed
+
+  // entries adds to f the timeline entries of out line ev, from the events
+  // parsed from it (Web 20); a line without them, or a kind the page does not
+  // know, is the raw line, once.
+  const entries = (p, f, ev) => {
+    const v = p.v;
+    let raw = false;
+    for (const e of ev.events?.length ? ev.events : [{ kind: "raw" }]) {
+      switch (e.kind) {
+        case "text":
+          if (e.text) f.append(el("li", "", el("div", "line", el("span", "who", "Agent"), time(ev.t)), el("p", "said", e.text)));
+          break;
+        case "thinking":
+          if (e.text) f.append(el("li", "thinking", el("details", "fold", el("summary", "", "Thinking"), el("p", "said", e.text))));
+          break;
+        case "tool_call": {
+          const input = e.input ?? "";
+          const mark = el("span", "badge running pending", "running");
+          const li = el("li", "tool", el("details", "fold call",
+            el("summary", "", el("span", "who", e.name ?? ""), el("code", "", input.split("\n", 1)[0]), mark, time(ev.t)),
+            el("pre", "", input)));
+          f.append(li);
+          if (e.id) v.calls.set(e.id, { li, mark });
+          break;
+        }
+        case "tool_result": {
+          const text = e.text ?? "";
+          const lines = text.trimEnd().split("\n");
+          const sum = el("summary", "", !text ? "Result, empty" : "Result, " + lines.length + (lines.length === 1 ? " line" : " lines"));
+          if (e.error) sum.append(el("span", "badge error", "error"));
+          const res = el("div", e.error ? "result error" : "result", el("details", "fold", sum, el("pre", "", text)));
+          if (text) res.append(el("pre", "peek", lines.slice(0, peekLines).join("\n") + (lines.length > peekLines ? "\n…" : "")));
+          const call = e.id && v.calls.get(e.id);
+          if (call?.li.parentNode) { // not dropped from the top of the timeline
+            call.li.append(res);
+            call.mark.remove();
+            v.calls.delete(e.id);
+          } else {
+            f.append(el("li", "tool", el("div", "line", el("span", "who", "Result"), time(ev.t)), res));
+          }
+          break;
+        }
+        case "usage": {
+          const u = usage(e);
+          p.use.textContent = u;
+          p.use.hidden = !u;
+          if (u) f.append(el("li", "", el("p", "muted small", u)));
+          break;
+        }
+        default:
+          if (!raw) f.append(el("li", "unknown", el("pre", "muted", ev.line ?? "")));
+          raw = true;
+      }
+    }
+  };
 
   // flush draws a step's out lines that came since the last frame: a finished
-  // step sends all its lines at once, and the box is laid out once a frame.
-  const flush = (v) => {
+  // step sends all its lines at once, and the page is laid out once a frame.
+  const flush = (p) => {
+    const v = p.v;
     v.frame = 0;
-    const stick = atBottom(v.out);
     const lines = v.pending.slice(-maxLines);
     v.dropped += v.pending.length - lines.length;
     v.pending = [];
     const f = document.createDocumentFragment();
-    for (const line of lines) f.append(el("span", "", line + "\n")); // a span a line, to drop the oldest
-    v.out.append(f);
-    for (; v.out.childElementCount > maxLines; v.dropped++) v.out.firstElementChild.remove();
+    for (const ev of lines) f.append(el("span", "", (ev.line ?? "") + "\n")); // a span a line, to drop the oldest
+    v.lines.keep(() => {
+      v.out.append(f);
+      for (; v.out.childElementCount > maxLines; v.dropped++) v.out.firstElementChild.remove();
+    });
+    if (v.tl) {
+      v.timeline.keep(() => { // in here, as a result goes under its call, which may be on the page
+        const t = document.createDocumentFragment();
+        for (const ev of lines) entries(p, t, ev);
+        v.tl.append(t);
+        while (v.tl.childElementCount > maxLines) v.tl.firstElementChild.remove();
+      });
+    }
     v.earlier.textContent = v.dropped + (v.dropped === 1 ? " earlier line" : " earlier lines") + " not shown";
     v.earlier.hidden = !v.dropped;
-    v.out.hidden = false;
-    if (stick) v.out.scrollTop = v.out.scrollHeight;
+    v.has = true;
+    show(v);
   };
 
-  const add = (v, ev) => {
+  const add = (p, ev) => {
+    const v = p.v;
     if (ev.type === "prompt") {
       v.text.textContent = ev.text ?? "";
       v.prompt.hidden = false;
@@ -79,8 +204,8 @@
       v.refused.hidden = false;
     } else if (ev.type === "out") {
       // A hidden tab draws no frames: drop the oldest half once twice the kept lines wait.
-      if (v.pending.push(ev.line ?? "") >= 2 * maxLines) v.dropped += v.pending.splice(0, maxLines).length;
-      v.frame ||= requestAnimationFrame(() => flush(v));
+      if (v.pending.push(ev) >= 2 * maxLines) v.dropped += v.pending.splice(0, maxLines).length;
+      v.frame ||= requestAnimationFrame(() => flush(p));
     }
   };
 
@@ -88,9 +213,10 @@
   // events from the first line again; closed, its lines leave the page.
   const follow = (p) => {
     if (p.d.open && !p.stop) {
-      p.stop = listen(base + "/steps/" + p.st.n + "/events", (ev) => add(p.v, ev), () => {
+      p.stop = listen(base + "/steps/" + p.st.n + "/events", (ev) => add(p, ev), () => {
         if (p.v) cancelAnimationFrame(p.v.frame);
-        const v = view();
+        const v = view(turns.includes(p.st.kind));
+        v.root.classList.toggle("live", p.running);
         p.v ? p.v.root.replaceWith(v.root) : p.body.append(v.root);
         p.v = v;
       });
@@ -107,7 +233,9 @@
     const sum = el("summary");
     const err = el("p", "attention");
     const body = el("div", "more-body", err);
-    const p = { d: el("details", "more", sum, body), sum, err, body, touched: false, stop: null, v: null };
+    const use = el("span", "fact"); // the latest usage its events reported
+    use.hidden = true;
+    const p = { d: el("details", "more", sum, body), sum, err, body, use, touched: false, stop: null, v: null, running: false };
     sum.addEventListener("click", () => { p.touched = true; });
     p.d.addEventListener("toggle", () => follow(p));
     return p;
@@ -117,7 +245,9 @@
     p.st = st;
     const facts = [st.agent, st.client, st.model].filter(Boolean);
     facts.push(new Date(st.start).toLocaleTimeString(), took(new Date(st.end || Date.now()) - new Date(st.start)));
-    p.sum.replaceChildren(el("span", "name", st.kind), el("span", "fact", facts.join(" · ")), outcome(st.outcome, live && !st.end));
+    p.running = live && !st.end;
+    p.sum.replaceChildren(el("span", "name", st.kind), el("span", "fact", facts.join(" · ")), p.use, outcome(st.outcome, p.running));
+    p.v?.root.classList.toggle("live", p.running); // shows the running mark of calls without a result
     p.err.textContent = st.error;
     p.err.hidden = !st.error;
   };

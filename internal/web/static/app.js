@@ -56,6 +56,21 @@ const listen = (url, onData, onOpen) => {
   return () => { closed = true; clearTimeout(timer); es.close(); };
 };
 
+// follower keeps the scrolling box at its newest content until the user
+// scrolls up; then the button jump shows, which takes the box back down. It
+// returns the function to call with each addition: keep(() => box.append(n)).
+const follower = (box, jump) => {
+  const atEnd = () => box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
+  const end = () => { box.scrollTop = box.scrollHeight; };
+  box.addEventListener("scroll", () => { jump.hidden = atEnd(); });
+  jump.addEventListener("click", () => { end(); box.focus(); });
+  return (add) => {
+    const stick = atEnd();
+    add();
+    if (stick) end();
+  };
+};
+
 // bytes is n bytes in binary units, such as "8.5 GiB".
 const bytes = (n) => {
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];

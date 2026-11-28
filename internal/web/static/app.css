@@ -349,6 +349,21 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .turn:has(.raw-switch:checked) .timeline .parsed { display: none; }
 .turn:has(.raw-switch:checked) .timeline .raw { display: block; }
 
+/* The run page's timeline: text as written, never Markdown; a tool call is
+   one row that opens its input, its result folded under it with its first
+   lines shown; the running mark only while the step is in flight. */
+.timeline .said { white-space: pre-wrap; overflow-wrap: anywhere; }
+.timeline .thinking { color: var(--muted); }
+.timeline > li > details.fold:first-child { margin-top: 0; }
+.timeline details.call > summary { display: flex; align-items: baseline; gap: var(--s1) var(--s3); color: var(--text); }
+.timeline details.call > summary code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline .result { margin-left: var(--s4); }
+.timeline .result > details[open] + .peek { display: none; }
+.timeline .result.error pre { border-left: 3px solid var(--err); }
+.timeline .badge.pending { display: none; }
+.live .timeline .badge.pending { display: inline-block; }
+.raw-toggle { display: flex; justify-content: flex-end; margin: var(--s2) 0; }
+
 /* Collapsed blocks inside a row: the prompt, a tool call's input and result. */
 details.fold { margin-top: var(--s2); }
 details.fold > summary {
@@ -489,6 +504,7 @@ input:user-invalid { border-color: var(--err); }
    so the filter stays in view. */
 
 .log-box { position: relative; margin-top: var(--s4); }
+.follow { position: relative; } /* a box with its jump button */
 .log {
   list-style: none;
   margin: 0;

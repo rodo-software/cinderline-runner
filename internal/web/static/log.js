@@ -8,7 +8,7 @@
   const count = document.getElementById("count");
 
   const levels = { ERROR: "error", WARN: "warn", INFO: "running" };
-  const atBottom = () => list.scrollTop + list.clientHeight >= list.scrollHeight - 8;
+  const keep = follower(list, jump);
 
   // matches says whether a line's text holds the filter's, case aside.
   const matches = (li) => li.dataset.text.includes(filter.value.trim().toLowerCase());
@@ -34,20 +34,15 @@
   };
 
   const add = (rec) => {
-    const stick = atBottom();
     const li = line(rec);
     li.hidden = !matches(li);
-    list.append(li);
-    if (list.children.length > max) list.firstElementChild.remove();
-    if (stick) list.scrollTop = list.scrollHeight;
+    keep(() => {
+      list.append(li);
+      if (list.children.length > max) list.firstElementChild.remove();
+    });
     showCount();
   };
 
-  list.addEventListener("scroll", () => { jump.hidden = atBottom(); });
-  jump.addEventListener("click", () => {
-    list.scrollTop = list.scrollHeight;
-    list.focus();
-  });
   filter.form.addEventListener("submit", (e) => e.preventDefault()); // Enter must not reload the page
   filter.addEventListener("input", () => {
     for (const li of list.children) li.hidden = !matches(li);
