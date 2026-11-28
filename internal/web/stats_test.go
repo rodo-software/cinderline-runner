@@ -47,8 +47,10 @@ func TestStatsStreamsAtTheInterval(t *testing.T) {
 		}
 		return nil, nil
 	}}
-	data, _ := streamPath(t, h, "/api/runs/CLR/CLR-7/stats")
+	// Before the request: the handler starts its ticker and sends the first
+	// event before streamPath returns.
 	start := time.Now()
+	data, _ := streamPath(t, h, "/api/runs/CLR/CLR-7/stats")
 	if ev := nextStats(t, data); len(ev.Containers) != 1 || ev.Containers[0] != agent || ev.Error != nil || ev.Time.IsZero() {
 		t.Errorf("first event %+v, want the agent", ev)
 	}

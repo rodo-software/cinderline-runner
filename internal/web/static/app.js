@@ -176,7 +176,7 @@ const sendErrors = new WeakMap(); // a form's or a lone button's error line
 let sendIds = 0;
 const send = async (button, method, url, body) => {
   const at = button.form || button;
-  const fields = button.form ? [...button.form.querySelectorAll("input, select, textarea")] : [button];
+  const fields = button.form ? [...button.form.elements].filter((f) => f.matches("input, select, textarea")) : [button];
   let line = sendErrors.get(at);
   if (!line) {
     line = el("p", "field-error");
@@ -210,6 +210,15 @@ const send = async (button, method, url, body) => {
   }
   return false;
 };
+
+// number is v, a field's value, as a number when it is a whole number;
+// anything else goes as typed, for the daemon to refuse.
+const number = (v) => /^-?\d+$/.test(v.trim()) ? Number(v) : v;
+
+// secret calls request with the value of the secret field input and empties
+// the field once it is answered, refused or not, so the value stays nowhere
+// on the page.
+const secret = (input, request) => request(input.value).finally(() => { input.value = ""; });
 
 // confirmed asks question in a modal <dialog> with the buttons Cancel and
 // yes, Cancel focused, and resolves to whether yes was pressed; Escape

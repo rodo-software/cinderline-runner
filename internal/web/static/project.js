@@ -40,9 +40,6 @@
     : none("None.");
   // The project's routes, which name it by its ID.
   const api = (p) => "/api/projects/" + encodeURIComponent(p.id);
-  // A secret field is emptied once its request is answered, refused or not,
-  // so its value stays nowhere on the page.
-  const secret = (input, request) => request(input.value).finally(() => { input.value = ""; });
   // A word for a shell: quoted unless it is plainly safe as it is.
   const sh = (s) => /^[\w.:/@%+=-]+$/.test(s) ? s : "'" + s.replaceAll("'", "'\\''") + "'";
   // Removing and renaming name the project by its key, with its URL and

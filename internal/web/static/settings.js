@@ -27,9 +27,6 @@
     if (input.dataset.was === v) return;
     input.value = input.dataset.was = v;
   };
-  // A whole number goes as a number; anything else as typed, for the daemon
-  // to refuse.
-  const number = (v) => /^-?\d+$/.test(v.trim()) ? Number(v) : v;
   // The page's port, from web_addr, 127.0.0.1:port.
   const portOf = (addr) => addr.slice(addr.lastIndexOf(":") + 1);
 

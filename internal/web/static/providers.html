@@ -1,0 +1,79 @@
+<!doctype html>
+<!-- Providers: the runner's model providers. providers.js fills it from
+     /api/config and sends its forms. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Providers · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="providers.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/runs.html">Runs</a></li>
+      <li><a href="/projects.html">Projects</a></li>
+      <li><a href="/log.html">Log</a></li>
+      <li><a href="/providers.html">Providers</a></li>
+      <li><a href="/settings.html">Settings</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <h1>Providers</h1>
+</header>
+
+<div class="scroll" role="region" aria-label="Providers" tabindex="0" id="list" hidden><table class="rows">
+  <thead><tr><th scope="col">Name</th><th scope="col">Base URL</th><th scope="col">Free</th><th scope="col">Most agents at once</th><th scope="col">Lookahead</th><th scope="col"></th><th scope="col">API key</th><th scope="col"></th></tr></thead>
+  <tbody id="providers"></tbody>
+</table></div>
+
+<p class="muted" id="none" hidden>No providers yet. A provider is an OpenAI-compatible model server, such as a model on your own machine, that the OpenCode agents of every project of this runner can use.</p>
+
+<section aria-labelledby="h-add">
+  <h2 id="h-add">Add a provider</h2>
+  <!-- method post: a submit before providers.js runs never puts the key in
+       the URL. novalidate: the daemon checks the values, the browser only sends them. -->
+  <form class="stack" id="add" method="post" novalidate>
+    <div>
+      <label>Name <input type="text" name="name" autocomplete="off" aria-describedby="name-hint"></label>
+      <p class="hint" id="name-hint">Lower-case letters, digits and dashes. OpenCode agents name a model of it as <code>NAME/&lt;model id&gt;</code>.</p>
+    </div>
+    <div>
+      <label>Base URL <input type="text" name="base_url" placeholder="http://localhost:11434/v1" autocomplete="off" aria-describedby="url-hint"></label>
+      <p class="hint" id="url-hint">Its OpenAI-compatible API, http or https.</p>
+    </div>
+    <div>
+      <label class="switch"><input type="checkbox" role="switch" name="free" aria-describedby="free-hint"> Free</label>
+      <p class="hint" id="free-hint">Its models cost nothing per token, such as a model on your own machine; Cinderline then prices them at $0.</p>
+    </div>
+    <div>
+      <label>Most agents at once <input type="text" inputmode="numeric" size="6" name="max_agents" autocomplete="off" placeholder="no limit" aria-describedby="max-hint"></label>
+      <p class="hint" id="max-hint">The most agent turns on it at once, over every project; 0 or empty is no limit.</p>
+    </div>
+    <div>
+      <label>Lookahead <input type="text" inputmode="numeric" size="6" name="lookahead" autocomplete="off" placeholder="0" aria-describedby="look-hint"></label>
+      <p class="hint" id="look-hint">How many runs past the most agents may be in play on it, waiting at their turns. Needs a most agents at once.</p>
+    </div>
+    <div>
+      <label>API key <input type="password" name="key" autocomplete="off" aria-describedby="key-hint"></label>
+      <p class="hint" id="key-hint">Optional. It is stored and never shown again.</p>
+    </div>
+    <div class="actions"><button type="submit" class="primary">Add provider</button></div>
+  </form>
+</section>
+</main>
+</body>
+</html>

@@ -181,6 +181,24 @@ func TestHandlerServesTheSettingsPage(t *testing.T) {
 	}
 }
 
+// CLR-308: the Providers page, the runner's model providers.
+func TestHandlerServesTheProvidersPage(t *testing.T) {
+	dir := t.TempDir()
+	tok := token(t, dir)
+	for path, want := range map[string]string{
+		"/providers.html": "text/html; charset=utf-8",
+		"/providers.js":   "text/javascript; charset=utf-8",
+	} {
+		w := do(t, dir, "GET", path, tok, nil)
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != want {
+			t.Errorf("GET %s = %d, %q, want 200 %q", path, w.Code, w.Header().Get("Content-Type"), want)
+		}
+	}
+	if w := do(t, dir, "GET", "/providers.html", tok, nil); !strings.Contains(w.Body.String(), `src="providers.js"`) {
+		t.Error("GET /providers.html does not load providers.js")
+	}
+}
+
 func TestTokenIsMadeOnceAndPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	tok := token(t, dir)
