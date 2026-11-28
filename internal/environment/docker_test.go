@@ -1068,3 +1068,28 @@ func TestRunCallsOnLine(t *testing.T) {
 		t.Errorf("lines = %q", got)
 	}
 }
+
+// CLR-280: a turn with OnLine hands its output to its transcript, not to the
+// log; a run without it, such as the check, still logs every line.
+func TestRunLogsOutputOnlyWithoutOnLine(t *testing.T) {
+	for _, onLine := range []bool{true, false} {
+		d, _, logs := runner(nil, func(_ context.Context, out io.Writer) error {
+			io.WriteString(out, "first\nsecond")
+			return nil
+		})
+		s := turn
+		if onLine {
+			s.OnLine = func(string) {}
+		}
+		if _, err := d.Run(context.Background(), s); err != nil {
+			t.Fatal(err)
+		}
+		want := 2
+		if onLine {
+			want = 0
+		}
+		if got := strings.Count(logs.String(), "msg=\""+OutputMsg+"\""); got != want {
+			t.Errorf("OnLine set %v: %d %q records, want %d; log:\n%s", onLine, got, OutputMsg, want, logs.String())
+		}
+	}
+}

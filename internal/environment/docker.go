@@ -353,8 +353,9 @@ func (d *Docker) log() *slog.Logger {
 	return d.Log
 }
 
-// OutputMsg is the message of each logged line of container output. The
-// daemon's log handler finds it by this message and cleans its "line".
+// OutputMsg is the message of each logged line of container output, only
+// that of a run without OnLine, such as the check. The daemon's log handler
+// finds it by this message and cleans its "line".
 const OutputMsg = "agent output"
 
 // Output kept per turn or check: its first headBytes, as Codex prints its
@@ -368,15 +369,15 @@ const (
 	lineBytes = 1 << 20
 )
 
-// lines keeps the output's head and tail, which the clients parse, and logs
-// it a line at a time at Debug: a turn prints far more than the log should
-// keep. A line still unfinished past lineBytes is not logged, as a part of
+// lines keeps the output's head and tail, which the clients parse, and hands
+// it a line at a time to onLine or, without one, logs it at Debug: a turn
+// prints far more than the log should keep. A line still unfinished past lineBytes is not logged, as a part of
 // it could hold part of a secret that redaction no longer recognises. The stream
 // writes from one goroutine at a time.
 type lines struct {
 	log     *slog.Logger
 	touch   func()            // called on every write; nil: none
-	onLine  func(line string) // Spec.OnLine
+	onLine  func(line string) // Spec.OnLine; nil: log each line
 	head    []byte
 	tail    []byte // up to twice tailBytes, as forge's tail
 	cut     int64  // bytes dropped from the tail's front
@@ -424,12 +425,15 @@ func (l *lines) flush() {
 	l.pending = nil
 }
 
-// line logs one complete line and hands it to onLine.
+// line hands one complete line to onLine, or logs it without one: a turn's
+// output goes to its transcript, not the runner log (decision
+// 2026-11-26-local-web-page, Transcripts).
 func (l *lines) line(s string) {
-	l.log.Debug(OutputMsg, "line", s)
 	if l.onLine != nil {
 		l.onLine(s)
+		return
 	}
+	l.log.Debug(OutputMsg, "line", s)
 }
 
 // dropped is how many bytes of output were not kept.
