@@ -60,12 +60,18 @@ func TestRunOfTwoStepsReadBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := s.List()
-	want := []RunInfo{{Project: "CLR", Issue: "CLR-277", Run: "20261128T080507Z", Start: start.UTC(), Ended: false}}
+	want := []RunInfo{{Project: "CLR", Issue: "CLR-277", Run: "20261128T080507Z", Start: start.UTC(), Ended: false, Manager: true, Steps: 2}}
 	if len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("List = %+v, want %+v", got, want)
 	}
 	steps := s.Steps("CLR", "CLR-277", "20261128T080507Z")
-	if want := []StepInfo{{N: 1, Kind: "run", Ended: true}, {N: 2, Kind: "check"}}; len(steps) != 2 || steps[0] != want[0] || steps[1] != want[1] {
+	if len(steps) != 2 || steps[0].Start.IsZero() || steps[0].End.Before(steps[0].Start) || steps[1].Start.IsZero() || !steps[1].End.IsZero() {
+		t.Fatalf("Steps = %+v, want both started and the first ended", steps)
+	}
+	for i := range steps {
+		steps[i].Start, steps[i].End = time.Time{}, time.Time{}
+	}
+	if want := []StepInfo{{N: 1, Kind: "run", Agent: "coder", Client: "claude", Model: "opus", Manager: true, Ended: true, Outcome: "ok"}, {N: 2, Kind: "check"}}; steps[0] != want[0] || steps[1] != want[1] {
 		t.Fatalf("Steps = %+v, want %+v", steps, want)
 	}
 
@@ -90,8 +96,11 @@ func TestRunOfTwoStepsReadBack(t *testing.T) {
 	}
 
 	b.End("failed", "check failed")
-	if got := s.List(); !got[0].Ended {
-		t.Fatal("run not ended after its last step's end line")
+	if got := s.List(); !got[0].Ended || got[0].Outcome != "failed" {
+		t.Fatalf("List = %+v, want ended with its last step's outcome", got)
+	}
+	if st := s.Steps("CLR", "CLR-277", "20261128T080507Z")[1]; st.Outcome != "failed" || st.Error != "check failed" {
+		t.Fatalf("step 2 = %+v, want its end line's outcome and error", st)
 	}
 	if _, err := s.Open("CLR", "CLR-277", "20261128T080507Z", 3); err == nil {
 		t.Fatal("Open of a missing step: no error")
@@ -201,5 +210,20 @@ func TestWriteErrorLoggedOnce(t *testing.T) {
 	st.End("ok", "")
 	if n := strings.Count(buf.String(), "\n"); n != 1 || !strings.Contains(buf.String(), "issue=CLR-1") {
 		t.Fatalf("log = %q, want one line tagged with the issue", buf.String())
+	}
+}
+
+// TestStepEndOfALongStep: the end line is found behind a step's output of
+// more than one tail read, and after an end line too long for the first one.
+func TestStepEndOfALongStep(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	st := s.Begin("CLR", "CLR-1", start).Step("run", Start{Model: "opus"})
+	for range 100 {
+		st.Out(strings.Repeat("x", 1000))
+	}
+	st.End("failed", strings.Repeat("e", 10000))
+	got := s.Steps("CLR", "CLR-1", "20261128T080507Z")
+	if len(got) != 1 || got[0].Model != "opus" || !got[0].Ended || got[0].Outcome != "failed" || len(got[0].Error) != 10000 {
+		t.Fatalf("Steps = %+v", got)
 	}
 }

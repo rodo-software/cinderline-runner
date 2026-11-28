@@ -10,7 +10,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/transcript"
 )
 
 // Handlers are what the daemon gives the page.
@@ -18,6 +20,9 @@ type Handlers struct {
 	Status func() localapi.Status
 	Follow func(n int) (tail []byte, lines <-chan []byte, cancel func(), err error) // as localapi.Handlers.Follow
 	Tick   time.Duration                                                            // how often a stream checks for a change; 0: every second
+
+	Transcripts transcript.Store
+	Config      func() *config.Config // the config now, safe from any goroutine
 }
 
 // maxTail is the most lines GET /api/log sends before following: what the
@@ -110,5 +115,6 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 			}
 		}
 	})
+	runRoutes(mux, &h)
 	return guard(stateDir, port, mux)
 }

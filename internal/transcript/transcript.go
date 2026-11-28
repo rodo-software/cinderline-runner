@@ -75,31 +75,40 @@ type Step struct {
 	failed bool     // a write error was logged
 }
 
-// RunInfo is a run on disk. Ended: its last step has an end line.
+// RunInfo is a run on disk. Ended: its last step has an end line, whose
+// outcome is Outcome. Manager: its first step is a Project Manager's.
 type RunInfo struct {
 	Project, Issue, Run string
 	Start               time.Time
 	Ended               bool
+	Manager             bool
+	Steps               int
+	Outcome             string
 }
 
-// StepInfo is a step on disk. Ended: it has an end line.
+// StepInfo is a step on disk: from its start line its agent, client, model
+// and start, and, once Ended, from its end line its end, outcome and error.
 type StepInfo struct {
-	N     int
-	Kind  string
-	Ended bool
+	N                    int
+	Kind                 string
+	Agent, Client, Model string
+	Manager              bool
+	Start, End           time.Time
+	Ended                bool
+	Outcome, Error       string
 }
 
 func (s *Store) log() *slog.Logger { return cmp.Or(s.Log, slog.Default()) }
 
-// plain reports whether name is safe as one path element.
-func plain(name string) bool {
+// Plain reports whether name is safe as one path element.
+func Plain(name string) bool {
 	return name != "" && name != "." && !strings.ContainsAny(name, `/\`) && !strings.Contains(name, "..") && filepath.IsLocal(name)
 }
 
 // Begin starts the transcript of a run of issue that started at start. It
 // returns nil, after logging it, when project or issue is not a plain name.
 func (s *Store) Begin(project, issue string, start time.Time) *Run {
-	if !plain(project) || !plain(issue) {
+	if !Plain(project) || !Plain(issue) {
 		s.log().Warn("transcript refused: not a plain name", "project", project, "issue", issue)
 		return nil
 	}
@@ -114,7 +123,7 @@ func (r *Run) Step(kind string, meta Start) *Step {
 		return nil
 	}
 	log := r.store.log().With("project", r.project, "issue", r.issue)
-	if !plain(kind) {
+	if !Plain(kind) {
 		log.Warn("transcript refused: not a plain name", "kind", kind)
 		return nil
 	}
@@ -220,17 +229,27 @@ func (s *Store) List() []RunInfo {
 	for _, p := range dirs(s.Dir) {
 		for _, i := range dirs(filepath.Join(s.Dir, p)) {
 			for _, r := range dirs(filepath.Join(s.Dir, p, i)) {
-				start, err := time.Parse(RunID, r)
-				if err != nil {
-					continue
+				if ri, _, ok := s.Info(p, i, r); ok {
+					out = append(out, ri)
 				}
-				steps := s.Steps(p, i, r)
-				out = append(out, RunInfo{Project: p, Issue: i, Run: r, Start: start,
-					Ended: len(steps) > 0 && steps[len(steps)-1].Ended})
 			}
 		}
 	}
 	return out
+}
+
+// Info returns a run and its steps; ok is false when run is not a run id.
+func (s *Store) Info(project, issue, run string) (ri RunInfo, steps []StepInfo, ok bool) {
+	start, err := time.Parse(RunID, run)
+	if err != nil {
+		return RunInfo{}, nil, false
+	}
+	ri = RunInfo{Project: project, Issue: issue, Run: run, Start: start}
+	if steps = s.Steps(project, issue, run); len(steps) > 0 {
+		last := steps[len(steps)-1]
+		ri.Ended, ri.Manager, ri.Steps, ri.Outcome = last.Ended, steps[0].Manager, len(steps), last.Outcome
+	}
+	return ri, steps, true
 }
 
 // dirs returns the plain names of the folders in dir.
@@ -238,7 +257,7 @@ func dirs(dir string) []string {
 	entries, _ := os.ReadDir(dir) // a missing folder holds no runs
 	var out []string
 	for _, e := range entries {
-		if e.IsDir() && plain(e.Name()) {
+		if e.IsDir() && Plain(e.Name()) {
 			out = append(out, e.Name())
 		}
 	}
@@ -247,7 +266,7 @@ func dirs(dir string) []string {
 
 // Steps returns a run's steps by number; nil for a name that is not plain.
 func (s *Store) Steps(project, issue, run string) []StepInfo {
-	if !plain(project) || !plain(issue) || !plain(run) {
+	if !Plain(project) || !Plain(issue) || !Plain(run) {
 		return nil
 	}
 	dir := filepath.Join(s.Dir, project, issue, run)
@@ -260,31 +279,61 @@ func (s *Store) Steps(project, issue, run string) []StepInfo {
 		if !ok || err != nil || n < 1 || !e.Type().IsRegular() {
 			continue
 		}
-		out = append(out, StepInfo{N: n, Kind: kind, Ended: ended(filepath.Join(dir, e.Name()))})
+		st := StepInfo{N: n, Kind: kind}
+		readEnds(filepath.Join(dir, e.Name()), &st)
+		out = append(out, st)
 	}
 	slices.SortFunc(out, func(a, b StepInfo) int { return a.N - b.N }) // 100 sorts after 99
 	return out
 }
 
-// ended reports whether the file's last line is an end line. Every line fits
-// in maxLine, so only the file's tail is read.
-func ended(name string) bool {
+// readEnds fills st from the file's start line and its end line, if its
+// first line is one and its last line is one. It reads the first line and
+// the file's tail only, so a long step costs no more than a short one.
+func readEnds(name string, st *StepInfo) {
 	f, err := os.Open(name)
 	if err != nil {
-		return false
+		return
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return false
+		return
 	}
-	buf := make([]byte, min(fi.Size(), maxLine+1))
-	if _, err := f.ReadAt(buf, fi.Size()-int64(len(buf))); err != nil && err != io.EOF {
-		return false
+	first, _ := bufio.NewReader(io.NewSectionReader(f, 0, maxLine)).ReadBytes('\n')
+	var s struct {
+		T                          time.Time
+		Type, Agent, Client, Model string
+		Manager                    bool
 	}
-	buf = bytes.TrimSuffix(buf, []byte("\n"))
-	var l struct{ Type string }
-	return json.Unmarshal(buf[bytes.LastIndexByte(buf, '\n')+1:], &l) == nil && l.Type == "end"
+	if json.Unmarshal(first, &s) == nil && s.Type == "start" {
+		st.Start, st.Agent, st.Client, st.Model, st.Manager = s.T, s.Agent, s.Client, s.Model, s.Manager
+	}
+	var e struct {
+		T                    time.Time
+		Type, Outcome, Error string
+	}
+	if json.Unmarshal(lastLine(f, fi.Size()), &e) == nil && e.Type == "end" {
+		st.Ended, st.End, st.Outcome, st.Error = true, e.T, e.Outcome, e.Error
+	}
+}
+
+// lastLine returns the last line of f, of size bytes, without its newline.
+// It reads a small tail first and, when the line is longer, the most a line
+// may take: every line fits in maxLine.
+func lastLine(f *os.File, size int64) []byte {
+	for _, n := range []int64{4 << 10, maxLine + 1} {
+		buf := make([]byte, min(size, n))
+		if _, err := f.ReadAt(buf, size-int64(len(buf))); err != nil && err != io.EOF {
+			return nil
+		}
+		whole := int64(len(buf)) == size
+		buf = bytes.TrimSuffix(buf, []byte("\n"))
+		if i := bytes.LastIndexByte(buf, '\n'); i >= 0 || whole {
+			return buf[i+1:]
+		}
+	}
+	return nil
 }
 
 // Open opens step n of a run.

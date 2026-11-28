@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -97,6 +98,8 @@ type daemon struct {
 	snapshot func() localapi.Status
 	// follow is the log's tail and stream, for `logs` and the page alike.
 	follow func(n int) ([]byte, <-chan []byte, func(), error)
+	// shown is cfg for the page's handlers, which run on other goroutines.
+	shown atomic.Pointer[config.Config]
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -279,6 +282,7 @@ func (d *daemon) apply(cfg *config.Config) {
 			Pins: cfg.Pinned, Check: d.checkTools, Switched: d.toolsSwitched, Log: d.log}
 		go u.Run(ctx)
 	}
+	d.shown.Store(cfg)
 	d.serveWeb(cfg)
 	d.cfg = cfg
 	projects := make([]localapi.ProjectStatus, len(cfg.Projects))
@@ -326,7 +330,8 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 		d.log.Error("web page not served", "addr", addr, "err", err)
 		return
 	}
-	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot, Follow: d.follow})}
+	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot, Follow: d.follow,
+		Transcripts: *d.transcript, Config: d.shown.Load})}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
 }
