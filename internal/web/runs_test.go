@@ -72,6 +72,7 @@ func TestRunsNewestFirst(t *testing.T) {
 	var got []struct {
 		runOut
 		Steps int
+		End   *time.Time
 	}
 	getJSON(t, h, tok, "/api/runs", &got)
 	if len(got) != 3 {
@@ -85,6 +86,9 @@ func TestRunsNewestFirst(t *testing.T) {
 	for i, n := range []int{1, 1, 2} {
 		if got[i].runOut != want[i] || got[i].Steps != n {
 			t.Errorf("run %d = %+v, want %+v with %d steps", i, got[i], want[i], n)
+		}
+		if (got[i].End == nil) != want[i].Live { // the end of its last step, left out while live
+			t.Errorf("run %d: end %v, live %v", i, got[i].End, want[i].Live)
 		}
 	}
 }

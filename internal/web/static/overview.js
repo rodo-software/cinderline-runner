@@ -4,14 +4,6 @@
   const $ = (id) => document.getElementById(id);
   const plural = (n, one, many) => n + " " + (n === 1 ? one : many);
 
-  // when is time t as "3 minutes ago", with the exact time on hover.
-  const when = (t) => {
-    const n = el("time", "", ago(t));
-    n.dateTime = t;
-    n.title = new Date(t).toLocaleString();
-    return n;
-  };
-
   const kv = (rows) => el("table", "kv", ...rows.map(([k, v]) => {
     const th = el("th", "", k);
     th.scope = "row";
@@ -68,11 +60,15 @@
       el("p", "muted", (p.connected ? "Connected" : "Not connected") + " · last error ", when(p.last_error_at)))) : [el("p", "all-good", el("span", "status ok", "Nothing right now"))]);
 
     const runs = projects.flatMap((p) => [
-      ...(p.issues || []).map((ref) => [ref, p.project]),
-      ...p.manager ? [[p.manager + " · Project Manager", p.project]] : [],
+      ...(p.issues || []).map((ref) => [ref, p.project, ""]),
+      ...p.manager ? [[p.manager, p.project, " · Project Manager"]] : [],
     ]);
-    $("runs").replaceChildren(...runs.map(([title, key]) => el("li", "",
-      el("span", "badge running", "run"), el("span", "title", title), el("span", "meta", key))));
+    $("runs").replaceChildren(...runs.map(([ref, key, what]) => {
+      const r = live.get(key + "\n" + ref);
+      const a = r ? el("a", "", ref) : ref; // no link until its transcript is there
+      if (r) a.href = runHref(r);
+      return el("li", "", el("span", "badge running", "run"), el("span", "title", a, what), el("span", "meta", key));
+    }));
     $("runs").hidden = !runs.length;
     $("no-runs").hidden = !!runs.length;
 
@@ -108,7 +104,19 @@
     $("version").textContent = st.version;
   };
 
+  // live is the newest live run of each project and issue in /api/runs, for
+  // the links of the runs in flight; fetched again with each status.
+  let live = new Map();
+  const findRuns = () => fetch("/api/runs?limit=500").then((r) => r.ok ? r.json() : null).then((runs) => {
+    if (!runs) return;
+    live = new Map();
+    for (const r of runs) { // newest first
+      const k = r.project + "\n" + r.issue;
+      if (r.live && !live.has(k)) live.set(k, r);
+    }
+  }, () => {}); // the stream's bar already says when the daemon is gone
+
   let last;
-  listen("/api/status/stream", (st) => { last = st; render(st); });
+  listen("/api/status/stream", (st) => { last = st; findRuns().then(() => render(last)); });
   setInterval(() => last && render(last), 30000); // "3 minutes ago" moves on between events
 })();

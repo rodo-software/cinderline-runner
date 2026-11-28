@@ -10,28 +10,33 @@ const el = (tag, cls, ...kids) => {
   return n;
 };
 
+// reachable shows whether the daemon answered: the top bar's state and, while
+// it does not, a bar that says so. Call it once the page is parsed.
+let lostBar;
+const reachable = (ok) => {
+  if (!lostBar) {
+    lostBar = el("p", "attention warn", "Connection lost, retrying…");
+    lostBar.setAttribute("role", "status");
+    document.getElementById("main").prepend(lostBar);
+  }
+  lostBar.hidden = ok;
+  const state = document.querySelector("[data-runner-state]");
+  state.textContent = ok ? "Running" : "Not reachable";
+  state.className = "status " + (ok ? "ok" : "error");
+};
+
 // listen calls onData with each event of the stream at url, parsed as JSON,
 // and onOpen, if given, each time the stream (re)connects. While the stream is
 // down a bar says so; the browser reconnects by itself, and after a refused
 // answer listen tries again every 5 s. Call it once the page is parsed.
 const listen = (url, onData, onOpen) => {
-  const state = document.querySelector("[data-runner-state]");
-  const bar = el("p", "attention warn", "Connection lost, retrying…");
-  bar.setAttribute("role", "status");
-  bar.hidden = true;
-  document.getElementById("main").prepend(bar);
-  const up = (ok) => {
-    bar.hidden = ok;
-    state.textContent = ok ? "Running" : "Not reachable";
-    state.className = "status " + (ok ? "ok" : "error");
-  };
   const retry = () => setTimeout(open, 5000);
   const open = () => {
     const es = new EventSource(url);
     if (onOpen) es.onopen = onOpen;
-    es.onmessage = (e) => { up(true); onData(JSON.parse(e.data)); };
+    es.onmessage = (e) => { reachable(true); onData(JSON.parse(e.data)); };
     es.onerror = () => {
-      up(false);
+      reachable(false);
       if (es.readyState !== EventSource.CLOSED) return;
       // The browser gave up, after an answer other than 200. A 401 means the
       // token was replaced: reloading shows the daemon's own answer, the line
@@ -64,6 +69,17 @@ const ago = (t) => {
   }
   return "just now";
 };
+
+// when is time t as "3 minutes ago", with the exact time on hover.
+const when = (t) => {
+  const n = el("time", "", ago(t));
+  n.dateTime = t;
+  n.title = new Date(t).toLocaleString();
+  return n;
+};
+
+// runHref is the page of run r, an entry of /api/runs.
+const runHref = (r) => "run.html?" + new URLSearchParams({ project: r.project, issue: r.issue, run: r.run });
 
 (() => {
   // The light and dark switch (decision 2026-11-27-web-look). The page follows

@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- The Runs: runs.js fills it from /api/runs. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Runs · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="runs.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/runs.html">Runs</a></li>
+      <li><a href="/log.html">Log</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <h1>Runs</h1>
+</header>
+
+<form class="row">
+  <label>Project <select id="project"><option value="">All projects</option></select></label>
+</form>
+
+<section aria-labelledby="now" id="live-runs" hidden>
+  <h2 id="now">Running now</h2>
+  <div class="scroll"><table class="rows">
+    <thead><tr><th scope="col">Issue</th><th scope="col">Project</th><th scope="col">Started</th><th scope="col" class="num">Duration</th><th scope="col" class="num">Steps</th><th scope="col" class="end">Outcome</th></tr></thead>
+    <tbody id="live"></tbody>
+  </table></div>
+</section>
+
+<section aria-labelledby="ended" id="done-runs" hidden>
+  <h2 id="ended">Finished</h2>
+  <div class="scroll"><table class="rows">
+    <thead><tr><th scope="col">Issue</th><th scope="col">Project</th><th scope="col">Started</th><th scope="col" class="num">Duration</th><th scope="col" class="num">Steps</th><th scope="col" class="end">Outcome</th></tr></thead>
+    <tbody id="done"></tbody>
+  </table></div>
+</section>
+
+<p class="muted" id="no-runs" hidden>No runs yet. Runs appear here when the runner starts one.</p>
+</main>
+</body>
+</html>

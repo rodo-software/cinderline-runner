@@ -79,7 +79,7 @@ type Step struct {
 // outcome is Outcome. Manager: its first step is a Project Manager's.
 type RunInfo struct {
 	Project, Issue, Run string
-	Start               time.Time
+	Start, End          time.Time // End: of the last step, once Ended
 	Ended               bool
 	Manager             bool
 	Steps               int
@@ -247,7 +247,7 @@ func (s *Store) Info(project, issue, run string) (ri RunInfo, steps []StepInfo, 
 	ri = RunInfo{Project: project, Issue: issue, Run: run, Start: start}
 	if steps = s.Steps(project, issue, run); len(steps) > 0 {
 		last := steps[len(steps)-1]
-		ri.Ended, ri.Manager, ri.Steps, ri.Outcome = last.Ended, steps[0].Manager, len(steps), last.Outcome
+		ri.Ended, ri.Manager, ri.Steps, ri.Outcome, ri.End = last.Ended, steps[0].Manager, len(steps), last.Outcome, last.End
 	}
 	return ri, steps, true
 }

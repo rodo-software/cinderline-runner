@@ -32,6 +32,7 @@ type runJSON struct {
 	Issue    string    `json:"issue"`
 	Run      string    `json:"run"`
 	Start    time.Time `json:"start"`
+	End      time.Time `json:"end,omitzero"` // left out while the run is live
 	Live     bool      `json:"live"`
 	Manager  bool      `json:"manager"`
 	Outcome  string    `json:"outcome"`
@@ -51,7 +52,7 @@ type stepJSON struct {
 }
 
 func toRun(ri transcript.RunInfo, cfg *config.Config) runJSON {
-	return runJSON{Project: ri.Project, Issue: ri.Issue, Run: ri.Run, Start: ri.Start, Live: !ri.Ended,
+	return runJSON{Project: ri.Project, Issue: ri.Issue, Run: ri.Run, Start: ri.Start, End: ri.End, Live: !ri.Ended,
 		Manager: ri.Manager, Outcome: ri.Outcome, IssueURL: issueURL(cfg, ri.Project, ri.Issue)}
 }
 
