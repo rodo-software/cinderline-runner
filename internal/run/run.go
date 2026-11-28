@@ -263,6 +263,9 @@ func (p *Project) step(ctx context.Context, c *cinderline.Client, j *job, h *hel
 		defer func() {
 			if last != nil {
 				last.Refused = p.takeRefused(j.ref, step.AllowHosts)
+				for _, r := range last.Refused {
+					j.tstep.Refused(r.Host, r.Reason, deref(r.Method), deref(r.URL))
+				}
 			}
 		}()
 	}
@@ -730,7 +733,7 @@ func (p *Project) checkStep(ctx context.Context, c *cinderline.Client, j *job, h
 		p.Log.Warn("push failed", "project", p.Config.Key, "issue", issue, "err", err)
 	}
 	cctx, end := p.stoppable(ctx, j.ref)
-	failed, tail, err := p.runCheck(cctx, j.dir, j.check, j.team.MaxMinutes, p.allowHosts(issue, step.AllowHosts))
+	failed, tail, err := p.runCheck(cctx, j.dir, j.check, j.team.MaxMinutes, p.allowHosts(issue, step.AllowHosts), j.tstep.Out)
 	var oom *environment.OutOfMemoryError
 	switch {
 	case ctx.Err() != nil:

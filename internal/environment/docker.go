@@ -354,7 +354,7 @@ func (d *Docker) log() *slog.Logger {
 }
 
 // OutputMsg is the message of each logged line of container output, only
-// that of a run without OnLine, such as the check. The daemon's log handler
+// that of a run without OnLine. The daemon's log handler
 // finds it by this message and cleans its "line".
 const OutputMsg = "agent output"
 

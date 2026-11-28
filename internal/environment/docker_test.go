@@ -1070,7 +1070,7 @@ func TestRunCallsOnLine(t *testing.T) {
 }
 
 // CLR-280: a turn with OnLine hands its output to its transcript, not to the
-// log; a run without it, such as the check, still logs every line.
+// log; a run without it still logs every line.
 func TestRunLogsOutputOnlyWithoutOnLine(t *testing.T) {
 	for _, onLine := range []bool{true, false} {
 		d, _, logs := runner(nil, func(_ context.Context, out io.Writer) error {

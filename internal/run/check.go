@@ -13,9 +13,10 @@ import (
 
 // runCheck runs check in dir, with the agent's clone mounts but without its
 // client state, tools or credentials, limited to maxMinutes; it reaches the
-// project's hosts and allow. failed is why a check that ran failed, with
-// the tail of its output; err is a stop or a check that could not run.
-func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int, allow []string) (failed error, tail string, err error) {
+// project's hosts and allow, and hands each line it prints to onLine.
+// failed is why a check that ran failed, with the tail of its output; err
+// is a stop or a check that could not run.
+func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes int, allow []string, onLine func(line string)) (failed error, tail string, err error) {
 	mounts, err := workspace.CloneMounts(p.Config.ID(), dir)
 	if err != nil {
 		return nil, "", fmt.Errorf("the check could not run: %w", err)
@@ -27,6 +28,7 @@ func (p *Project) runCheck(ctx context.Context, dir, check string, maxMinutes in
 		Cmd:      []string{"sh", "-c", check},
 		Timeout:  time.Duration(maxMinutes) * time.Minute,
 		AppAllow: allow,
+		OnLine:   onLine,
 	})
 	var exit interface{ ExitCode() int }
 	switch {

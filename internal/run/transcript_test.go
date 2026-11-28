@@ -92,7 +92,7 @@ func TestARunLeavesOneTranscriptFilePerStep(t *testing.T) {
 		`{"kind":"publish","type":"start"}`,
 		`{"kind":"stop","type":"start"}`,
 	}
-	sizes := []int{3, 2, 2, 2} // the run step holds its prompt between them too (CLR-279)
+	sizes := []int{3, 3, 2, 2} // the run step holds its prompt between them too (CLR-279), the check its output (CLR-281)
 	for i, ls := range lines {
 		if len(ls) != sizes[i] || jsonOf(ls[0]) != starts[i] || jsonOf(ls[len(ls)-1]) != `{"error":"","outcome":"ok","type":"end"}` {
 			t.Errorf("%s = %v", names[i], ls)
@@ -190,5 +190,66 @@ func TestATurnsStepHoldsItsPromptAndOutput(t *testing.T) {
 	want := []string{`{"text":"Do it.","type":"prompt"}`, `{"line":"working","type":"out"}`, `{"line":"done","type":"out"}`}
 	if lines[0][0]["type"] != "start" || lines[0][len(lines[0])-1]["type"] != "end" || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("lines = %v", lines[0])
+	}
+}
+
+// CLR-281: a check step holds each line its check command printed.
+func TestACheckStepHoldsItsOutput(t *testing.T) {
+	f := newFixture(t)
+	s := withTranscripts(t, f)
+	f.env.Runs = []environment.RunReply{{Output: "ok  pkg/a\nFAIL pkg/b", Err: exitError(1)}}
+	if _, err := f.run(t, &fakeApp{onNext: stepsOf(checkStep, `{"kind":"stop"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	_, lines := transcriptSteps(t, s)
+	var got []string
+	for _, l := range lines[0][1 : len(lines[0])-1] {
+		got = append(got, jsonOf(l))
+	}
+	want := []string{`{"line":"ok  pkg/a","type":"out"}`, `{"line":"FAIL pkg/b","type":"out"}`}
+	if lines[0][0]["kind"] != "check" || lines[0][len(lines[0])-1]["type"] != "end" || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("lines = %v", lines[0])
+	}
+}
+
+// CLR-281: a step writes each host the proxy refused during it, as it
+// reports them to the app, just before its end; a step without any writes
+// none.
+func TestAStepHoldsItsRefusedHostsBeforeItsEnd(t *testing.T) {
+	f := newFixture(t)
+	s := withTranscripts(t, f)
+	f.cl.Runs = []client.RunReply{ok("s", "Done."), ok("s", "Done.")}
+	first := true
+	f.p.Clients["claude"] = refusingClient{f.cl, func() {
+		if first {
+			f.p.AddRefused("CSR-1", environment.Refusal{Host: "pypi.org:443", Reason: cinderline.RefusedNotAllowed, Method: "GET", URL: "https://pypi.org/simple/"})
+			f.p.AddRefused("CSR-1", environment.Refusal{Host: "localhost:8080", Reason: cinderline.RefusedRunnerMachine})
+		}
+		first = false
+	}}
+	resume := strings.Replace(runNew, `"session":"new"`, `"session":"resume"`, 1)
+	app := &fakeApp{onNext: stepsOf(runNew, resume)}
+	if _, err := f.run(t, app); err != nil {
+		t.Fatal(err)
+	}
+	_, lines := transcriptSteps(t, s)
+	var got []string
+	for _, l := range lines[0] {
+		if l["type"] != "start" && l["type"] != "prompt" {
+			got = append(got, jsonOf(l))
+		}
+	}
+	want := []string{
+		`{"host":"pypi.org:443","method":"GET","reason":"not_allowed","type":"refused","url":"https://pypi.org/simple/"}`,
+		`{"host":"localhost:8080","method":"","reason":"runner_machine","type":"refused","url":""}`,
+		`{"error":"","outcome":"ok","type":"end"}`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("first step = %v, want %v", got, want)
+	}
+	for _, l := range lines[1] {
+		if l["type"] == "refused" {
+			t.Errorf("second step = %v, want no refused line", lines[1])
+		}
 	}
 }
