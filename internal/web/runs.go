@@ -162,7 +162,9 @@ func runRoutes(mux *http.ServeMux, h *Handlers) {
 	})
 }
 
-// streamStep sends each line of a step's file from line from on, then
+// streamStep sends each line of a step's file from line from on, an out
+// line with the events parsed from it in front, so the stored line stays
+// raw and parsing never slows the writing of a transcript, then
 // follows the file until its end line or the request's end. A bufio.Reader
 // tries its reader again after io.EOF, so reading on picks up what was
 // appended.
@@ -171,7 +173,8 @@ func streamStep(r *http.Request, s sse, f io.Reader, from int, pingEvery time.Du
 		return
 	}
 	rd := bufio.NewReader(f)
-	var part []byte // a line read up to the end of the file, without its newline yet
+	var part []byte   // a line read up to the end of the file, without its newline yet
+	var client string // of the start line: picks the parser of out lines
 	poll := time.NewTicker(followEvery)
 	defer poll.Stop()
 	ping := time.NewTicker(pingEvery)
@@ -182,18 +185,27 @@ func streamStep(r *http.Request, s sse, f io.Reader, from int, pingEvery time.Du
 		if err == nil {
 			line := part[:len(part)-1]
 			part = nil
-			var typ struct{ Type string }
-			// Every stored line is an object that starts with {"t":, so i goes
-			// in front of it without encoding it again. Any other line, only
-			// in a damaged file, is skipped but counted.
-			ok := json.Unmarshal(line, &typ) == nil && bytes.HasPrefix(line, []byte(`{"`))
+			var l struct{ Type, Client, Line string }
+			// Every stored line is an object that starts with {"t":, so i, and
+			// an out line's events, go in front of it without encoding it
+			// again. Any other line, only in a damaged file, is skipped but
+			// counted.
+			ok := json.Unmarshal(line, &l) == nil && bytes.HasPrefix(line, []byte(`{"`))
+			if l.Type == "start" {
+				client = l.Client
+			}
 			if ok && i >= from {
-				if s.send(append(fmt.Appendf(nil, `{"i":%d,`, i), line[1:]...)) != nil {
+				head := fmt.Appendf(nil, `{"i":%d,`, i)
+				if l.Type == "out" {
+					ev, _ := json.Marshal(parseOut(client, l.Line)) // cannot fail: strings, numbers, bools
+					head = fmt.Appendf(head, `"events":%s,`, ev)
+				}
+				if s.send(append(head, line[1:]...)) != nil {
 					return
 				}
 			}
 			i++
-			if typ.Type == "end" { // a step writes nothing after it
+			if l.Type == "end" { // a step writes nothing after it
 				s.done()
 				return
 			}

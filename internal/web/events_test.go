@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,9 +29,10 @@ func eventsStore(t *testing.T) (Handlers, *transcript.Step) {
 }
 
 type eventOut struct {
-	I    *int
-	Type string
-	Line string
+	I      *int
+	Type   string
+	Line   string
+	Events []Event
 }
 
 // nextEvent is the stream's next data, as an event of a line.
@@ -168,5 +170,37 @@ func TestEventsNotFoundOrBad(t *testing.T) {
 		if w := doTo(t, hh, "GET", path, tok, nil); w.Code != code {
 			t.Errorf("GET %s = %d, want %d", path, w.Code, code)
 		}
+	}
+}
+
+func TestEventsParseOutLinesByClient(t *testing.T) {
+	text := `{"type":"assistant","message":{"content":[{"type":"text","text":"Looking."},{"type":"thinking","thinking":"Hm."}]}}`
+	s := transcript.Store{Dir: t.TempDir()}
+	run := s.Begin("CLR", "CLR-7", t1)
+	claude := run.Step("run", transcript.Start{Agent: "coder", Client: "claude"})
+	claude.Out(text)
+	claude.End("ok", "")
+	other := run.Step("run", transcript.Start{Agent: "coder", Client: "gemini"})
+	other.Out(text)
+	other.End("ok", "")
+	cfg := &config.Config{}
+	h := Handlers{Transcripts: s, Config: func() *config.Config { return cfg }, Tick: time.Hour}
+
+	data, _ := streamPath(t, h, eventsPath+"?from=1") // the start line is read for its client, not sent
+	e := nextEvent(t, data)
+	wantEvent(t, e, 1, "out", text)
+	if want := []Event{{Kind: "text", Text: "Looking."}, {Kind: "thinking", Text: "Hm."}}; !reflect.DeepEqual(e.Events, want) {
+		t.Errorf("claude events %+v, want %+v", e.Events, want)
+	}
+	if e := nextEvent(t, data); e.Events != nil {
+		t.Errorf("end line has events %+v", e.Events)
+	}
+
+	data, _ = streamPath(t, h, strings.Replace(eventsPath, "steps/1", "steps/2", 1))
+	nextEvent(t, data)
+	e = nextEvent(t, data)
+	wantEvent(t, e, 1, "out", text)
+	if want := []Event{{Kind: "raw"}}; !reflect.DeepEqual(e.Events, want) {
+		t.Errorf("gemini events %+v, want %+v", e.Events, want)
 	}
 }
