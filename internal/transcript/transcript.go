@@ -1,0 +1,297 @@
+// Package transcript keeps each run on disk, one folder per run and one
+// file of JSON lines per step, so it can be opened after it ended or after a
+// restart (decision 2026-11-26-local-web-page, section Transcripts):
+//
+//	<Dir>/<project key>/<issue ref>/<run id>/<NN>-<kind>.ndjson
+//
+// It is a cache the runner may lose: a write error is logged and never stops
+// the run. Every string passes internal/redact before it is written.
+package transcript
+
+import (
+	"bufio"
+	"bytes"
+	"cmp"
+	"encoding/json"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/rodo-software/cinderline-runner/internal/redact"
+)
+
+// RunID is the layout of a run's folder name: its start in UTC.
+const RunID = "20060102T150405Z"
+
+// maxLine is the longest line written, bufio.Scanner's default limit, so a
+// reader can scan the files without setting one. A longer line has its
+// values over cutValue replaced by a marker that names their length; then
+// even five values the JSON escaping made six times longer stay under it.
+const (
+	maxLine  = bufio.MaxScanTokenSize
+	cutValue = 1 << 10
+)
+
+// Store is the transcripts folder, <state>/transcripts.
+type Store struct {
+	Dir string
+	Log *slog.Logger // write errors; nil means slog.Default()
+}
+
+// Start is what a step's first line holds besides its kind; an empty field
+// is left out.
+type Start struct {
+	Agent, Client, Model string
+	Manager              bool
+}
+
+// Run is one run being written. Its methods are safe from several goroutines
+// and a nil *Run, from a refused name, writes nothing.
+type Run struct {
+	store          *Store
+	project, issue string
+	dir            string
+	mu             sync.Mutex
+	steps          int
+}
+
+// Step is one step's file. Each method appends one line; nothing is written
+// after End. A nil *Step writes nothing.
+// shortcut: a step that never gets End keeps its file open until the daemon
+// exits; fine while every run ends its steps, add a Close if one cannot.
+type Step struct {
+	log    *slog.Logger
+	mu     sync.Mutex
+	f      *os.File // nil once ended or when it could not be created
+	failed bool     // a write error was logged
+}
+
+// RunInfo is a run on disk. Ended: its last step has an end line.
+type RunInfo struct {
+	Project, Issue, Run string
+	Start               time.Time
+	Ended               bool
+}
+
+// StepInfo is a step on disk. Ended: it has an end line.
+type StepInfo struct {
+	N     int
+	Kind  string
+	Ended bool
+}
+
+func (s *Store) log() *slog.Logger { return cmp.Or(s.Log, slog.Default()) }
+
+// plain reports whether name is safe as one path element.
+func plain(name string) bool {
+	return name != "" && name != "." && !strings.ContainsAny(name, `/\`) && !strings.Contains(name, "..") && filepath.IsLocal(name)
+}
+
+// Begin starts the transcript of a run of issue that started at start. It
+// returns nil, after logging it, when project or issue is not a plain name.
+func (s *Store) Begin(project, issue string, start time.Time) *Run {
+	if !plain(project) || !plain(issue) {
+		s.log().Warn("transcript refused: not a plain name", "project", project, "issue", issue)
+		return nil
+	}
+	return &Run{store: s, project: project, issue: issue,
+		dir: filepath.Join(s.Dir, project, issue, start.UTC().Format(RunID))}
+}
+
+// Step starts the run's next step, numbered from 1, and writes its start
+// line. A file that cannot be created is logged; the step then writes nothing.
+func (r *Run) Step(kind string, meta Start) *Step {
+	if r == nil {
+		return nil
+	}
+	log := r.store.log().With("project", r.project, "issue", r.issue)
+	if !plain(kind) {
+		log.Warn("transcript refused: not a plain name", "kind", kind)
+		return nil
+	}
+	r.mu.Lock()
+	r.steps++
+	name := filepath.Join(r.dir, fmt.Sprintf("%02d-%s.ndjson", r.steps, kind))
+	r.mu.Unlock()
+	st := &Step{log: log}
+	err := os.MkdirAll(r.dir, 0o700)
+	if err == nil {
+		st.f, err = os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_APPEND, 0o600)
+	}
+	if err != nil {
+		st.fail(err)
+		return st
+	}
+	kv := []any{"kind", kind}
+	for _, f := range []struct{ k, v string }{{"agent", meta.Agent}, {"client", meta.Client}, {"model", meta.Model}} {
+		if f.v != "" {
+			kv = append(kv, f.k, f.v)
+		}
+	}
+	if meta.Manager {
+		kv = append(kv, "manager", true)
+	}
+	st.write(false, "start", kv...)
+	return st
+}
+
+// Prompt writes the prompt the agent got.
+func (s *Step) Prompt(text string) { s.write(false, "prompt", "text", text) }
+
+// Out writes one line of the container's output.
+func (s *Step) Out(line string) { s.write(false, "out", "line", line) }
+
+// Refused writes a connection the run's proxy refused.
+func (s *Step) Refused(host, reason, method, url string) {
+	s.write(false, "refused", "host", host, "reason", reason, "method", method, "url", url)
+}
+
+// End writes the step's last line, outcome a short word such as ok, failed
+// or stopped, and closes its file.
+func (s *Step) End(outcome, errText string) {
+	s.write(true, "end", "outcome", outcome, "error", errText)
+}
+
+func (s *Step) write(last bool, typ string, kv ...any) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return
+	}
+	t := time.Now()
+	b := line(t, typ, kv, false)
+	if len(b) > maxLine {
+		b = line(t, typ, kv, true)
+	}
+	if _, err := s.f.Write(b); err != nil {
+		s.fail(err)
+	}
+	if last {
+		if err := s.f.Close(); err != nil {
+			s.fail(err)
+		}
+		s.f = nil
+	}
+}
+
+// fail logs the step's first write error only: a full disk would otherwise
+// log every line of output.
+func (s *Step) fail(err error) {
+	if !s.failed {
+		s.failed = true
+		s.log.Warn("transcript not written", "err", err)
+	}
+}
+
+// line encodes one line from key, value pairs, every string value redacted
+// and, if cut, replaced by a marker when it is longer than cutValue.
+func line(t time.Time, typ string, kv []any, cut bool) []byte {
+	b := fmt.Appendf(nil, `{"t":%q,"type":%q`, t.UTC().Format(time.RFC3339Nano), typ)
+	for i := 0; i < len(kv); i += 2 {
+		v := kv[i+1]
+		if s, ok := v.(string); ok {
+			s = redact.String(s)
+			if cut && len(s) > cutValue {
+				s = fmt.Sprintf("[%d bytes, too long to keep]", len(s))
+			}
+			v = s
+		}
+		j, _ := json.Marshal(v) // a string or a bool: cannot fail
+		b = fmt.Appendf(b, `,%q:%s`, kv[i], j)
+	}
+	return append(b, "}\n"...)
+}
+
+// List returns the runs on disk, by project, issue and start.
+func (s *Store) List() []RunInfo {
+	var out []RunInfo
+	for _, p := range dirs(s.Dir) {
+		for _, i := range dirs(filepath.Join(s.Dir, p)) {
+			for _, r := range dirs(filepath.Join(s.Dir, p, i)) {
+				start, err := time.Parse(RunID, r)
+				if err != nil {
+					continue
+				}
+				steps := s.Steps(p, i, r)
+				out = append(out, RunInfo{Project: p, Issue: i, Run: r, Start: start,
+					Ended: len(steps) > 0 && steps[len(steps)-1].Ended})
+			}
+		}
+	}
+	return out
+}
+
+// dirs returns the plain names of the folders in dir.
+func dirs(dir string) []string {
+	entries, _ := os.ReadDir(dir) // a missing folder holds no runs
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() && plain(e.Name()) {
+			out = append(out, e.Name())
+		}
+	}
+	return out
+}
+
+// Steps returns a run's steps by number; nil for a name that is not plain.
+func (s *Store) Steps(project, issue, run string) []StepInfo {
+	if !plain(project) || !plain(issue) || !plain(run) {
+		return nil
+	}
+	dir := filepath.Join(s.Dir, project, issue, run)
+	entries, _ := os.ReadDir(dir)
+	var out []StepInfo
+	for _, e := range entries {
+		num, rest, _ := strings.Cut(e.Name(), "-")
+		kind, ok := strings.CutSuffix(rest, ".ndjson")
+		n, err := strconv.Atoi(num)
+		if !ok || err != nil || n < 1 || !e.Type().IsRegular() {
+			continue
+		}
+		out = append(out, StepInfo{N: n, Kind: kind, Ended: ended(filepath.Join(dir, e.Name()))})
+	}
+	slices.SortFunc(out, func(a, b StepInfo) int { return a.N - b.N }) // 100 sorts after 99
+	return out
+}
+
+// ended reports whether the file's last line is an end line. Every line fits
+// in maxLine, so only the file's tail is read.
+func ended(name string) bool {
+	f, err := os.Open(name)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	buf := make([]byte, min(fi.Size(), maxLine+1))
+	if _, err := f.ReadAt(buf, fi.Size()-int64(len(buf))); err != nil && err != io.EOF {
+		return false
+	}
+	buf = bytes.TrimSuffix(buf, []byte("\n"))
+	var l struct{ Type string }
+	return json.Unmarshal(buf[bytes.LastIndexByte(buf, '\n')+1:], &l) == nil && l.Type == "end"
+}
+
+// Open opens step n of a run.
+func (s *Store) Open(project, issue, run string, n int) (io.ReadCloser, error) {
+	for _, st := range s.Steps(project, issue, run) {
+		if st.N == n {
+			return os.Open(filepath.Join(s.Dir, project, issue, run, fmt.Sprintf("%02d-%s.ndjson", n, st.Kind)))
+		}
+	}
+	return nil, fmt.Errorf("transcript %s/%s/%s step %d: %w", project, issue, run, n, fs.ErrNotExist)
+}
