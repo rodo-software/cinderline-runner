@@ -17,7 +17,7 @@ const port = 7420
 // 127.0.0.1:port and the given headers and cookie value ("" for none).
 func do(t *testing.T, dir, method, path, cookie string, header map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	return doTo(t, Handler(dir, port), method, path, cookie, header)
+	return doTo(t, Handler(dir, port, Handlers{}), method, path, cookie, header)
 }
 
 // doTo is do on h.

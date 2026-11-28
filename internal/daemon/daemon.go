@@ -87,6 +87,9 @@ type daemon struct {
 	turns      *run.ProviderTurns // the turns in flight on each provider, over every project and config, one for the process
 	web        *http.Server       // serves the local web page; nil while it does not
 	webAddr    string             // the address the config asks the page on, "" for off
+
+	// snapshot is the status GET /status answers, which the page shows too.
+	snapshot func() localapi.Status
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -121,7 +124,7 @@ func Run(ctx context.Context, o Options) error {
 	reloads := make(chan chan error)
 	drain := make(chan struct{})
 	var drainOnce sync.Once // a second drain request must not close it again
-	srv := &http.Server{Handler: localapi.Handler(localapi.Handlers{
+	api := localapi.Handlers{
 		Version: o.Version,
 		Status:  d.status,
 		Memory: func() localapi.Memory {
@@ -149,7 +152,9 @@ func Run(ctx context.Context, o Options) error {
 				return errStopping
 			}
 		},
-	})}
+	}
+	d.snapshot = api.Snapshot
+	srv := &http.Server{Handler: localapi.Handler(api)}
 	go srv.Serve(ln)
 	defer srv.Close() // closes the listener, which removes the socket file
 
@@ -291,7 +296,7 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 		d.log.Error("web page not served", "addr", addr, "err", err)
 		return
 	}
-	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port)}
+	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot})}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
 }

@@ -96,17 +96,22 @@ type Handlers struct {
 	Follow func(n int) (tail []byte, lines <-chan []byte, cancel func(), err error)
 }
 
+// Snapshot is the daemon's status now, the answer of GET /status.
+func (h Handlers) Snapshot() Status {
+	st := Status{Version: h.Version, PID: os.Getpid(), Projects: h.Status()}
+	if h.Memory != nil {
+		m := h.Memory()
+		st.Memory = &m
+	}
+	return st
+}
+
 // Handler serves the endpoints from h.
 func Handler(h Handlers) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		st := Status{Version: h.Version, PID: os.Getpid(), Projects: h.Status()}
-		if h.Memory != nil {
-			m := h.Memory()
-			st.Memory = &m
-		}
-		json.NewEncoder(w).Encode(st)
+		json.NewEncoder(w).Encode(h.Snapshot())
 	})
 	mux.HandleFunc("GET /logs", func(w http.ResponseWriter, r *http.Request) {
 		n := 100
