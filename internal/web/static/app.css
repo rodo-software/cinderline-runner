@@ -67,6 +67,8 @@
 :root[data-theme="dark"] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
+/* The scripts hide with the hidden attribute; a display rule must not undo it. */
+[hidden] { display: none !important; }
 
 html { scrollbar-color: var(--line-strong) transparent; }
 body {
@@ -478,3 +480,35 @@ input:user-invalid { border-color: var(--err); }
   table.kv td { padding-top: 0; }
   .attention { padding: var(--s4); }
 }
+
+/* The log: one line per event, newest at the bottom, in its own scroll box
+   so the filter stays in view. */
+
+.log-box { position: relative; margin-top: var(--s4); }
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  height: max(20rem, 100vh - 22rem);
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: var(--t-1);
+}
+.log li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--s2);
+  padding: var(--s1) var(--s2);
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.log li:last-child { border-bottom: 0; }
+.log .time { color: var(--muted); }
+.log .badge { min-width: 3.5rem; text-align: center; font-family: var(--sans); }
+.log .msg { font-weight: 600; }
+.log .attr { color: var(--muted); }
+.log:focus-visible { outline-offset: -2px; }
+.jump { position: absolute; right: var(--s4); bottom: var(--s4); box-shadow: 0 1px 4px rgb(0 0 0 / 0.25); }

@@ -10,11 +10,11 @@ const el = (tag, cls, ...kids) => {
   return n;
 };
 
-// listen calls onData with each event of the stream at url, parsed as JSON.
-// While the stream is down a bar says so; the browser reconnects by itself,
-// and after a refused answer listen tries again every 5 s. Call it once the
-// page is parsed.
-const listen = (url, onData) => {
+// listen calls onData with each event of the stream at url, parsed as JSON,
+// and onOpen, if given, each time the stream (re)connects. While the stream is
+// down a bar says so; the browser reconnects by itself, and after a refused
+// answer listen tries again every 5 s. Call it once the page is parsed.
+const listen = (url, onData, onOpen) => {
   const state = document.querySelector("[data-runner-state]");
   const bar = el("p", "attention warn", "Connection lost, retrying…");
   bar.setAttribute("role", "status");
@@ -28,6 +28,7 @@ const listen = (url, onData) => {
   const retry = () => setTimeout(open, 5000);
   const open = () => {
     const es = new EventSource(url);
+    if (onOpen) es.onopen = onOpen;
     es.onmessage = (e) => { up(true); onData(JSON.parse(e.data)); };
     es.onerror = () => {
       up(false);

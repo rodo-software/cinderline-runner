@@ -32,11 +32,17 @@ func TestAPIStatusAnswersTheStatus(t *testing.T) {
 // lines and its comment lines as they come; the stream ends with the test.
 func stream(t *testing.T, h Handlers) (data, comments <-chan string) {
 	t.Helper()
+	return streamPath(t, h, "/api/status/stream")
+}
+
+// streamPath is stream of path.
+func streamPath(t *testing.T, h Handlers, path string) (data, comments <-chan string) {
+	t.Helper()
 	dir := t.TempDir()
 	tok := token(t, dir)
 	srv := httptest.NewServer(Handler(dir, port, h))
 	t.Cleanup(srv.Close)
-	req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+"/api/status/stream", nil)
+	req, _ := http.NewRequestWithContext(t.Context(), "GET", srv.URL+path, nil)
 	req.Host = "127.0.0.1:7420"
 	req.AddCookie(&http.Cookie{Name: name.Name, Value: tok})
 	resp, err := srv.Client().Do(req)
@@ -119,5 +125,63 @@ func TestStreamPings(t *testing.T) {
 	_, comments := stream(t, Handlers{Status: c.status, Tick: time.Millisecond})
 	if got := next(t, comments, "ping"); got != ": ping" {
 		t.Errorf("comment %q, want \": ping\"", got)
+	}
+}
+
+// following is a log of tail whose new lines a test sends; n is the tail
+// length the route asked for.
+type following struct {
+	tail  string
+	lines chan []byte
+	n     chan int
+}
+
+func newFollowing(tail string) *following {
+	return &following{tail: tail, lines: make(chan []byte, 10), n: make(chan int, 1)}
+}
+
+func (f *following) follow(n int) ([]byte, <-chan []byte, func(), error) {
+	f.n <- n
+	return []byte(f.tail), f.lines, func() {}, nil
+}
+
+func TestLogSendsTheTailThenNewLines(t *testing.T) {
+	f := newFollowing(`{"msg":"one"}` + "\n" + `{"msg":"two"}` + "\n")
+	data, _ := streamPath(t, Handlers{Follow: f.follow}, "/api/log?tail=2")
+	if n := <-f.n; n != 2 {
+		t.Errorf("followed %d lines, want 2", n)
+	}
+	for _, want := range []string{`{"msg":"one"}`, `{"msg":"two"}`} {
+		if got := next(t, data, "tail line"); got != want {
+			t.Errorf("tail event %s, want %s", got, want)
+		}
+	}
+	f.lines <- []byte(`{"msg":"three"}` + "\n")
+	if got := next(t, data, "new line"); got != `{"msg":"three"}` {
+		t.Errorf("new event %s, want {\"msg\":\"three\"}", got)
+	}
+}
+
+func TestLogTailDefaultsTo200(t *testing.T) {
+	f := newFollowing("")
+	streamPath(t, Handlers{Follow: f.follow}, "/api/log")
+	if n := <-f.n; n != 200 {
+		t.Errorf("followed %d lines, want 200", n)
+	}
+}
+
+func TestLogRefusesABadTail(t *testing.T) {
+	dir := t.TempDir()
+	tok := token(t, dir)
+	f := newFollowing("")
+	for _, tail := range []string{"x", "-1", "5001", "1.5"} {
+		w := doTo(t, Handler(dir, port, Handlers{Follow: f.follow}), "GET", "/api/log?tail="+tail, tok, nil)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("tail=%q: %d, want 400", tail, w.Code)
+		}
+	}
+	streamPath(t, Handlers{Follow: f.follow}, "/api/log?tail=5000") // fails the test unless 200
+	if n := <-f.n; n != 5000 {
+		t.Errorf("followed %d lines, want 5000", n)
 	}
 }

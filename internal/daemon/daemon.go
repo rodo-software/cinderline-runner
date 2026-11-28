@@ -90,6 +90,8 @@ type daemon struct {
 
 	// snapshot is the status GET /status answers, which the page shows too.
 	snapshot func() localapi.Status
+	// follow is the log's tail and stream, for `logs` and the page alike.
+	follow func(n int) ([]byte, <-chan []byte, func(), error)
 }
 
 // Run serves until ctx is done, a signal arrives or the local API asks it to
@@ -153,7 +155,7 @@ func Run(ctx context.Context, o Options) error {
 			}
 		},
 	}
-	d.snapshot = api.Snapshot
+	d.snapshot, d.follow = api.Snapshot, api.Follow
 	srv := &http.Server{Handler: localapi.Handler(api)}
 	go srv.Serve(ln)
 	defer srv.Close() // closes the listener, which removes the socket file
@@ -296,7 +298,7 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 		d.log.Error("web page not served", "addr", addr, "err", err)
 		return
 	}
-	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot})}
+	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot, Follow: d.follow})}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
 }

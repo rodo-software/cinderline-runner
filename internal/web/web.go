@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
@@ -15,8 +16,13 @@ import (
 // Handlers are what the daemon gives the page.
 type Handlers struct {
 	Status func() localapi.Status
-	Tick   time.Duration // how often a stream checks for a change; 0: every second
+	Follow func(n int) (tail []byte, lines <-chan []byte, cancel func(), err error) // as localapi.Handlers.Follow
+	Tick   time.Duration                                                            // how often a stream checks for a change; 0: every second
 }
+
+// maxTail is the most lines GET /api/log sends before following: what the
+// page keeps.
+const maxTail = 5000
 
 // pingTicks is how many ticks pass between two pings of a stream: 20 s at
 // one a second, so a dead connection is noticed.
@@ -53,6 +59,50 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 				last = b
 				err = s.send(b)
 			} else if n%pingTicks == 0 {
+				err = s.ping()
+			}
+			if err != nil {
+				return
+			}
+		}
+	})
+	mux.HandleFunc("GET /api/log", func(w http.ResponseWriter, r *http.Request) {
+		n := 200
+		if v := r.URL.Query().Get("tail"); v != "" {
+			var err error
+			if n, err = strconv.Atoi(v); err != nil || n < 0 || n > maxTail {
+				http.Error(w, "tail must be a number of lines from 0 to "+strconv.Itoa(maxTail), http.StatusBadRequest)
+				return
+			}
+		}
+		tail, lines, cancel, err := h.Follow(n)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer cancel()
+		s := newSSE(w)
+		for line := range bytes.Lines(tail) {
+			if s.send(bytes.TrimSuffix(line, []byte("\n"))) != nil {
+				return
+			}
+		}
+		if s.ping() != nil { // sends the headers when the tail is empty
+			return
+		}
+		t := time.NewTicker(h.Tick * pingTicks)
+		defer t.Stop()
+		for {
+			var err error
+			select {
+			case <-r.Context().Done():
+				return
+			case line, ok := <-lines:
+				if !ok {
+					return
+				}
+				err = s.send(bytes.TrimSuffix(line, []byte("\n")))
+			case <-t.C:
 				err = s.ping()
 			}
 			if err != nil {

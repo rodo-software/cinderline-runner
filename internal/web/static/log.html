@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- The Log: log.js fills it from /api/log, what `logs` shows. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="log.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/log.html">Log</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <h1>Log</h1>
+  <p class="lead"><span id="count" class="muted">No lines yet</span></p>
+</header>
+
+<form class="row" role="search">
+  <label>Filter <input type="search" id="filter" placeholder="A project or any text" autocomplete="off"></label>
+</form>
+<p class="hint">The page keeps the newest 5000 lines. The filter works in this page only.</p>
+
+<div class="log-box">
+  <ol class="log" id="lines" tabindex="0" aria-label="Log lines"></ol>
+  <button type="button" class="primary jump" id="jump" hidden>Jump to newest</button>
+</div>
+</main>
+</body>
+</html>

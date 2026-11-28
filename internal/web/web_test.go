@@ -82,6 +82,23 @@ func TestHandlerServesTheOverview(t *testing.T) {
 	}
 }
 
+func TestHandlerServesTheLogPage(t *testing.T) {
+	dir := t.TempDir()
+	tok := token(t, dir)
+	for path, want := range map[string]string{
+		"/log.html": "text/html; charset=utf-8",
+		"/log.js":   "text/javascript; charset=utf-8",
+	} {
+		w := do(t, dir, "GET", path, tok, nil)
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != want {
+			t.Errorf("GET %s = %d, %q, want 200 %q", path, w.Code, w.Header().Get("Content-Type"), want)
+		}
+	}
+	if w := do(t, dir, "GET", "/log.html", tok, nil); !strings.Contains(w.Body.String(), `src="log.js"`) {
+		t.Error("GET /log.html does not load log.js")
+	}
+}
+
 func TestTokenIsMadeOnceAndPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	tok := token(t, dir)
