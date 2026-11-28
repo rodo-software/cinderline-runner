@@ -534,6 +534,14 @@ func (c *Config) Validate() error {
 	if c.WebPort != 0 && (c.WebPort < 1024 || c.WebPort > 65535) {
 		return fmt.Errorf("web_port %d must be 1024 to 65535", c.WebPort)
 	}
+	// A provider on the runner's own machine opens its port to agents, so
+	// it must never be the page's, whether the page is on or not (CLR-273).
+	webPort := strconv.Itoa(cmp.Or(c.WebPort, DefaultWebPort))
+	for _, p := range c.Providers {
+		if u, _ := url.Parse(p.BaseURL); runnersMachine(u.Host) && u.Port() == webPort {
+			return fmt.Errorf("provider %s: base URL is the runner's own machine on port %s, the web page's port, which agents must never reach; move the provider or the page (`%s web port N`)", p.Name, webPort, name.Name)
+		}
+	}
 	type id struct{ url, workspace, key string }
 	seen := map[id]bool{}
 	for i, p := range c.Projects {

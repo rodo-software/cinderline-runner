@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -820,5 +822,44 @@ func TestWebOnAndAddr(t *testing.T) {
 	}
 	if got := (&Config{WebPort: 8080}).WebAddr(); got != "127.0.0.1:8080" {
 		t.Errorf("WebAddr = %q, want 127.0.0.1:8080", got)
+	}
+}
+
+// CLR-273: agents never reach the web page's port on the runner's own
+// machine. allow_hosts, runner-wide and per project, and an app approval
+// refuse it as any port there; a provider there is refused on that port
+// only, the default 7420 or web_port, with the page on or off.
+func TestTheWebPortIsNeverOpenedToAgents(t *testing.T) {
+	ok := Project{URL: "https://a.example.com", Key: "WEB", Workspace: "default", Repository: "https://g.example.com/r.git"}
+	for _, port := range []int{0, 8080} {
+		web := strconv.Itoa(cmp.Or(port, DefaultWebPort))
+		for _, host := range []string{"localhost", "127.0.0.1", "[::1]", "host.docker.internal", "HOST.Docker.Internal"} {
+			hp := host + ":" + web
+			if AllowedHost(hp) {
+				t.Errorf("AllowedHost(%s) = true, want an app approval refused", hp)
+			}
+			if err := (&Config{WebPort: port, AllowHosts: []string{hp}}).Validate(); err == nil {
+				t.Errorf("runner allow_hosts %s: valid, want refused", hp)
+			}
+			p := ok
+			p.AllowHosts = []string{hp}
+			if err := (&Config{WebPort: port, Projects: []Project{p}}).Validate(); err == nil {
+				t.Errorf("project allow_hosts %s: valid, want refused", hp)
+			}
+			for _, on := range []string{"on", "off"} {
+				c := &Config{Web: on, WebPort: port, Providers: []Provider{{Name: "local", BaseURL: "http://" + hp + "/v1"}}}
+				if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "provider local") || !strings.Contains(err.Error(), "web page's port") || !strings.Contains(err.Error(), name.Name+" web port N") {
+					t.Errorf("web %s, provider at %s: err %v, want refused as the web page's port", on, hp, err)
+				}
+			}
+		}
+	}
+	for _, base := range []string{"http://localhost:11434/v1", "http://host.docker.internal:7421", "https://localhost/v1", "https://models.example:7420/v1", "http://192.168.1.5:7420"} {
+		if err := (&Config{Providers: []Provider{{Name: "p", BaseURL: base}}}).Validate(); err != nil {
+			t.Errorf("provider at %s: %v, want valid", base, err)
+		}
+	}
+	if err := (&Config{WebPort: 8080, Providers: []Provider{{Name: "p", BaseURL: "http://localhost:7420"}}}).Validate(); err != nil {
+		t.Errorf("provider on 7420 with web_port 8080: %v, want valid", err)
 	}
 }

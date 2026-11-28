@@ -461,3 +461,58 @@ func TestHostGatewayEntryAllowsExactlyItsPort(t *testing.T) {
 		t.Errorf("refusals = %v, want the two other-port attempts", got)
 	}
 }
+
+// CLR-273: with a provider on the runner's own machine allowed, the web
+// page's port there stays refused, as host.docker.internal and as 127.0.0.1,
+// over CONNECT and plain http alike, and the page sees no request. A live
+// server stands in for the page; host.docker.internal is mapped to loopback
+// as --add-host maps it to the host.
+func TestTheWebPageIsNeverReachable(t *testing.T) {
+	saved := dial
+	t.Cleanup(func() { dial = saved })
+	dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, _ := net.SplitHostPort(addr)
+		if host == "host.docker.internal" {
+			addr = net.JoinHostPort("127.0.0.1", port)
+		}
+		return saved(ctx, network, addr)
+	}
+	var reached sync.Mutex
+	hits := 0
+	page := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		reached.Lock()
+		hits++
+		reached.Unlock()
+	}))
+	t.Cleanup(page.Close)
+	web := strconv.Itoa(page.Listener.Addr().(*net.TCPAddr).Port)
+	proxy, log := startProxy(t, "host.docker.internal:"+strconv.Itoa(echoServer(t)))
+
+	for _, host := range []string{"host.docker.internal", "127.0.0.1"} {
+		if status, _, _ := connect(t, proxy, host+":"+web); status != http.StatusForbidden {
+			t.Errorf("CONNECT %s:%s = %d, want 403", host, web, status)
+		}
+		resp, err := viaProxy(proxy).Get("http://" + host + ":" + web + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("GET %s:%s = %d, want 403", host, web, resp.StatusCode)
+		}
+	}
+	got := refusals(t, log.String())
+	if len(got) != 4 {
+		t.Fatalf("refusals = %v, want 4", got)
+	}
+	for _, r := range got {
+		if r["port"] != web || r["reason"] != "runner_machine" {
+			t.Errorf("refusal %v, want port %s as runner_machine", r, web)
+		}
+	}
+	reached.Lock()
+	defer reached.Unlock()
+	if hits != 0 {
+		t.Errorf("the page got %d requests, want none", hits)
+	}
+}

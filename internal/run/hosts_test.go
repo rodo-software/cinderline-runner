@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/rodo-software/cinderline-runner/internal/cinderline"
 	"github.com/rodo-software/cinderline-runner/internal/client"
+	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 )
 
@@ -195,5 +197,16 @@ func TestAStepReportsWhyItDroppedAnAllowedHost(t *testing.T) {
 		if !slices.Equal(got, want) {
 			t.Errorf("strict %v: refused %q, want %q", strict, got, want)
 		}
+	}
+}
+
+// CLR-273: an app approval of the web page's port on the runner's own
+// machine never joins a step's allowlist.
+func TestAnAppApprovalNeverOpensTheWebPort(t *testing.T) {
+	f := newFixture(t)
+	web := strconv.Itoa(config.DefaultWebPort)
+	hosts := []string{"host.docker.internal:" + web, "127.0.0.1:" + web, "localhost:" + web, "[::1]:" + web}
+	if got := f.p.allowHosts("CSR-1", hosts); got != nil {
+		t.Errorf("allowHosts(%q) = %q, want none", hosts, got)
 	}
 }
