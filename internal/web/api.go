@@ -67,6 +67,17 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 		_, err := manage.RemoveRepo(h.Paths, h.Secrets, r.PathValue("key"), b.Repo)
 		return err
 	})
+	// project is the project's ID, or "" for runner-wide allow_hosts.
+	type hostBody struct {
+		Project string `json:"project"`
+		Host    string `json:"host"`
+	}
+	writeRoute(mux, "POST /api/hosts", h, func(_ *http.Request, b hostBody) error {
+		return manage.AddHost(h.Paths, b.Project, b.Host)
+	})
+	writeRoute(mux, "DELETE /api/hosts", h, func(_ *http.Request, b hostBody) error {
+		return manage.RemoveHost(h.Paths, b.Project, b.Host)
+	})
 	writeRoute(mux, "POST /api/providers", h, func(_ *http.Request, b struct {
 		config.Provider
 		Key string `json:"key"`

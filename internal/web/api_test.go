@@ -719,3 +719,55 @@ func TestAPIKeysRefuse(t *testing.T) {
 		t.Errorf("%d reloads, want 0", *reloads)
 	}
 }
+
+// CLR-295: POST /api/hosts adds an allow_hosts entry, runner-wide for an
+// empty project, and DELETE removes it; each reloads.
+func TestAPIHosts(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	for _, c := range []struct{ method, body string }{
+		{"POST", `{"project": "", "host": "PyPI.org:443"}`},
+		{"POST", `{"project": "WEB", "host": "files.example.com:443"}`},
+		{"POST", `{"project": "WEB", "host": "mirror.example.com:443"}`},
+		{"DELETE", `{"project": "WEB", "host": "files.example.com:443"}`},
+	} {
+		if w := send(t, h, c.method, tok, "/api/hosts", c.body); w.Code != http.StatusNoContent {
+			t.Fatalf("%s %s = %d %s, want 204", c.method, c.body, w.Code, w.Body)
+		}
+	}
+	cfg, err := config.Load(paths.File)
+	if err != nil || !slices.Equal(cfg.AllowHosts, []string{"pypi.org:443"}) || !slices.Equal(cfg.Projects[0].AllowHosts, []string{"mirror.example.com:443"}) {
+		t.Errorf("config %+v, %v", cfg, err)
+	}
+	if *reloads != 4 {
+		t.Errorf("%d reloads, want 4", *reloads)
+	}
+}
+
+// A refused host or project is a 400 with the command's text that changes
+// and reloads nothing.
+func TestAPIHostsRefuse(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	if w := send(t, h, "POST", tok, "/api/hosts", `{"project": "WEB", "host": "pypi.org:443"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d %s", w.Code, w.Body)
+	}
+	*reloads = 0
+	for what, c := range map[string]struct{ method, body, want string }{
+		"wildcard":        {"POST", `{"project": "WEB", "host": "*.example.com:443"}`, "must be host:port, without wildcards"},
+		"runner's own":    {"POST", `{"project": "", "host": "localhost:11434"}`, "is the runner's own machine"},
+		"duplicate":       {"POST", `{"project": "WEB", "host": "PyPI.org:443"}`, "project WEB already allows pypi.org:443"},
+		"unknown project": {"POST", `{"project": "NOPE", "host": "x.example.com:443"}`, "no project NOPE"},
+		"remove missing":  {"DELETE", `{"project": "WEB", "host": "x.example.com:443"}`, "project WEB has no allow_hosts entry x.example.com:443; its entries: pypi.org:443"},
+		"remove unknown":  {"DELETE", `{"project": "NOPE", "host": "pypi.org:443"}`, "no project NOPE"},
+		"unknown field":   {"POST", `{"project": "WEB", "host": "x.example.com:443", "url": "https://a.example.com"}`, "unknown field"},
+	} {
+		w := send(t, h, c.method, tok, "/api/hosts", c.body)
+		var e struct{ Error string }
+		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != http.StatusBadRequest || !strings.Contains(e.Error, c.want) {
+			t.Errorf("%s: %d %s, want 400 containing %q", what, w.Code, w.Body, c.want)
+		}
+	}
+	cfg, err := config.Load(paths.File)
+	if err != nil || len(cfg.AllowHosts) != 0 || !slices.Equal(cfg.Projects[0].AllowHosts, []string{"pypi.org:443"}) || *reloads != 0 {
+		t.Errorf("config %+v, %v, %d reloads; want it unchanged", cfg, err, *reloads)
+	}
+}

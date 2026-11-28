@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 )
 
@@ -14,8 +16,7 @@ const allowHostUsage = "add HOST:PORT|list|remove HOST:PORT [" + projectUsage + 
 
 // allowHost adds, lists or removes allow_hosts entries, either for one
 // project (--project) or for all current and future projects of this runner,
-// and reloads a running runner. The egress proxy matches hosts in lower case,
-// so entries are stored and compared in lower case.
+// through manage (CLR-295), and reloads a running runner.
 func (c *CLI) allowHost(args []string) int {
 	// The host comes before the flags, as key's NAME does: flag parsing stops at it.
 	nargs := 0
@@ -42,7 +43,7 @@ func (c *CLI) allowHost(args []string) int {
 		return c.fail(err)
 	}
 	hosts := &cfg.AllowHosts
-	var projKey string
+	var projKey, id string
 	if *project != "" {
 		p, err := findProject(cfg, *project, *instance, *ws)
 		if err != nil {
@@ -50,7 +51,7 @@ func (c *CLI) allowHost(args []string) int {
 		}
 		i := slices.IndexFunc(cfg.Projects, func(q config.Project) bool { return q.URL == p.URL && q.Workspace == p.Workspace && q.Key == p.Key })
 		hosts = &cfg.Projects[i].AllowHosts
-		projKey = p.Key
+		projKey, id = p.Key, p.ID()
 	}
 	if verb == "list" {
 		if len(*hosts) == 0 {
@@ -66,50 +67,38 @@ func (c *CLI) allowHost(args []string) int {
 		return 0
 	}
 	hp := strings.ToLower(args[1])
-	j := slices.IndexFunc(*hosts, func(e string) bool { return strings.EqualFold(e, hp) })
-	if verb == "add" {
-		switch {
-		case !config.ValidHostPort(hp):
-			return c.fail(fmt.Errorf("%q must be host:port, without wildcards", args[1]))
-		case !config.AllowedHost(hp):
-			return c.fail(fmt.Errorf("%q is the runner's own machine, which allow_hosts never opens; add a model provider instead with `%s add-provider NAME URL`", args[1], name.Name))
-		case j >= 0:
-			if projKey == "" {
-				fmt.Fprintf(c.Stdout, "All projects already allow %s; nothing changed\n", (*hosts)[j])
-			} else {
-				fmt.Fprintf(c.Stdout, "Project %s already allows %s; nothing changed\n", projKey, (*hosts)[j])
-			}
-			return 0
+	switch {
+	case verb == "remove":
+		err = manage.RemoveHost(c.Paths, id, args[1])
+	case projKey == "":
+		// Asks only for an add that would go through.
+		if err = manage.CheckAddHost(c.Paths, id, args[1]); err != nil {
+			break
 		}
-		if projKey == "" {
-			fmt.Fprintf(c.Stdout, "This allows %s for all current and future projects of this %s. Type yes to continue: ", hp, name.Name)
-			var ans string
-			if c.Stdin != nil {
-				sc := bufio.NewScanner(c.Stdin)
-				sc.Scan()
-				ans = strings.ToLower(strings.TrimSpace(sc.Text()))
-			}
-			if ans != "yes" && ans != "y" {
-				fmt.Fprintln(c.Stderr, "Cancelled")
-				return 1
-			}
+		fmt.Fprintf(c.Stdout, "This allows %s for all current and future projects of this %s. Type yes to continue: ", hp, name.Name)
+		var ans string
+		if c.Stdin != nil {
+			sc := bufio.NewScanner(c.Stdin)
+			sc.Scan()
+			ans = strings.ToLower(strings.TrimSpace(sc.Text()))
 		}
-		*hosts = append(slices.Clone(*hosts), hp)
-	} else {
-		if j < 0 {
-			now := "none"
-			if len(*hosts) > 0 {
-				now = strings.Join(*hosts, ", ")
-			}
-			if projKey == "" {
-				return c.fail(fmt.Errorf("runner-wide allow_hosts has no entry %s; its entries: %s", args[1], now))
-			}
-			return c.fail(fmt.Errorf("project %s has no allow_hosts entry %s; its entries: %s", projKey, args[1], now))
+		if ans != "yes" && ans != "y" {
+			fmt.Fprintln(c.Stderr, "Cancelled")
+			return 1
 		}
-		hp = (*hosts)[j]
-		*hosts = slices.Delete(slices.Clone(*hosts), j, j+1)
+		err = manage.AddHost(c.Paths, id, args[1])
+	default:
+		err = manage.AddHost(c.Paths, id, args[1])
 	}
-	if err := cfg.Save(c.Paths.File); err != nil {
+	if a := (manage.AlreadyAllowed{}); errors.As(err, &a) {
+		if projKey == "" {
+			fmt.Fprintf(c.Stdout, "All projects already allow %s; nothing changed\n", a.Host)
+		} else {
+			fmt.Fprintf(c.Stdout, "Project %s already allows %s; nothing changed\n", projKey, a.Host)
+		}
+		return 0
+	}
+	if err != nil {
 		return c.fail(err)
 	}
 	switch {
