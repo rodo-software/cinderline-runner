@@ -148,8 +148,13 @@ type providerJSON struct {
 	HasKey bool `json:"has_key"`
 }
 
+// ID shadows the config's id: it is the project's ID even where the
+// config sets none, what the routes' {key} takes; Label is how status
+// names it (config.Project.ID and Label).
 type projectJSON struct {
 	config.Project
+	ID                string     `json:"id"`
+	Label             string     `json:"label"`
 	ExtraRepositories []repoJSON `json:"extra_repositories,omitempty"`
 }
 
@@ -169,7 +174,7 @@ func withTokens(cfg *config.Config, sec *secrets.Secrets) (configJSON, error) {
 		out.Providers[i] = providerJSON{p, err == nil}
 	}
 	for i, p := range cfg.Projects {
-		out.Projects[i].Project = p
+		out.Projects[i].Project, out.Projects[i].ID, out.Projects[i].Label = p, p.ID(), p.Label()
 		for _, r := range p.ExtraRepositories {
 			_, _, err := sec.Get(p, secrets.ExtraGitToken(r.URL))
 			if err != nil && !errors.Is(err, secrets.ErrNotFound) {

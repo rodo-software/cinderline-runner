@@ -429,6 +429,10 @@ details.fold > summary .badge { margin-left: var(--s1); }
 .items li > :first-child { overflow-wrap: anywhere; }
 .items button { min-height: 1.875rem; padding: 0 var(--s3); font-size: var(--t-1); }
 
+/* A command to type, with its copy button beside it. */
+.copy { display: flex; align-items: start; gap: var(--s2); margin: var(--s2) 0; }
+.copy pre { flex: 1; min-width: 0; margin: 0; }
+
 /* Buttons and forms: big enough to hit, the same everywhere. */
 
 .btn, button {

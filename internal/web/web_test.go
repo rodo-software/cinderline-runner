@@ -133,6 +133,33 @@ func TestHandlerServesTheRunPage(t *testing.T) {
 	}
 }
 
+// CLR-304: the Projects page, a project's page, and the command's name they
+// show in the commands to type.
+func TestHandlerServesTheProjectPages(t *testing.T) {
+	dir := t.TempDir()
+	tok := token(t, dir)
+	for path, want := range map[string]string{
+		"/projects.html": "text/html; charset=utf-8",
+		"/projects.js":   "text/javascript; charset=utf-8",
+		"/project.html":  "text/html; charset=utf-8",
+		"/project.js":    "text/javascript; charset=utf-8",
+	} {
+		w := do(t, dir, "GET", path, tok, nil)
+		if w.Code != http.StatusOK || w.Header().Get("Content-Type") != want {
+			t.Errorf("GET %s = %d, %q, want 200 %q", path, w.Code, w.Header().Get("Content-Type"), want)
+		}
+	}
+	for page, script := range map[string]string{"/projects.html": "projects.js", "/project.html?key=CLR": "project.js"} {
+		if w := do(t, dir, "GET", page, tok, nil); !strings.Contains(w.Body.String(), `src="`+script+`"`) {
+			t.Errorf("GET %s does not load %s", page, script)
+		}
+	}
+	w := do(t, dir, "GET", "/api/name", tok, nil)
+	if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != `{"name":"`+name.Name+`"}` {
+		t.Errorf("GET /api/name = %d %s", w.Code, w.Body)
+	}
+}
+
 func TestTokenIsMadeOnceAndPrivate(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	tok := token(t, dir)

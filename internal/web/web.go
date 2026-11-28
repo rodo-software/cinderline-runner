@@ -15,6 +15,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/transcript"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -69,6 +70,10 @@ func Handler(stateDir string, port int, h Handlers) http.Handler {
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(h.Status())
+	})
+	// The command's name, for the commands the page shows to type.
+	mux.HandleFunc("GET /api/name", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]string{"name": name.Name})
 	})
 	mux.HandleFunc("GET /api/status/stream", func(w http.ResponseWriter, r *http.Request) {
 		s := newSSE(w)

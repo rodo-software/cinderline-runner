@@ -110,8 +110,68 @@ const took = (ms) => {
 const outcome = (word, live) => live ? el("span", "badge running", "running")
   : el("span", "badge " + ({ ok: "ok", failed: "error", stopped: "warn" }[word] || ""), word || "none");
 
+// projectState is a project's status dot, from its entry of /api/status and
+// its count of runs in flight: the one fact that matters most.
+const projectState = (p, runs) => {
+  if (!p.connected) return p.last_error ? el("span", "status error", "Not connected") : el("span", "status", "Connecting");
+  if (p.draining) return el("span", "status warn", "Draining");
+  if (p.waits_for_memory) return el("span", "status warn", "Waits for memory");
+  return runs ? el("span", "status running", "Running") : el("span", "status ok", "Idle");
+};
+
+// runCount is how many runs project p of /api/status has in flight, the
+// Project Manager's among them.
+const runCount = (p) => (p.issues || []).length + (p.manager ? 1 : 0);
+
+// statuses is the entry of /api/status of each project of /api/config, or
+// undefined while the daemon has none: status names a project by its label,
+// and the nth project with a label gets the nth entry with it.
+const statuses = (projects, st) => {
+  const left = [...(st.projects || [])];
+  return projects.map((p) => {
+    const i = left.findIndex((s) => s && s.project === p.label);
+    if (i < 0) return undefined;
+    const s = left[i];
+    left[i] = null;
+    return s;
+  });
+};
+
+// projectHref is the page of project p of /api/config: two projects can
+// share a key, never a key, URL and workspace.
+const projectHref = (p) => "project.html?" + new URLSearchParams({ key: p.key, url: p.url, workspace: p.workspace });
+
 // runHref is the page of run r, an entry of /api/runs.
 const runHref = (r) => "run.html?" + new URLSearchParams({ project: r.project, issue: r.issue, run: r.run });
+
+// getJSON is the JSON answer of url. A 401 reloads the page: the token was
+// replaced, and the daemon's answer says what to do.
+const getJSON = (url) => fetch(url).then((r) => {
+  if (r.status === 401) location.reload();
+  if (!r.ok) throw new Error(r.status + " " + r.statusText);
+  return r.json();
+});
+
+// copyable is a block of the command text, to type in a terminal, with a
+// button that copies it. Where the clipboard is refused the button selects
+// the text instead, for Ctrl+C.
+const copyable = (text) => {
+  const code = el("code", "", text);
+  const button = el("button", "quiet", "Copy");
+  button.type = "button";
+  button.setAttribute("aria-live", "polite"); // says "Copied" to a screen reader too
+  const said = (word) => {
+    button.textContent = word;
+    setTimeout(() => { button.textContent = "Copy"; }, 2000);
+  };
+  button.addEventListener("click", () => {
+    navigator.clipboard.writeText(text).then(() => said("Copied"), () => {
+      getSelection().selectAllChildren(code);
+      said("Press Ctrl+C");
+    });
+  });
+  return el("div", "copy", el("pre", "", code), button);
+};
 
 (() => {
   // The light and dark switch (decision 2026-11-27-web-look). The page follows

@@ -273,6 +273,15 @@ func TestAPIConfig(t *testing.T) {
 	if got.WebOn == nil || *got.WebOn || got.WebAddr != "127.0.0.1:7420" {
 		t.Errorf("web_on %v, web_addr %q; want false, 127.0.0.1:7420", got.WebOn, got.WebAddr)
 	}
+	var ids struct {
+		Config struct {
+			Projects []struct{ ID, Label string } `json:"projects"`
+		} `json:"config"`
+	}
+	getJSON(t, h, tok, "/api/config", &ids)
+	if p := ids.Config.Projects; len(p) != 1 || p[0].ID != "WEB" || p[0].Label != "WEB" {
+		t.Errorf("projects %+v, want the ID and label WEB, which config.json leaves out", p)
+	}
 	d := got.Defaults
 	if d.Memory != "4g" || d.MaxParallelRuns != 1 || d.TranscriptDays != 14 || d.TranscriptMaxSize != "1g" {
 		t.Errorf("defaults %+v", d)

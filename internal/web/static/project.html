@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- A project: project.js fills it from /api/config, /api/status and the
+     project's keys, for the project of ?key=, &url= and &workspace=. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="project.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/runs.html">Runs</a></li>
+      <li><a href="/projects.html" aria-current="page">Projects</a></li>
+      <li><a href="/log.html">Log</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <p class="crumbs"><a href="/projects.html">Projects</a></p>
+  <h1 id="title">Project</h1>
+  <p class="lead" id="lead"></p>
+  <p class="crumbs page-links"><a id="runs-link" href="/runs.html">Its runs</a></p>
+</header>
+
+<p class="muted" id="missing" hidden></p>
+
+<div id="panels" hidden>
+<section aria-labelledby="h-project">
+  <h2 id="h-project">Project</h2>
+  <div id="project"></div>
+</section>
+
+<section aria-labelledby="h-repos">
+  <h2 id="h-repos">Repositories</h2>
+  <p class="muted">Other repositories its runs may read, mounted read-only.</p>
+  <div id="repos"></div>
+</section>
+
+<section aria-labelledby="h-hosts">
+  <h2 id="h-hosts">Hosts</h2>
+  <p class="muted">The hosts its runs may reach.</p>
+  <div id="hosts"></div>
+</section>
+
+<section aria-labelledby="h-skills">
+  <h2 id="h-skills">Skills</h2>
+  <p class="muted">The skill packages its runs may load with strict hosts on.</p>
+  <div id="skills"></div>
+</section>
+
+<section aria-labelledby="h-limits">
+  <h2 id="h-limits">Limits</h2>
+  <div id="limits"></div>
+</section>
+
+<section aria-labelledby="h-secrets">
+  <h2 id="h-secrets">Secrets</h2>
+  <div id="secrets"></div>
+  <p class="hint">A value is never shown, only whether it is set.</p>
+</section>
+
+<section aria-labelledby="h-login">
+  <h2 id="h-login">Sign in</h2>
+  <p>A client can sign in with its own login instead of a key. This needs a terminal: type the command there, with CLIENT the agent CLI to sign in, such as claude.</p>
+  <div id="login"></div>
+</section>
+</div>
+</main>
+</body>
+</html>

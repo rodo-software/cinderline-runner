@@ -1,0 +1,43 @@
+<!doctype html>
+<!-- The Projects: projects.js fills it from /api/config and /api/status. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects · Cinderline runner</title>
+<link rel="stylesheet" href="app.css">
+<script src="app.js"></script>
+<script src="projects.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="topbar">
+  <a class="brand" href="/">Cinderline runner</a>
+  <nav aria-label="Main">
+    <ul>
+      <li><a href="/">Overview</a></li>
+      <li><a href="/runs.html">Runs</a></li>
+      <li><a href="/projects.html">Projects</a></li>
+      <li><a href="/log.html">Log</a></li>
+    </ul>
+  </nav>
+  <div class="end">
+    <span class="status" data-runner-state>Connecting</span>
+    <label class="switch"><input type="checkbox" role="switch" data-theme-switch> Dark</label>
+  </div>
+</header>
+
+<main id="main">
+<header class="page-head">
+  <h1>Projects</h1>
+</header>
+
+<div class="scroll" role="region" aria-label="Projects" tabindex="0" id="list" hidden><table class="rows">
+  <thead><tr><th scope="col">Key</th><th scope="col">Cinderline</th><th scope="col">Workspace</th><th scope="col">Repository</th><th scope="col">State</th><th scope="col" class="num">Runs in flight</th></tr></thead>
+  <tbody id="projects"></tbody>
+</table></div>
+
+<p class="muted" id="none" hidden>No projects yet. A project is added in a terminal.</p>
+</main>
+</body>
+</html>

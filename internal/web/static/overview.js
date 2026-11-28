@@ -11,14 +11,6 @@
     return el("tr", "", th, el("td", "", ...[v].flat()));
   }));
 
-  // state is a project's status dot: the one fact that matters most.
-  const state = (p, runs) => {
-    if (!p.connected) return p.last_error ? el("span", "status error", "Not connected") : el("span", "status", "Connecting");
-    if (p.draining) return el("span", "status warn", "Draining");
-    if (p.waits_for_memory) return el("span", "status warn", "Waits for memory");
-    return runs ? el("span", "status running", "Running") : el("span", "status ok", "Idle");
-  };
-
   const runsText = (p) => {
     const team = (p.issues || []).length;
     if (!p.manager) return plural(team, "run", "runs");
@@ -41,7 +33,7 @@
     const poll = p.last_poll ? ["last poll ", when(p.last_poll)] : ["never polled"];
     d.firstChild.replaceChildren(
       el("span", "name", p.project),
-      el("span", "fact", state(p, runs), " · " + runsText(p) + " · ", ...poll));
+      el("span", "fact", projectState(p, runs), " · " + runsText(p) + " · ", ...poll));
     const rows = [
       ["Connected", p.connected ? "Yes" : "No"],
       ["Last poll", p.last_poll ? when(p.last_poll) : "Never"],
