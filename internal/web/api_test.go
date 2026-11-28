@@ -2,21 +2,28 @@ package web
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/zalando/go-keyring"
+
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
 func TestAPIStatusAnswersTheStatus(t *testing.T) {
@@ -204,14 +211,37 @@ func configHandler(t *testing.T, reloadErr error) (h http.Handler, tok string, p
 		t.Fatal(err)
 	}
 	reloads = new(int)
-	h = Handler(dir, port, Handlers{Paths: paths, Reload: func() error { *reloads++; return reloadErr }})
+	keyring.MockInit() // no test of this package may use t.Parallel
+	h = Handler(dir, port, Handlers{Paths: paths, Reload: func() error { *reloads++; return reloadErr },
+		Secrets: secrets.New(dir), Exec: lsRemote, Log: slog.New(slog.NewTextHandler(&logged, nil))})
 	return h, token(t, dir), paths, reloads
+}
+
+// repoToken is the one token lsRemote accepts.
+const repoToken = "the-good-git-token"
+
+// logged is what the config API logged, for the tests that look for a token in it.
+var logged bytes.Buffer
+
+// lsRemote is a git check that accepts only repoToken; its refusal echoes
+// the token it got, as a careless git could.
+func lsRemote(_ context.Context, env []string, _ ...string) (string, error) {
+	if !slices.Equal(env, []string{"GIT_TOKEN=" + repoToken}) {
+		return "", errors.New("authentication failed for " + strings.Join(env, " "))
+	}
+	return "", nil
 }
 
 // put sends body to path of h as the page does: same origin, with the token.
 func put(t *testing.T, h http.Handler, tok, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	r := httptest.NewRequest("PUT", path, strings.NewReader(body))
+	return send(t, h, "PUT", tok, path, body)
+}
+
+// send is put with another method.
+func send(t *testing.T, h http.Handler, method, tok, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
 	r.Host = "127.0.0.1:7420"
 	r.Header.Set("Origin", "http://127.0.0.1:7420")
 	r.AddCookie(&http.Cookie{Name: name.Name, Value: tok})
@@ -313,5 +343,84 @@ func TestWriteError(t *testing.T) {
 		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != want || e.Error == "" {
 			t.Errorf("%v: %d %s, want %d", err, w.Code, w.Body, want)
 		}
+	}
+}
+
+// CLR-298: POST adds an extra repository with its token, GET /api/config
+// says it has one, and DELETE removes both; each write reloads.
+func TestAPIRepos(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	w := send(t, h, "POST", tok, "/api/projects/WEB/repos", `{"url": "https://git.example.com/o/lib", "ref": "v1.0", "token": "`+repoToken+`"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("POST = %d %s, want 204", w.Code, w.Body)
+	}
+	var got struct {
+		Config struct {
+			Projects []struct {
+				Key               string `json:"key"`
+				ExtraRepositories []struct {
+					URL      string `json:"url"`
+					Ref      string `json:"ref"`
+					HasToken *bool  `json:"has_token"`
+				} `json:"extra_repositories"`
+			} `json:"projects"`
+		} `json:"config"`
+	}
+	getJSON(t, h, tok, "/api/config", &got)
+	ps := got.Config.Projects
+	if len(ps) != 1 || ps[0].Key != "WEB" || len(ps[0].ExtraRepositories) != 1 {
+		t.Fatalf("config projects %+v", ps)
+	}
+	if r := ps[0].ExtraRepositories[0]; r.URL != "https://git.example.com/o/lib" || r.Ref != "v1.0" || r.HasToken == nil || !*r.HasToken {
+		t.Errorf("extra repository %+v, want lib at v1.0 with has_token true", r)
+	}
+
+	// Without its token the page sees has_token false.
+	cfg, _ := config.Load(paths.File)
+	secrets.New(paths.State).Delete(cfg.Projects[0], secrets.ExtraGitToken("https://git.example.com/o/lib"))
+	getJSON(t, h, tok, "/api/config", &got)
+	if r := got.Config.Projects[0].ExtraRepositories[0]; r.HasToken == nil || *r.HasToken {
+		t.Errorf("has_token %v after the token was deleted, want false", r.HasToken)
+	}
+
+	if w := send(t, h, "DELETE", tok, "/api/projects/WEB/repos", `{"repo": "lib"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE = %d %s, want 204", w.Code, w.Body)
+	}
+	if cfg, err := config.Load(paths.File); err != nil || len(cfg.Projects[0].ExtraRepositories) != 0 {
+		t.Errorf("config %+v, %v after DELETE", cfg, err)
+	}
+	if *reloads != 2 {
+		t.Errorf("%d reloads, want 2", *reloads)
+	}
+}
+
+// A refused add or remove is a 400 that changes and reloads nothing, and
+// no answer nor log line holds the token.
+func TestAPIReposRefuses(t *testing.T) {
+	h, tok, paths, reloads := configHandler(t, nil)
+	logged.Reset()
+	const wrong = "wrong-token-x"
+	for what, c := range map[string]struct{ method, path, body, want string }{
+		"no such project":    {"POST", "/api/projects/NOPE/repos", `{"url": "https://git.example.com/o/lib", "token": "` + repoToken + `"}`, "no project NOPE"},
+		"own repository":     {"POST", "/api/projects/WEB/repos", `{"url": "https://git.example.com/o/web", "token": "` + repoToken + `"}`, "own repository"},
+		"bad ref":            {"POST", "/api/projects/WEB/repos", `{"url": "https://git.example.com/o/lib", "ref": "a..b", "token": "` + repoToken + `"}`, "not a plain branch or tag"},
+		"no token":           {"POST", "/api/projects/WEB/repos", `{"url": "https://git.example.com/o/lib"}`, "a git token is needed"},
+		"token cannot read":  {"POST", "/api/projects/WEB/repos", `{"url": "https://git.example.com/o/lib", "token": "` + wrong + `"}`, "cannot read"},
+		"unknown field":      {"POST", "/api/projects/WEB/repos", `{"url": "https://git.example.com/o/lib", "token": "` + repoToken + `", "x": 1}`, "unknown field"},
+		"no such repository": {"DELETE", "/api/projects/WEB/repos", `{"repo": "lib"}`, "no extra repository lib"},
+	} {
+		w := send(t, h, c.method, tok, c.path, c.body)
+		var e struct{ Error string }
+		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != http.StatusBadRequest || !strings.Contains(e.Error, c.want) {
+			t.Errorf("%s: %d %s, want 400 containing %q", what, w.Code, w.Body, c.want)
+		}
+		for _, secret := range []string{repoToken, wrong} {
+			if strings.Contains(w.Body.String(), secret) || strings.Contains(logged.String(), secret) {
+				t.Errorf("%s: the answer or log holds a token: %s / %s", what, w.Body, &logged)
+			}
+		}
+	}
+	if cfg, err := config.Load(paths.File); err != nil || len(cfg.Projects[0].ExtraRepositories) != 0 || *reloads != 0 {
+		t.Errorf("config %+v, %v, %d reloads; want it unchanged", cfg, err, *reloads)
 	}
 }

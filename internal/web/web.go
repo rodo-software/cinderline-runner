@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,7 +15,9 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/environment"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/transcript"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // Handlers are what the daemon gives the page.
@@ -30,6 +33,11 @@ type Handlers struct {
 	// Reload makes the daemon take a write (localapi.Handlers.Reload).
 	Paths  config.Paths
 	Reload func() error
+	// Secrets, Exec and Log are what the config API stores tokens in, runs
+	// git's checks with and logs their retries to, as the CLI's.
+	Secrets *secrets.Secrets
+	Exec    workspace.Exec
+	Log     *slog.Logger
 
 	// Stats measures the containers of the project's run of issue once
 	// (environment.Docker.Stats), every StatsEvery while a page watches;

@@ -334,7 +334,8 @@ func (d *daemon) serveWeb(cfg *config.Config) {
 		return
 	}
 	d.web = &http.Server{Handler: web.Handler(d.o.Paths.State, ln.Addr().(*net.TCPAddr).Port, web.Handlers{Status: d.snapshot, Follow: d.follow,
-		Transcripts: *d.transcript, Config: d.shown.Load, Stats: d.stats, Paths: d.o.Paths, Reload: d.reload})}
+		Transcripts: *d.transcript, Config: d.shown.Load, Stats: d.stats, Paths: d.o.Paths, Reload: d.reload,
+		Secrets: secrets.New(d.o.Paths.State), Exec: workspace.RunCommand, Log: d.log})}
 	go d.web.Serve(ln)
 	d.log.Info("web page served", "url", "http://"+addr+"/")
 }

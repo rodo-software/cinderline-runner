@@ -11,6 +11,7 @@ import (
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
+	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
@@ -60,24 +61,17 @@ func (c *CLI) addRepo(args []string) int {
 	say := func(format string, a ...any) { fmt.Fprintf(c.Stdout, format+"\n", a...) }
 
 	var r config.ExtraRepository
-	var token string
+	var store secrets.Store
 	for {
-		r, token = config.ExtraRepository{}, ""
+		var token string
+		r = config.ExtraRepository{}
 		for r.URL == "" {
 			v, err := ask("Repository URL: ")
 			if err != nil {
 				return c.fail(err)
 			}
-			if err := (config.ExtraRepository{URL: v}).Validate(); err != nil {
+			if err := manage.CheckRepo(p, config.ExtraRepository{URL: v}); err != nil {
 				say("%v.", err)
-				continue
-			}
-			if config.SameRepository(v, p.Repository) {
-				say("%s is the project's own repository.", v)
-				continue
-			}
-			if j := slices.IndexFunc(p.ExtraRepositories, func(q config.ExtraRepository) bool { return q.Name() == (config.ExtraRepository{URL: v}).Name() }); j >= 0 {
-				say("%s is already added as %s; remove it first with remove-repo.", p.ExtraRepositories[j].URL, p.ExtraRepositories[j].Name())
 				continue
 			}
 			r.URL = v
@@ -87,7 +81,7 @@ func (c *CLI) addRepo(args []string) int {
 			if err != nil {
 				return c.fail(err)
 			}
-			if err := (config.ExtraRepository{URL: r.URL, Ref: v}).Validate(); err != nil {
+			if err := manage.CheckRepo(p, config.ExtraRepository{URL: r.URL, Ref: v}); err != nil {
 				say("%v.", err)
 				continue
 			}
@@ -101,28 +95,20 @@ func (c *CLI) addRepo(args []string) int {
 			}
 			token = v
 		}
-		if err := workspace.LsRemote(context.Background(), c.exec, slog.New(slog.NewTextHandler(c.Stderr, nil)), p.ID(), r.URL, r.Ref, token); err != nil {
-			say("This token cannot read %s at %s: %v", r.URL, cmpRef(r.Ref), err)
+		var err error
+		store, err = manage.AddRepo(context.Background(), slog.New(slog.NewTextHandler(c.Stderr, nil)), c.Paths, c.Secrets, c.exec, p.ID(), r, token)
+		if errors.As(err, new(manage.Refused)) { // only the git check is left to refuse: ask everything again
+			msg := err.Error()
+			say("%s%s", strings.ToUpper(msg[:1]), msg[1:])
 			continue
+		}
+		if err != nil {
+			return c.fail(err)
 		}
 		break
 	}
-
-	// The config first, so a failed save stores no secret.
-	cfg.Projects[i].ExtraRepositories = append(slices.Clone(p.ExtraRepositories), r)
-	if err := cfg.Save(c.Paths.File); err != nil {
-		return c.fail(err)
-	}
-	store, err := c.Secrets.Set(p, secrets.ExtraGitToken(r.URL), token)
-	if err != nil {
-		cfg.Projects[i] = p
-		if serr := cfg.Save(c.Paths.File); serr != nil {
-			fmt.Fprintln(c.Stderr, "error:", serr)
-		}
-		return c.fail(err)
-	}
 	say("Stored the git token for %s in %s", r.URL, c.storeName(store))
-	say("Added %s at %s; runs read it at %s/%s", r.URL, cmpRef(r.Ref), workspace.ExtraPath, r.Name())
+	say("Added %s at %s; runs read it at %s/%s", r.URL, manage.Ref(r.Ref), workspace.ExtraPath, r.Name())
 	c.reload()
 	return 0
 }
@@ -134,7 +120,7 @@ func (c *CLI) listRepos(args []string) int {
 		return code
 	}
 	for _, r := range cfg.Projects[i].ExtraRepositories {
-		fmt.Fprintf(c.Stdout, "%s\t%s\t%s\n", r.Name(), r.URL, cmpRef(r.Ref))
+		fmt.Fprintf(c.Stdout, "%s\t%s\t%s\n", r.Name(), r.URL, manage.Ref(r.Ref))
 	}
 	return 0
 }
@@ -146,30 +132,13 @@ func (c *CLI) removeRepo(args []string) int {
 	if code != 0 {
 		return code
 	}
-	p := cfg.Projects[i]
-	j := slices.IndexFunc(p.ExtraRepositories, func(r config.ExtraRepository) bool { return r.URL == rest[0] || r.Name() == rest[0] })
-	if j < 0 {
-		return c.fail(fmt.Errorf("project %s has no extra repository %s", p.Key, rest[0]))
-	}
-	r := p.ExtraRepositories[j]
-	cfg.Projects[i].ExtraRepositories = slices.Delete(slices.Clone(p.ExtraRepositories), j, j+1)
-	if err := cfg.Save(c.Paths.File); err != nil {
-		return c.fail(err)
-	}
-	if err := c.Secrets.Delete(p, secrets.ExtraGitToken(r.URL)); err != nil {
+	r, err := manage.RemoveRepo(c.Paths, c.Secrets, cfg.Projects[i].ID(), rest[0])
+	if err != nil {
 		return c.fail(err)
 	}
 	fmt.Fprintf(c.Stdout, "Removed %s\n", r.URL)
 	c.reload()
 	return 0
-}
-
-// cmpRef is the ref, or what an empty one means.
-func cmpRef(ref string) string {
-	if ref == "" {
-		return "the default branch"
-	}
-	return ref
 }
 
 // reload makes a running daemon read the config again; it only warns. Each
