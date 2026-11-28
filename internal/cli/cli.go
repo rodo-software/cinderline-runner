@@ -177,14 +177,3 @@ func (c *CLI) storeName(s secrets.Store) string {
 	}
 	return "the fallback file in " + c.Paths.State
 }
-
-// without returns ps without the project with p's URL, workspace and key.
-func without(ps []config.Project, p config.Project) []config.Project {
-	var out []config.Project
-	for _, q := range ps {
-		if q.URL != p.URL || q.Workspace != p.Workspace || q.Key != p.Key {
-			out = append(out, q)
-		}
-	}
-	return out
-}

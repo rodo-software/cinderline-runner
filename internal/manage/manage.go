@@ -24,6 +24,12 @@ type Refused struct{ Err error }
 func (r Refused) Error() string { return r.Err.Error() }
 func (r Refused) Unwrap() error { return r.Err }
 
+// NotFound is a project the request names that the config does not have.
+type NotFound struct{ Err error }
+
+func (n NotFound) Error() string { return n.Err.Error() }
+func (n NotFound) Unwrap() error { return n.Err }
+
 // Load returns config.json, or an empty config when it does not exist yet.
 func Load(paths config.Paths) (*config.Config, error) {
 	cfg, err := config.Load(paths.File)
@@ -120,7 +126,8 @@ func find(cfg *config.Config, which Project) (*config.Project, error) {
 }
 
 // FindByKey returns the one project with key, at instance and in ws when
-// those are not empty; a key in several places needs them.
+// those are not empty; a key in several places needs them. None is
+// NotFound, several Refused.
 func FindByKey(cfg *config.Config, key, instance, ws string) (config.Project, error) {
 	want := strings.TrimRight(instance, "/")
 	var matches []config.Project
@@ -131,15 +138,15 @@ func FindByKey(cfg *config.Config, key, instance, ws string) (config.Project, er
 	}
 	switch {
 	case len(matches) == 0 && (want != "" || ws != ""):
-		return config.Project{}, fmt.Errorf("no project %s at %s in workspace %s", key, cmp.Or(want, "any URL"), cmp.Or(ws, "any"))
+		return config.Project{}, NotFound{fmt.Errorf("no project %s at %s in workspace %s", key, cmp.Or(want, "any URL"), cmp.Or(ws, "any"))}
 	case len(matches) == 0:
-		return config.Project{}, fmt.Errorf("no project %s", key)
+		return config.Project{}, NotFound{fmt.Errorf("no project %s", key)}
 	case len(matches) > 1:
 		var places []string
 		for _, p := range matches {
 			places = append(places, Where(p))
 		}
-		return config.Project{}, fmt.Errorf("several projects have key %s; choose one with -url or -workspace: %s", key, strings.Join(places, ", "))
+		return config.Project{}, Refused{fmt.Errorf("several projects have key %s; choose one with -url or -workspace: %s", key, strings.Join(places, ", "))}
 	}
 	return matches[0], nil
 }

@@ -1,16 +1,21 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
+	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
+	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
 // maxBody is the largest JSON body a write route reads.
@@ -112,6 +117,51 @@ func configRoutes(mux *http.ServeMux, h *Handlers) {
 	writeRoute(mux, "POST /api/projects", h, func(r *http.Request, b manage.NewProject) error {
 		_, _, err := manage.AddProject(r.Context(), h.Paths, h.Secrets, h.Version, b)
 		return err
+	})
+	// Removing and renaming take the project's key in {key}, not its ID, and
+	// url and workspace for a key that several share, as the CLI's -url and
+	// -workspace; neither can be undone, so the server, not only the page,
+	// checks that the key was typed (decisions 2026-11-26-local-web-page and
+	// 2026-11-28-web-remove-project).
+	type confirmBody struct {
+		Confirm   string `json:"confirm"`
+		URL       string `json:"url"`
+		Workspace string `json:"workspace"`
+	}
+	confirmed := func(r *http.Request, b confirmBody) (manage.Project, error) {
+		if b.Confirm != r.PathValue("key") {
+			return manage.Project{}, manage.Refused{Err: errors.New("type the project's key to confirm")}
+		}
+		return manage.Project{Key: r.PathValue("key"), URL: b.URL, Workspace: b.Workspace}, nil
+	}
+	writeRouteThen(mux, "DELETE /api/projects/{key}", h, func(r *http.Request, b confirmBody) (func(), error) {
+		which, err := confirmed(r, b)
+		if err != nil {
+			return nil, err
+		}
+		p, err := manage.RemoveProject(h.Paths, h.Secrets, which, h.warn(which.Key))
+		if err != nil {
+			return nil, err
+		}
+		return func() { h.dropWhenEnded(p) }, nil
+	})
+	writeRouteThen(mux, "POST /api/projects/{key}/rename", h, func(r *http.Request, b struct {
+		confirmBody
+		NewKey string `json:"new_key"`
+	}) (func(), error) {
+		which, err := confirmed(r, b.confirmBody)
+		if err != nil {
+			return nil, err
+		}
+		status := func() (localapi.Status, error) { return h.Status(), nil }
+		old, p, err := manage.RenameProject(r.Context(), h.Paths, h.Secrets, h.Exec, h.Version, status, which, b.NewKey, h.warn(which.Key))
+		if err != nil {
+			return nil, err
+		}
+		if old.ID() == p.ID() {
+			return nil, errUnchanged
+		}
+		return func() { h.dropWhenEnded(old) }, nil
 	})
 	// {key} is the project's ID, the config's id: unique where a key is not.
 	writeRoute(mux, "POST /api/projects/{key}/repos", h, func(r *http.Request, b struct {
@@ -276,6 +326,12 @@ func withTokens(cfg *config.Config, sec *secrets.Secrets) (configJSON, error) {
 // change with the request and it under the write lock, then reloads the daemon, and
 // answers 204, or the first error.
 func writeRoute[B any](mux *http.ServeMux, pattern string, h *Handlers, change func(*http.Request, B) error) {
+	writeRouteThen(mux, pattern, h, func(r *http.Request, b B) (func(), error) { return nil, change(r, b) })
+}
+
+// writeRouteThen is writeRoute for a change that also returns what to do
+// once the daemon has reloaded, or nil.
+func writeRouteThen[B any](mux *http.ServeMux, pattern string, h *Handlers, change func(*http.Request, B) (func(), error)) {
 	mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		var b B
 		if err := readBody(w, r, &b); err != nil {
@@ -284,11 +340,14 @@ func writeRoute[B any](mux *http.ServeMux, pattern string, h *Handlers, change f
 		}
 		writes.Lock()
 		defer writes.Unlock()
-		err := change(r, b)
+		then, err := change(r, b)
 		if errors.Is(err, errUnchanged) {
 			err = nil
 		} else if err == nil {
 			err = h.Reload()
+			if err == nil && then != nil {
+				then()
+			}
 		}
 		if err != nil {
 			writeError(w, err)
@@ -296,6 +355,30 @@ func writeRoute[B any](mux *http.ServeMux, pattern string, h *Handlers, change f
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+// warn logs what fails once a change to project is saved.
+func (h *Handlers) warn(project string) func(error) {
+	return func(err error) { h.Log.Warn("not all removed", "project", project, "err", err) }
+}
+
+// dropWhenEnded removes p's Docker volumes, session notes and outbox
+// (manage.DropLocal) once the daemon's loop of p has ended, as `remove`
+// does after its wait, in the background: the request does not wait for
+// runs that may take hours (decision 2026-11-28-web-remove-project). When
+// the daemon stops first they stay; the log line says how to find them.
+func (h *Handlers) dropWhenEnded(p config.Project) {
+	h.Log.Info("removing the project's Docker volumes, session notes and outbox once its runs have ended; if the runner stops first, list its volumes with docker volume ls --filter",
+		"project", p.Key, "filter", "label="+workspace.ProjectLabel(p.ID()))
+	go func() {
+		for slices.ContainsFunc(h.Status().Projects, func(s localapi.ProjectStatus) bool { return s.Project == p.Label() && s.Draining }) {
+			time.Sleep(h.Tick)
+		}
+		writes.Lock() // so no write adds a project with p's ID meanwhile
+		defer writes.Unlock()
+		manage.DropLocal(context.Background(), h.Paths, h.Exec, p, h.warn(p.Key))
+		h.Log.Info("removed the project's Docker volumes, session notes and outbox", "project", p.Key)
+	}()
 }
 
 // readBody decodes the request's one JSON value, of at most maxBody bytes
@@ -324,12 +407,16 @@ func readBody(w http.ResponseWriter, r *http.Request, v any) error {
 	return nil
 }
 
-// writeError answers err as {"error": "..."}: 400 for a refused value, 500
-// for anything else.
+// writeError answers err as {"error": "..."}: 400 for a refused value, 404
+// for a project the config does not have, 500 for anything else. A
+// refusal wins: a route that names its project in the body answers 400.
 func writeError(w http.ResponseWriter, err error) {
 	code := http.StatusInternalServerError
-	if errors.As(err, new(manage.Refused)) {
+	switch {
+	case errors.As(err, new(manage.Refused)):
 		code = http.StatusBadRequest
+	case errors.As(err, new(manage.NotFound)):
+		code = http.StatusNotFound
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

@@ -12,10 +12,12 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/manage"
 	"github.com/rodo-software/cinderline-runner/internal/name"
+	"github.com/rodo-software/cinderline-runner/internal/run"
 	"github.com/rodo-software/cinderline-runner/internal/secrets"
 )
 
@@ -1016,5 +1019,171 @@ func TestAPIProjectSettings(t *testing.T) {
 	}
 	if *reloads != 7 {
 		t.Errorf("%d reloads, want 7", *reloads)
+	}
+}
+
+// projectHandler is configHandler for remove and rename: project WEB at
+// instance u has both tokens and a session note, the daemon's status says
+// WEB's loop drains while draining is set, and docker records its calls.
+func projectHandler(t *testing.T, u string, draining *atomic.Bool) (h http.Handler, tok string, paths config.Paths, reloads *int, d *recorder) {
+	t.Helper()
+	dir := t.TempDir()
+	paths = config.Paths{Dir: dir, File: filepath.Join(dir, "config.json"), State: dir}
+	web := config.Project{LocalID: "WEB", Workspace: "default", URL: u, Key: "WEB", Repository: "https://git.example.com/o/web"}
+	if err := (&config.Config{Projects: []config.Project{web}}).Save(paths.File); err != nil {
+		t.Fatal(err)
+	}
+	keyring.MockInit() // no test of this package may use t.Parallel
+	sec := secrets.New(dir)
+	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken} {
+		if _, err := sec.Set(web, k, runnerToken); err != nil {
+			t.Fatal(err)
+		}
+	}
+	note := filepath.Join(run.PausedDir(dir, web), "WEB-1.json")
+	if err := os.MkdirAll(filepath.Dir(note), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(note, []byte(`{"origin":"kept"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reloads, d = new(int), &recorder{}
+	status := func() localapi.Status {
+		if draining.Load() {
+			return localapi.Status{Projects: []localapi.ProjectStatus{{Project: "WEB", Draining: true}}}
+		}
+		return localapi.Status{}
+	}
+	h = Handler(dir, port, Handlers{Paths: paths, Reload: func() error { *reloads++; return nil }, Status: status, Tick: time.Millisecond,
+		Secrets: sec, Exec: d.exec, Log: slog.New(slog.NewTextHandler(&logged, nil)), Version: "test"})
+	return h, token(t, dir), paths, reloads, d
+}
+
+// recorder is a docker that records its calls and lists one volume.
+type recorder struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (d *recorder) exec(_ context.Context, _ []string, argv ...string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.calls = append(d.calls, strings.Join(argv, " "))
+	if slices.Contains(argv, "volume") && slices.Contains(argv, "ls") {
+		return "cinderline-WEB-repo\n", nil
+	}
+	return "", nil
+}
+
+// dropped waits until the session notes of WEB at u are gone, then answers docker's calls.
+func dropped(t *testing.T, paths config.Paths, u string, d *recorder) []string {
+	t.Helper()
+	notes := run.PausedDir(paths.State, config.Project{LocalID: "WEB", URL: u, Workspace: "default", Key: "WEB"})
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if _, err := os.Stat(notes); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("WEB's session notes were not removed")
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.calls)
+}
+
+// confirmRefused checks that each body without the key typed is a 400
+// that changes and reloads nothing.
+func confirmRefused(t *testing.T, h http.Handler, tok, method, path string, paths config.Paths, reloads *int, bodies ...string) {
+	t.Helper()
+	for _, body := range bodies {
+		w := send(t, h, method, tok, path, body)
+		var e struct{ Error string }
+		if json.Unmarshal(w.Body.Bytes(), &e); w.Code != http.StatusBadRequest || e.Error != "type the project's key to confirm" {
+			t.Errorf("%s %s %s = %d %s, want 400 type the project's key", method, path, body, w.Code, w.Body)
+		}
+	}
+	if cfg, err := config.Load(paths.File); err != nil || len(cfg.Projects) != 1 || cfg.Projects[0].Key != "WEB" || *reloads != 0 {
+		t.Fatalf("a refused confirmation changed the config or reloaded: %+v, %v, %d reloads", cfg, err, *reloads)
+	}
+}
+
+// CLR-302: DELETE /api/projects/{key} removes the project and its secrets
+// only with its key typed, and reloads; its session notes and Docker
+// volumes go once its loop has ended (Willem: the request does not wait).
+func TestAPIRemoveProject(t *testing.T) {
+	var draining atomic.Bool
+	h, tok, paths, reloads, d := projectHandler(t, "https://a.example.com", &draining)
+	confirmRefused(t, h, tok, "DELETE", "/api/projects/WEB", paths, reloads, `{"confirm": "web"}`, `{"confirm": "WEB "}`, `{}`, ``)
+	if w := send(t, h, "DELETE", tok, "/api/projects/NOPE", `{"confirm": "NOPE"}`); w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "no project NOPE") {
+		t.Errorf("unknown project = %d %s, want 404", w.Code, w.Body)
+	}
+	if w := send(t, h, "DELETE", tok, "/api/projects/WEB", `{"confirm": "WEB", "url": "https://b.example.com"}`); w.Code != http.StatusNotFound {
+		t.Errorf("unknown URL = %d %s, want 404", w.Code, w.Body)
+	}
+
+	draining.Store(true)
+	w := send(t, h, "DELETE", tok, "/api/projects/WEB", `{"confirm": "WEB", "url": "https://a.example.com", "workspace": "default"}`)
+	if w.Code != http.StatusNoContent || *reloads != 1 {
+		t.Fatalf("DELETE = %d %s, %d reloads; want 204 and 1", w.Code, w.Body, *reloads)
+	}
+	if cfg, err := config.Load(paths.File); err != nil || len(cfg.Projects) != 0 {
+		t.Errorf("config %+v, %v; want no project", cfg, err)
+	}
+	web := config.Project{LocalID: "WEB", Workspace: "default", URL: "https://a.example.com", Key: "WEB"}
+	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken} {
+		if _, _, err := secrets.New(paths.State).Get(web, k); !errors.Is(err, secrets.ErrNotFound) {
+			t.Errorf("%s: %v, want deleted", k, err)
+		}
+	}
+	time.Sleep(20 * time.Millisecond) // many ticks of a draining loop
+	d.mu.Lock()
+	early := len(d.calls)
+	d.mu.Unlock()
+	if _, err := os.Stat(run.PausedDir(paths.State, web)); err != nil || early != 0 {
+		t.Fatalf("removed while the loop still drains: notes %v, %d docker calls", err, early)
+	}
+	draining.Store(false)
+	if calls := dropped(t, paths, web.URL, d); !slices.Contains(calls, "docker volume rm --force cinderline-WEB-repo") {
+		t.Errorf("docker calls %q, want the volume removed", calls)
+	}
+}
+
+// CLR-302: POST /api/projects/{key}/rename gives the project the key its
+// instance gives it only with its key typed, moves its secrets and
+// reloads; a new_key other than the instance's is a 400, one that is the
+// key already a 204 without a reload.
+func TestAPIRenameProject(t *testing.T) {
+	h, tok, paths, reloads, d := projectHandler(t, addInstance(t), new(atomic.Bool)) // the instance says NEW
+	confirmRefused(t, h, tok, "POST", "/api/projects/WEB/rename", paths, reloads, `{"confirm": "NEW"}`, `{"new_key": "NEW"}`, ``)
+	if w := send(t, h, "POST", tok, "/api/projects/NOPE/rename", `{"confirm": "NOPE"}`); w.Code != http.StatusNotFound {
+		t.Errorf("unknown project = %d %s, want 404", w.Code, w.Body)
+	}
+	if w := send(t, h, "POST", tok, "/api/projects/WEB/rename", `{"confirm": "WEB", "new_key": "OTHER"}`); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "the key NEW, not OTHER") || *reloads != 0 {
+		t.Errorf("other new_key = %d %s, %d reloads; want 400", w.Code, w.Body, *reloads)
+	}
+
+	if w := send(t, h, "POST", tok, "/api/projects/WEB/rename", `{"confirm": "WEB", "new_key": "NEW"}`); w.Code != http.StatusNoContent || *reloads != 1 {
+		t.Fatalf("rename = %d %s, %d reloads; want 204 and 1", w.Code, w.Body, *reloads)
+	}
+	cfg, err := config.Load(paths.File)
+	if err != nil || len(cfg.Projects) != 1 || cfg.Projects[0].Key != "NEW" || cfg.Projects[0].ID() != "NEW" {
+		t.Fatalf("config %+v, %v; want NEW with ID NEW", cfg, err)
+	}
+	sec := secrets.New(paths.State)
+	for _, k := range []secrets.Kind{secrets.RunnerToken, secrets.GitToken} {
+		if v, _, err := sec.Get(cfg.Projects[0], k); v != runnerToken {
+			t.Errorf("%s of NEW: %q, %v; want it moved", k, v, err)
+		}
+		if _, _, err := sec.Get(config.Project{LocalID: "WEB", URL: cfg.Projects[0].URL, Workspace: "default"}, k); !errors.Is(err, secrets.ErrNotFound) {
+			t.Errorf("%s of WEB: %v, want moved away", k, err)
+		}
+	}
+	if calls := dropped(t, paths, cfg.Projects[0].URL, d); !slices.Contains(calls, "docker volume rm --force cinderline-WEB-repo") {
+		t.Errorf("docker calls %q, want WEB's volume removed", calls)
+	}
+
+	if w := send(t, h, "POST", tok, "/api/projects/NEW/rename", `{"confirm": "NEW"}`); w.Code != http.StatusNoContent || *reloads != 1 {
+		t.Errorf("rename again = %d %s, %d reloads; want 204 without a reload", w.Code, w.Body, *reloads)
 	}
 }

@@ -7,14 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"slices"
 	"syscall"
 
 	"github.com/rodo-software/cinderline-runner/internal/config"
 	"github.com/rodo-software/cinderline-runner/internal/localapi"
 	"github.com/rodo-software/cinderline-runner/internal/manage"
-	"github.com/rodo-software/cinderline-runner/internal/run"
-	"github.com/rodo-software/cinderline-runner/internal/secrets"
 	"github.com/rodo-software/cinderline-runner/internal/workspace"
 )
 
@@ -29,55 +26,31 @@ func (c *CLI) remove(args []string) int {
 	if !c.parsed(f, args, 1) {
 		return 2
 	}
-	cfg, err := c.loadConfig()
+	if _, err := c.loadConfig(); err != nil {
+		return c.fail(err)
+	}
+	p, err := manage.RemoveProject(c.Paths, c.Secrets, manage.Project{Key: f.Arg(0), URL: *instance, Workspace: *ws}, c.warn)
 	if err != nil {
 		return c.fail(err)
 	}
-	p, err := manage.FindByKey(cfg, f.Arg(0), *instance, *ws)
-	if err != nil {
-		return c.fail(err)
-	}
-	// The config first, so a failed save keeps the project's tokens (CLR-233).
-	cfg.Projects = without(cfg.Projects, p)
-	if err := cfg.Save(c.Paths.File); err != nil {
-		return c.fail(err)
-	}
-	for _, k := range secrets.Kinds(p) {
-		if err := c.Secrets.Delete(p, k); err != nil {
-			fmt.Fprintln(c.Stderr, "warning:", err)
-		}
-	}
-	c.dropLocal(cfg, p)
+	c.dropLocal(p)
 	fmt.Fprintf(c.Stdout, "Removed %s at %s\n", p.Key, p.URL)
 	return 0
 }
 
 // dropLocal makes a running runner reload, waits until p's loop has
 // finished its runs and ended, then removes what is named by p's ID and is
-// not in the config or the keychain: its Docker containers, networks and
-// volumes, its session notes and its outbox. cfg is the saved
-// config, without p or with p under another ID. It only warns.
-func (c *CLI) dropLocal(cfg *config.Config, p config.Project) {
+// not in the config or the keychain (manage.DropLocal). It only warns.
+func (c *CLI) dropLocal(p config.Project) {
 	c.reload()
 	// The reload drains the project's loop; its runs hold its volumes.
-	if !c.waitProject(p) {
-		return
-	}
-	// Docker names carry only the ID, so a namesake on another instance still uses them.
-	shared := slices.ContainsFunc(cfg.Projects, func(q config.Project) bool { return q.ID() == p.ID() })
-	if !shared {
-		label := "label=" + workspace.ProjectLabel(p.ID())
-		if err := c.removeLabelled(label); err != nil {
-			fmt.Fprintf(c.Stderr, "warning: %s's Docker volumes, with its clones and sign-ins, are not all removed; list them with `docker volume ls --filter %s`: %v\n", p.Key, label, err)
-		}
-	}
-	if err := os.RemoveAll(run.PausedDir(c.Paths.State, p)); err != nil {
-		fmt.Fprintln(c.Stderr, "warning:", err)
-	}
-	if err := os.Remove(run.OutboxFile(c.Paths.State, p)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(c.Stderr, "warning:", err)
+	if c.waitProject(p) {
+		manage.DropLocal(context.Background(), c.Paths, c.exec, p, c.warn)
 	}
 }
+
+// warn prints err as a warning: what fails once the change is saved.
+func (c *CLI) warn(err error) { fmt.Fprintln(c.Stderr, "warning:", err) }
 
 // waitProject waits until a running daemon's loop of p has ended, with s
 // then y to stop the daemon at once, which starts the service again after.
