@@ -56,8 +56,12 @@
       th.scope = "col";
       return th;
     });
-    const refused = el("div", "", el("h3", "", "Hosts refused"),
-      el("div", "scroll", el("table", "rows", el("thead", "", el("tr", "", ...cols)), hosts)));
+    // A region with the focus, so its columns can be scrolled to by keyboard.
+    const scroll = el("div", "scroll", el("table", "rows", el("thead", "", el("tr", "", ...cols)), hosts));
+    scroll.tabIndex = 0;
+    scroll.setAttribute("role", "region");
+    scroll.setAttribute("aria-label", "Hosts refused");
+    const refused = el("div", "", el("h3", "", "Hosts refused"), scroll);
     const earlier = el("p", "muted small");
     const out = el("pre", "box");
     out.setAttribute("role", "region");

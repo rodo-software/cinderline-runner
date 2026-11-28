@@ -149,6 +149,8 @@ pre code { background: none; padding: 0; }
 .topbar nav a:hover { color: var(--text); }
 .topbar nav a[aria-current="page"] { color: var(--text); border-bottom-color: var(--accent); }
 .topbar .end { margin-left: auto; display: flex; align-items: center; gap: var(--s5); }
+/* The menu button (app.js), shown in a narrow window only. */
+.topbar .menu { display: none; }
 
 main { max-width: var(--column); margin: 0 auto; padding: var(--s6) var(--s4) var(--s7); }
 
@@ -337,7 +339,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .timeline { list-style: none; margin: var(--s4) 0 0; padding: 0; border-top: 1px solid var(--line); }
 .timeline > li { padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
 .timeline .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); }
-.timeline .who { font-weight: 600; }
+.timeline .who { font-weight: 600; overflow-wrap: anywhere; } /* a long tool name must not widen the page */
 .timeline .tool .who { color: var(--accent); }
 .timeline .time { margin-left: auto; font-size: var(--t-1); color: var(--muted); }
 .timeline p { margin: var(--s1) 0 0; }
@@ -395,6 +397,8 @@ details.fold > summary .badge { margin-left: var(--s1); }
 /* A run's step: its prompt and its output lines, each in a box that scrolls. */
 .box { max-height: 32rem; overflow-y: auto; }
 .box:focus-visible { outline-offset: -2px; }
+/* A box that scrolls clips what sticks out: the focus ring goes inside. */
+.box :focus-visible, .scroll :focus-visible { outline-offset: -2px; }
 
 /* Small graphs, inline SVG: a 2px line over a soft area. */
 
@@ -485,6 +489,7 @@ form.stack .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 
 .hint { font-size: var(--t-1); color: var(--muted); margin: var(--s2) 0 0; }
 /* The daemon's refusal of what a form or a button sent (send in app.js). */
 .field-error { font-size: var(--t-1); color: var(--err); margin: var(--s2) 0 0; }
+.field-error:empty { margin: 0; } /* in place, empty, while a request runs */
 .items li > .field-error { flex-basis: 100%; margin: 0; }
 /* A secret's own form, in its row of the table. */
 table.rows form.row { margin: 0; gap: var(--s2); flex-wrap: nowrap; }
@@ -517,11 +522,15 @@ dialog.confirm .actions { display: flex; justify-content: end; gap: var(--s3); }
 
 @media (max-width: 34rem) {
   main { padding: var(--s5) var(--s4) var(--s6); }
-  /* The menu stays one row and scrolls sideways, so the page starts high. */
-  .topbar { padding-top: var(--s2); gap: var(--s2) var(--s4); }
-  .topbar nav { order: 3; width: 100%; overflow-x: auto; scrollbar-width: thin; }
-  .topbar nav ul { flex-wrap: nowrap; }
-  .topbar nav a { white-space: nowrap; }
+  /* The menu folds behind its button: the name and the button, the menu
+     when open, one link a row, then the runner's state and the theme. */
+  .topbar { padding-block: var(--s2); gap: var(--s2) var(--s4); align-items: center; }
+  .topbar .menu { display: inline-flex; margin-left: auto; }
+  .topbar .menu[aria-expanded="false"] + nav { display: none; }
+  .topbar nav, .topbar nav ul { width: 100%; }
+  .topbar nav ul { flex-direction: column; }
+  .topbar nav a { flex: 1; }
+  .topbar .end { width: 100%; justify-content: flex-end; }
   td.end { white-space: normal; }
   h1 { font-size: var(--t2); }
   h2 { margin-top: var(--s6); }

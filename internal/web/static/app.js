@@ -19,18 +19,20 @@ let startCommand;
 // it does not, a bar that says so. Once it has not answered for 5 s, a panel
 // says the runner is not running and how to start it, and the page asks every
 // 2 s until it answers, then loads again. Call it once the page is parsed.
-let lostBar, downTimer, stoppedPanel;
+// Both go in liveBar, a polite live region put on the page on DOMContentLoaded,
+// in place before it says anything: one inserted with its text is not
+// announced everywhere.
+let downTimer, stoppedPanel;
+const liveBar = el("div");
+liveBar.setAttribute("aria-live", "polite");
+const lostBar = el("p", "attention warn", "Connection lost, retrying…");
 const reachable = (ok) => {
   if (stoppedPanel) {
     if (ok) location.reload();
     return;
   }
-  if (!lostBar) {
-    lostBar = el("p", "attention warn", "Connection lost, retrying…");
-    lostBar.setAttribute("role", "status");
-    document.getElementById("main").prepend(lostBar);
-  }
-  lostBar.hidden = ok;
+  if (ok) lostBar.remove();
+  else if (!lostBar.parentNode) liveBar.append(lostBar); // once, not with each retry
   const state = document.querySelector("[data-runner-state]");
   state.textContent = ok ? "Running" : "Not reachable";
   state.className = "status " + (ok ? "ok" : "error");
@@ -48,8 +50,7 @@ const stopped = () => {
     : [el("p", "", "Start it again in a terminal.")];
   stoppedPanel = el("div", "attention", el("p", "what", "The runner is not running."), ...start,
     el("p", "muted", "This page loads again once it runs."));
-  stoppedPanel.setAttribute("role", "status");
-  lostBar.replaceWith(stoppedPanel);
+  liveBar.replaceChildren(stoppedPanel);
   document.querySelector("[data-runner-state]").textContent = "Not running";
   // Any answer, a 401 too, means the runner is back.
   setInterval(() => fetch("/api/name").then(() => location.reload(), () => {}), 2000);
@@ -211,15 +212,18 @@ const send = async (button, method, url, body) => {
   if (!line) {
     line = el("p", "field-error");
     line.id = "send-error-" + ++sendIds;
-    line.setAttribute("role", "alert");
+    line.setAttribute("aria-live", "polite");
     sendErrors.set(at, line);
   }
   const show = (text) => {
     line.textContent = text;
-    if (text) at.after(line);
-    else line.remove();
+    if (!text) line.remove();
     fields.forEach((f) => describe(f, line.id, !!text));
   };
+  // The live region is in place, empty, before the answer comes, so a
+  // refusal is announced: one inserted with its text is not everywhere.
+  line.textContent = "";
+  at.after(line);
   const focused = document.activeElement === button;
   button.disabled = true;
   try {
@@ -314,11 +318,32 @@ const copyable = (text) => {
   };
 
   document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("main").prepend(liveBar);
+
     getJSON("/api/name").then((n) => { startCommand = n.service || n.name + " run"; }, () => {});
 
     document.querySelectorAll(".topbar nav a").forEach((a) => {
       if (a.pathname === location.pathname) a.setAttribute("aria-current", "page");
     });
+
+    // In a narrow window the menu folds behind this button (app.css); in a
+    // wide one the button is hidden. Escape folds it again.
+    const nav = document.querySelector(".topbar nav");
+    const menu = el("button", "menu", "Menu");
+    menu.type = "button";
+    nav.id = "menu";
+    menu.setAttribute("aria-controls", nav.id);
+    menu.setAttribute("aria-expanded", "false");
+    const unfold = (open) => menu.setAttribute("aria-expanded", open);
+    menu.addEventListener("click", () => unfold(menu.getAttribute("aria-expanded") !== "true"));
+    for (const n of [menu, nav]) {
+      n.addEventListener("keydown", (e) => {
+        if (e.key !== "Escape" || menu.getAttribute("aria-expanded") !== "true") return;
+        unfold(false);
+        menu.focus();
+      });
+    }
+    nav.before(menu);
 
     const switches = document.querySelectorAll("[data-theme-switch]");
     const show = () => switches.forEach((s) => { s.checked = isDark(); });
